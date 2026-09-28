@@ -37,92 +37,8 @@ export const App: React.FC = () => {
 
   // Available project tracks mapped dynamically to the active DAW
   const availableTracks: TrackDescriptor[] = React.useMemo(() => {
-    const isLogic = activeDaw.toLowerCase().includes('logic');
-    const baseTracks: TrackDescriptor[] = isLogic
-      ? [
-          {
-            id: 'track_master',
-            index: 0,
-            name: 'Stereo Out',
-            type: 'master',
-            volumeDb: 0.0,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: false,
-            insertSlots: [
-              {
-                slotIndex: 0,
-                pluginName: 'Channel EQ',
-                format: 'au',
-                isBypassed: false,
-                parameters: [
-                  { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
-                  { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
-                ]
-              }
-            ]
-          },
-          {
-            id: 'track_audio1',
-            index: 1,
-            name: 'Audio 1',
-            type: 'audio',
-            volumeDb: 0.0,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: true,
-            insertSlots: [
-              {
-                slotIndex: 0,
-                pluginName: 'Channel EQ',
-                format: 'au',
-                isBypassed: false,
-                parameters: [
-                  { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
-                  { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
-                ]
-              }
-            ]
-          },
-          {
-            id: 'track_kick',
-            index: 2,
-            name: 'Kick Drum',
-            type: 'audio',
-            volumeDb: -3.5,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: false,
-            insertSlots: []
-          },
-          {
-            id: 'track_bass',
-            index: 3,
-            name: 'Bass Guitar',
-            type: 'audio',
-            volumeDb: -4.0,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: false,
-            insertSlots: []
-          },
-          {
-            id: 'track_vocal',
-            index: 4,
-            name: 'Lead Vocal',
-            type: 'audio',
-            volumeDb: -2.0,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: false,
-            insertSlots: []
-          }
-        ]
+    const baseTracks: TrackDescriptor[] = activeDaw === 'none'
+      ? []
       : [
           {
             id: 'track_master',
@@ -134,55 +50,18 @@ export const App: React.FC = () => {
             isMuted: false,
             isSoloed: false,
             isSelected: false,
-            insertSlots: []
-          },
-          {
-            id: 'track_channel1',
-            index: 1,
-            name: 'Channel 1',
-            type: 'audio',
-            volumeDb: 0.0,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: true,
-            insertSlots: []
-          },
-          {
-            id: 'track_kick',
-            index: 2,
-            name: 'Kick Drum',
-            type: 'audio',
-            volumeDb: -3.5,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: false,
-            insertSlots: []
-          },
-          {
-            id: 'track_bass',
-            index: 3,
-            name: 'Bass Guitar',
-            type: 'audio',
-            volumeDb: -4.0,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: false,
-            insertSlots: []
-          },
-          {
-            id: 'track_vocal',
-            index: 4,
-            name: 'Lead Vocal',
-            type: 'audio',
-            volumeDb: -2.0,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: false,
-            insertSlots: []
+            insertSlots: [
+              {
+                slotIndex: 0,
+                pluginName: 'Channel EQ',
+                format: 'au',
+                isBypassed: false,
+                parameters: [
+                  { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
+                  { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
+                ]
+              }
+            ]
           }
         ];
 
