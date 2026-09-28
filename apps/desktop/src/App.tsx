@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import type { MetrologyTelemetryFrame, MixActionProposal } from '@mixing-buddy/shared-types';
+import { listen } from '@tauri-apps/api/event';
 import { SpectrumRTA } from './components/SpectrumRTA.js';
 import { LoudnessHUD } from './components/LoudnessHUD.js';
 import { ActionCard } from './components/ActionCard.js';
@@ -37,11 +38,29 @@ export const App: React.FC = () => {
     }
   ]);
 
-  // Connect to local WebSocket IPC stream (ws://127.0.0.1:48123/meter)
+  // Connect to local WebSocket IPC stream (ws://127.0.0.1:48123/meter) and Tauri native event
   useEffect(() => {
     let ws: WebSocket | null = null;
     let retryTimer: NodeJS.Timeout;
+    let unlisten: (() => void) | null = null;
 
+    // 1. Subscribe to native Tauri IPC event
+    listen<string | MetrologyTelemetryFrame>('telemetry-frame', (event) => {
+      try {
+        const frame: MetrologyTelemetryFrame =
+          typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
+        setTelemetry(frame);
+        setIsAudioConnected(true);
+      } catch {
+        // Ignore parse errors
+      }
+    }).then((cleanup) => {
+      unlisten = cleanup;
+    }).catch(() => {
+      // In pure browser environment, Tauri listen may not be available
+    });
+
+    // 2. Connect to WebSocket stream
     const connectWebSocket = () => {
       try {
         ws = new WebSocket('ws://127.0.0.1:48123/meter');
@@ -54,6 +73,7 @@ export const App: React.FC = () => {
           try {
             const frame: MetrologyTelemetryFrame = JSON.parse(event.data);
             setTelemetry(frame);
+            setIsAudioConnected(true);
           } catch {
             // Ignore parse errors
           }
@@ -77,6 +97,7 @@ export const App: React.FC = () => {
     return () => {
       clearTimeout(retryTimer);
       ws?.close();
+      if (unlisten) unlisten();
     };
   }, []);
 
@@ -112,8 +133,10 @@ export const App: React.FC = () => {
 
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 text-xs text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded">
-            <Headphones className="w-3.5 h-3.5 text-blue-400" />
-            <span>Master Bus: {telemetry ? `${telemetry.sampleRate / 1000} kHz` : 'Offline'}</span>
+            <Headphones className={`w-3.5 h-3.5 ${telemetry ? 'text-emerald-400' : isAudioConnected ? 'text-yellow-400' : 'text-slate-500'}`} />
+            <span className={telemetry ? 'text-emerald-400 font-medium' : ''}>
+              Master Bus: {telemetry ? `Online (${telemetry.sampleRate / 1000} kHz)` : isAudioConnected ? 'Streaming' : 'Offline'}
+            </span>
           </div>
         </div>
       </header>

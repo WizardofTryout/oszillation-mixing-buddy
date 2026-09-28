@@ -32,7 +32,7 @@ public:
 
         g.setColour(juce::Colours::white);
         g.setFont(juce::Font(16.0f, juce::Font::bold));
-        g.drawText("OSZILLATION MIXING BUDDY — THE EAR", 15, 0, getWidth() - 30, 40, juce::Justification::centredLeft);
+        g.drawText("OSZILLATION MIXING BUDDY - THE EAR", 15, 0, getWidth() - 30, 40, juce::Justification::centredLeft);
 
         // Connection badge
         bool isConnected = processor.isTelemetryConnected();

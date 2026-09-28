@@ -46,7 +46,13 @@ bool TelemetryClient::attemptConnect()
     if (!socket.connect("127.0.0.1", 48123, 500))
         return false;
 
-    return sendWebSocketHandshake();
+    if (!sendWebSocketHandshake())
+    {
+        socket.close();
+        return false;
+    }
+
+    return true;
 }
 
 bool TelemetryClient::sendWebSocketHandshake()
@@ -62,13 +68,29 @@ bool TelemetryClient::sendWebSocketHandshake()
     if (socket.write(request.toRawUTF8(), request.getNumBytesAsUTF8()) <= 0)
         return false;
 
-    // Wait for handshake response (timeout 500ms)
-    char responseBuffer[1024] {};
-    int bytesRead = socket.read(responseBuffer, sizeof(responseBuffer) - 1, false);
-    if (bytesRead <= 0)
-        return false;
+    // Wait for handshake response (timeout up to 2000ms)
+    juce::String response;
+    const int64_t deadline = juce::Time::currentTimeMillis() + 2000;
+    while (juce::Time::currentTimeMillis() < deadline)
+    {
+        int ready = socket.waitUntilReady(true, 100);
+        if (ready > 0)
+        {
+            char chunk[1024] {};
+            int bytesRead = socket.read(chunk, sizeof(chunk) - 1, false);
+            if (bytesRead > 0)
+            {
+                response += juce::String::fromUTF8(chunk, bytesRead);
+                if (response.contains("101 Switching Protocols"))
+                    return true;
+            }
+        }
+        else if (ready < 0)
+        {
+            return false;
+        }
+    }
 
-    juce::String response(responseBuffer, static_cast<size_t>(bytesRead));
     return response.contains("101 Switching Protocols");
 }
 

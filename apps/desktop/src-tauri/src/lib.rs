@@ -8,7 +8,7 @@ use ipc_server::IPCServer;
 use licensing::{LicenseGatekeeper, LicenseState};
 use safety_guard::SafetyGuard;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{Manager, State};
 
 pub struct AppState {
     pub safety_guard: Mutex<SafetyGuard>,
@@ -59,6 +59,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(app_state)
+        .setup(|app| {
+            let state = app.state::<AppState>();
+            state.ipc_server.set_app_handle(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_active_daw,
             get_license_status,
