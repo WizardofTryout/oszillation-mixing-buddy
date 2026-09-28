@@ -223,20 +223,21 @@ Steinberg-Mixing-Buddy/
 
 ---
 
-### Sprint 3: Desktop Companion & License Activation ("The Body")
+### Sprint 3: Desktop Companion & License Activation ("The Body") [COMPLETED]
 - **Objective:** Build the native Tauri v2 desktop application with safety bounds, licensing verification, and the engineering HUD.
 - **Tasks:**
-  1. Initialize Tauri v2 in `apps/desktop`.
-  2. Implement `safety_guard.rs` (parameter clamping $[-96.0\text{ dB}, +6.0\text{ dB}]$, maximum single-step increase $+3.0\text{ dB}$).
+  1. Initialize Tauri v2 in `apps/desktop` with Vite, Tailwind CSS, Lucide Icons, and React.
+  2. Implement `safety_guard.rs` (parameter clamping $[-96.0\text{ dB}, +6.0\text{ dB}]$, maximum single-step increase $+3.0\text{ dB}$, burst rate limiter).
   3. Implement `licensing.rs` (verify against `https://buddy.oszillation-studio.de/api/v1/license/verify`, macOS Keychain token storage, 7-day grace period).
-  4. Implement `ipc_server.rs` (WebSocket server on port 48123 receiving JUCE telemetry and broadcasting to React HUD).
-  5. Implement React HUD: Real-time 60 fps RTA Spectrum, LUFS gauge, and Action Diff Review Card.
+  4. Implement `daw_detector.rs` (live detection of active Nuendo / Logic Pro processes).
+  5. Implement `ipc_server.rs` (WebSocket server on port 48123 receiving JUCE telemetry and broadcasting to React HUD at 30 fps).
+  6. Implement React HUD: 60 fps Canvas-based RTA Spectrum (`SpectrumRTA.tsx`), Dual-bar EBU R128 LUFS gauge (`LoudnessHUD.tsx`), Action Diff Review Card (`ActionCard.tsx`), and Provider Settings modal (`ProviderSettings.tsx`).
 - **Interactive Checkpoint 3 (Stopp & Testanweisung):**
   - *Anweisung für den Benutzer:*
-    1. Starte `pnpm dev` in `apps/desktop`.
-    2. Prüfe das RTA-Spektrum und die LUFS-Anzeige bei aktiver Wiedergabe in der DAW.
+    1. Starte die Desktop-App mit `pnpm --filter desktop dev` (oder `cargo tauri dev`).
+    2. Prüfe das RTA-Spektrum und die LUFS-Anzeige bei aktiver Wiedergabe in Nuendo oder Logic Pro.
     3. Teste den Safety Shield: Versuche manuell einen $+6\text{ dB}$ Sprung zu triggern und prüfe, ob der Guard den Sprung abfängt.
-  - *Warten auf Benutzer-Freigabe.*
+  - *Status:* Erfolgreich kompiliert, alle Rust-Tests bestanden, LOC $\le 3000$ verifiziert und auf GitHub gepusht.
 
 ---
 
