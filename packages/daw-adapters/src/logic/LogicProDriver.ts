@@ -30,39 +30,6 @@ export class LogicProDriver implements DAWDriver {
     this.transport = options.midiTransport;
     this.numChannels = options.numChannels ?? 8;
     this.axClient = options.accessibilityClient ?? new MacOSAccessibilityClient();
-    this.initializeDefaultTracks();
-  }
-
-  private initializeDefaultTracks(): void {
-    for (let i = 0; i < this.numChannels; ++i) {
-      const id = `logic_track_${i + 1}`;
-      let trackName = `Audio ${i + 1}`;
-      if (i === 0) trackName = 'Stereo Out';
-
-      this.tracks.set(id, {
-        id,
-        index: i,
-        name: trackName,
-        type: i === 0 ? 'master' : 'audio',
-        volumeDb: 0.0,
-        pan: 0.0,
-        isMuted: false,
-        isSoloed: false,
-        isSelected: i === 0,
-        insertSlots: [
-          {
-            slotIndex: 0,
-            pluginName: 'Channel EQ',
-            format: 'au',
-            isBypassed: false,
-            parameters: [
-              { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
-              { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
-            ]
-          }
-        ]
-      });
-    }
   }
 
   private findOrCreateTrack(idOrName: string): TrackDescriptor {
@@ -132,6 +99,12 @@ export class LogicProDriver implements DAWDriver {
   }
 
   public async getTrackList(): Promise<TrackDescriptor[]> {
+    if (this.tracks.size === 0) {
+      const scanned = await this.axClient.scanLogicTracks();
+      for (const t of scanned) {
+        this.tracks.set(t.id, t);
+      }
+    }
     return Array.from(this.tracks.values());
   }
 

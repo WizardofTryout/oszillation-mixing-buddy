@@ -20,7 +20,7 @@ class MockStudioDAWDriver implements DAWDriver {
     {
       id: 'track_1',
       index: 0,
-      name: 'Kick Drum',
+      name: 'SoCal',
       type: 'audio',
       volumeDb: -3.0,
       pan: 0.0,
@@ -28,15 +28,15 @@ class MockStudioDAWDriver implements DAWDriver {
       isSoloed: false,
       isSelected: true,
       insertSlots: [
-        { slotIndex: 0, pluginName: 'Frequency 2', format: 'vst3', isBypassed: false, parameters: [] }
+        { slotIndex: 0, pluginName: 'Channel EQ', format: 'au', isBypassed: false, parameters: [] }
       ]
     },
     {
       id: 'track_2',
       index: 1,
-      name: 'Bass Guitar',
-      type: 'audio',
-      volumeDb: -4.0,
+      name: 'Stereo Out',
+      type: 'master',
+      volumeDb: 0.0,
       pan: 0.0,
       isMuted: false,
       isSoloed: false,

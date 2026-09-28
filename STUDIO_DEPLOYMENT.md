@@ -102,7 +102,7 @@ Das Skript zur 14-Bit-Fader- und Insert-Steuerung liegt in:
 
 ### 💬 Beispiel-Prompts für Claude Desktop im Studio:
 - *„Höre dir die aktuelle Telemetrie aus Nuendo an. Wie ist unsere Integrated Loudness und haben wir True-Peak-Clipping?“*
-- *„Gibt es Frequenzmaskierungen zwischen Kick Drum und Bass Guitar im Bereich von 60 bis 120 Hz? Wenn ja, erstelle einen Vorschlag zur Absenkung.“*
+- *„Gibt es Frequenzmaskierungen zwischen den Spuren im Bereich von 60 bis 120 Hz? Wenn ja, erstelle einen Vorschlag zur Absenkung.“*
 - *„Schlage mir eine Korrektur vor und markiere die Takte 17 bis 25 zum A/B-Vorhören.“*
 
 Sobald Claude einen Vorschlag sendet, erscheint im **Desktop HUD** sofort eine interaktive **Diff-Card**. Du kannst per Klick auf **[Anwenden]** die Änderung über den integrierten **Acoustic Shock Shield** (Master $\le 0\text{ dB}$, Einzelschritte $\le +3\text{ dB}$) direkt und sicher in die DAW schreiben lassen!

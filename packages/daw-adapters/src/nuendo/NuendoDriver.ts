@@ -26,25 +26,6 @@ export class NuendoDriver implements DAWDriver {
   constructor(options: NuendoDriverOptions = {}) {
     this.transport = options.midiTransport;
     this.numChannels = options.numChannels ?? 16;
-    this.initializeDefaultTracks();
-  }
-
-  private initializeDefaultTracks(): void {
-    for (let i = 0; i < this.numChannels; ++i) {
-      const id = `track_${i + 1}`;
-      this.tracks.set(id, {
-        id,
-        index: i,
-        name: i === 0 ? 'Stereo Out' : `Channel ${i + 1}`,
-        type: i === 0 ? 'master' : 'audio',
-        volumeDb: 0.0,
-        pan: 0.0,
-        isMuted: false,
-        isSoloed: false,
-        isSelected: i === 0,
-        insertSlots: []
-      });
-    }
   }
 
   public async connect(): Promise<boolean> {

@@ -7,6 +7,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
+use crate::daw_detector::{DAWDetector, DetectedDAW};
 
 pub struct IPCServer {
     port: u16,
@@ -120,7 +121,14 @@ async fn handle_connection(
 
         // 2. GET /api/tracks
         if peek_str.starts_with("GET /api/tracks") {
-            let track_list = shared_tracks.lock().map(|g| g.clone()).unwrap_or_default();
+            let mut track_list = shared_tracks.lock().map(|g| g.clone()).unwrap_or_default();
+            if track_list.is_empty() {
+                let mut detector = DAWDetector::new();
+                let daw = detector.detect_active_daw();
+                if daw == DetectedDAW::LogicPro {
+                    track_list = detector.scan_logic_pro_tracks();
+                }
+            }
             let body = serde_json::json!({
                 "tracks": track_list
             }).to_string();
@@ -342,7 +350,7 @@ mod tests {
         let mut sub = server.subscribe();
 
         let client = reqwest::Client::new();
-        let proposal_body = r#"{"id":"prop_123","deltas":[{"trackId":"track_1","trackName":"Kick Drum","parameterName":"fader_db","currentValue":-3.5,"proposedValue":-1.5}]}"#;
+        let proposal_body = r#"{"id":"prop_123","deltas":[{"trackId":"track_1","trackName":"SoCal","parameterName":"fader_db","currentValue":-3.5,"proposedValue":-1.5}]}"#;
 
         let res = client
             .post("http://127.0.0.1:48198/api/proposals")
