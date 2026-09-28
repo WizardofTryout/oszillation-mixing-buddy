@@ -241,24 +241,25 @@ Steinberg-Mixing-Buddy/
 
 ---
 
-### Sprint 4: Pluggable AI Engine & Model Context Protocol (MCP) Server
+### Sprint 4: Pluggable AI Engine & Model Context Protocol (MCP) Server [COMPLETED]
 - **Objective:** Implement the pluggable AI engine (BYOK, Ollama) and standalone Model Context Protocol server.
 - **Tasks:**
-  1. Implement `packages/ai-engine/` supporting Anthropic, Gemini, OpenAI, Ollama, and Managed Cloud.
-  2. Implement `packages/mcp-server/` with `stdio` and SSE transport (`http://127.0.0.1:48124/sse`).
-  3. Register 5 core MCP tools:
+  1. Implement `packages/ai-engine/` supporting Anthropic (`AnthropicProvider.ts`), Gemini (`GeminiProvider.ts`), OpenAI (`OpenAIProvider.ts`), Ollama (`LocalOllamaProvider.ts`), and Managed Cloud/Rule-Based mock.
+  2. Implement `packages/mcp-server/` with dual-transport: native `stdio` (for Claude Desktop / Cursor) and SSE transport on `http://127.0.0.1:48124/sse`.
+  3. Register 5 core MCP tools with complete Zod schemas and typed handlers:
      - `mcp__get_mix_telemetry`
      - `mcp__list_tracks`
      - `mcp__propose_mix_adjustment`
      - `mcp__execute_mix_adjustment`
      - `mcp__audition_region`
-  4. Render exportable `claude_desktop_config.json` snippet in the HUD.
+  4. Render exportable `claude_desktop_config.json` 1-click copy snippet and live MCP status in the HUD.
+  5. Verified with automated test script `scripts/test-mcp-client.ts` testing all 5 tools and safety shield parameter clamping.
 - **Interactive Checkpoint 4 (Stopp & Testanweisung):**
   - *Anweisung für den Benutzer:*
     1. Binde den Mixing Buddy Server in Claude Desktop ein (`claude_desktop_config.json`).
     2. Frage Claude Desktop: *"Analysiere den Mix und schlage einen Fader-Pegel für den Bass vor"*.
     3. Prüfe, ob die Proposal Card im HUD erscheint und mit [Apply] in der DAW übernommen werden kann.
-  - *Warten auf Benutzer-Freigabe.*
+  - *Status:* Erfolgreich gebaut, getestet und auf GitHub gepusht.
 
 ---
 
