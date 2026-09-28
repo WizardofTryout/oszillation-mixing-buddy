@@ -134,6 +134,62 @@ impl DAWDetector {
 
         DetectedDAW::None
     }
+
+    /// Detects active project name from the DAW's window titles on macOS
+    pub fn detect_project_name(&self, daw: &DetectedDAW) -> Option<String> {
+        #[cfg(target_os = "macos")]
+        {
+            let app_name = match daw {
+                DetectedDAW::LogicPro => "Logic Pro",
+                DetectedDAW::Nuendo => "Nuendo",
+                DetectedDAW::Cubase => "Cubase",
+                DetectedDAW::None => return None,
+            };
+
+            let script = format!(
+                "tell application \"{}\" to get name of every window",
+                app_name
+            );
+
+            if let Ok(output) = std::process::Command::new("osascript")
+                .args(["-e", &script])
+                .output()
+            {
+                if output.status.success() {
+                    let out_str = String::from_utf8_lossy(&output.stdout);
+                    for raw_title in out_str.split(',') {
+                        let title = raw_title.trim();
+                        let lower = title.to_lowercase();
+                        if title.is_empty()
+                            || lower.contains("wähle ein projekt")
+                            || lower.contains("choose a project")
+                            || lower.contains("startseite")
+                            || lower.contains("preferences")
+                            || lower.contains("einstellungen")
+                            || lower.contains("channel eq")
+                            || lower.contains("equalizer")
+                            || lower == "mixer"
+                        {
+                            continue;
+                        }
+
+                        let proj = title.split(" - ").next().unwrap_or(title).trim();
+                        let clean_proj = proj
+                            .strip_suffix(".logicx")
+                            .or_else(|| proj.strip_suffix(".cpr"))
+                            .or_else(|| proj.strip_suffix(".npr"))
+                            .unwrap_or(proj)
+                            .trim();
+
+                        if !clean_proj.is_empty() {
+                            return Some(clean_proj.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]
@@ -143,6 +199,7 @@ mod tests {
     #[test]
     fn test_detector_instantiation() {
         let mut detector = DAWDetector::new();
-        let _ = detector.detect_active_daw();
+        let daw = detector.detect_active_daw();
+        let _ = detector.detect_project_name(&daw);
     }
 }

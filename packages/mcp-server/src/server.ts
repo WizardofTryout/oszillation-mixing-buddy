@@ -7,6 +7,7 @@ import {
   AuditionRegionSchema,
   ExecuteMixAdjustmentSchema,
   GetMixTelemetrySchema,
+  GetProjectInfoSchema,
   ListTracksSchema,
   ProposeMixAdjustmentSchema
 } from './tools.js';
@@ -37,6 +38,30 @@ export class MixingBuddyMCPServer {
   }
 
   private registerTools(): void {
+    // 0. Get Project Info
+    this.server.tool(
+      'mcp__get_project_info',
+      'Retrieves active DAW session status including connected DAW name (Logic Pro / Nuendo / Cubase), open project name, and playback state.',
+      GetProjectInfoSchema.shape,
+      async (args) => {
+        try {
+          const result = await this.handlers.getProjectInfo(args);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        } catch (err: unknown) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Error fetching project info: ${String(err)}` }]
+          };
+        }
+      }
+    );
     // 1. Get Mix Telemetry
     this.server.tool(
       'mcp__get_mix_telemetry',

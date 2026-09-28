@@ -233,6 +233,7 @@ export const App: React.FC = () => {
     let retryTimer: NodeJS.Timeout;
     let unlistenTelemetry: (() => void) | null = null;
     let unlistenProposal: (() => void) | null = null;
+    let unlistenExecute: (() => void) | null = null;
 
     // A. Subscribe to native Tauri IPC telemetry event
     listen<string | MetrologyTelemetryFrame>('telemetry-frame', (event) => {
@@ -286,6 +287,32 @@ export const App: React.FC = () => {
     })
       .then((cleanup) => {
         unlistenProposal = cleanup;
+      })
+      .catch(() => {});
+
+    // C. Subscribe to external DAW execution command
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    listen<any>('execute-daw-action', async (event) => {
+      try {
+        const raw = event.payload;
+        const cmd = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (cmd && cmd.parameterName) {
+          const isLogicLocal = activeDaw.toLowerCase().includes('logic');
+          await invoke('apply_daw_action', {
+            trackName: cmd.trackName || cmd.trackId || (isLogicLocal ? 'Stereo Out' : 'Channel 1'),
+            parameter: cmd.parameterName,
+            value: typeof cmd.value === 'number' ? cmd.value : 0.0,
+            unit: cmd.unit || 'dB',
+            isMaster: cmd.isMaster ?? false
+          });
+          setChatLog(`⚡ Externer MCP-Befehl ausgeführt: ${cmd.parameterName} auf ${cmd.value}`);
+        }
+      } catch (e) {
+        console.error('Error executing DAW action from external trigger', e);
+      }
+    })
+      .then((cleanup) => {
+        unlistenExecute = cleanup;
       })
       .catch(() => {});
 
@@ -366,8 +393,20 @@ export const App: React.FC = () => {
       ws?.close();
       if (unlistenTelemetry) unlistenTelemetry();
       if (unlistenProposal) unlistenProposal();
+      if (unlistenExecute) unlistenExecute();
     };
   }, []);
+
+  // Synchronize active project tracks with Companion HTTP API for MCP server
+  useEffect(() => {
+    if (availableTracks.length > 0) {
+      fetch('http://127.0.0.1:48123/api/tracks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tracks: availableTracks })
+      }).catch(() => {});
+    }
+  }, [availableTracks]);
 
   // 3. Wired Action Handlers
   const handleApplyAction = async (id: string) => {

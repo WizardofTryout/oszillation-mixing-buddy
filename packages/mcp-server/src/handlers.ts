@@ -72,75 +72,86 @@ export class MixingToolHandlers {
     return { telemetry: frame, topResonances };
   }
 
-  public async listTracks(_args: ListTracksInput): Promise<{ tracks: TrackDescriptor[] }> {
-    if (!this.dawDriver) {
-      return {
-        tracks: [
-          {
-            id: 'track_1',
-            index: 0,
-            name: 'Kick Drum',
-            type: 'audio',
-            volumeDb: -3.5,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: true,
-            insertSlots: [
-              {
-                slotIndex: 0,
-                pluginName: 'Frequency 2',
-                format: 'vst3',
-                isBypassed: false,
-                parameters: []
-              }
-            ]
-          },
-          {
-            id: 'track_2',
-            index: 1,
-            name: 'Bass Guitar',
-            type: 'audio',
-            volumeDb: -4.0,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: false,
-            insertSlots: [
-              {
-                slotIndex: 0,
-                pluginName: 'StudioEQ',
-                format: 'vst3',
-                isBypassed: false,
-                parameters: []
-              }
-            ]
-          },
-          {
-            id: 'track_3',
-            index: 2,
-            name: 'Lead Vocal',
-            type: 'audio',
-            volumeDb: -2.0,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: false,
-            insertSlots: [
-              {
-                slotIndex: 0,
-                pluginName: 'Channel EQ',
-                format: 'au',
-                isBypassed: false,
-                parameters: []
-              }
-            ]
-          }
-        ]
-      };
+  public async getProjectInfo(_args?: import('./tools.js').GetProjectInfoInput): Promise<{
+    daw: string;
+    projectName: string;
+    sampleRate: number;
+    isPlaying: boolean;
+    connected: boolean;
+  }> {
+    try {
+      const res = await fetch('http://127.0.0.1:48123/api/project', {
+        signal: AbortSignal.timeout(2000)
+      });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          daw: string;
+          projectName: string;
+          sampleRate: number;
+          isPlaying: boolean;
+          connected?: boolean;
+        };
+        return {
+          daw: data.daw,
+          projectName: data.projectName,
+          sampleRate: data.sampleRate,
+          isPlaying: data.isPlaying,
+          connected: data.connected ?? (data.daw !== 'None' && data.daw !== 'Standalone / None')
+        };
+      }
+    } catch {
+      // Offline
     }
-    const tracks = await this.dawDriver.getTrackList();
-    return { tracks };
+
+    return {
+      daw: this.dawDriver ? this.dawDriver.dawName : 'None',
+      projectName: 'Kein Projekt geöffnet',
+      sampleRate: 48000,
+      isPlaying: false,
+      connected: false
+    };
+  }
+
+  public async listTracks(_args: ListTracksInput): Promise<{
+    tracks: TrackDescriptor[];
+    connected: boolean;
+    error?: string;
+  }> {
+    // 1. Live query to Desktop Companion HTTP API on 127.0.0.1:48123/api/tracks
+    try {
+      const res = await fetch('http://127.0.0.1:48123/api/tracks', {
+        signal: AbortSignal.timeout(2000)
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { tracks?: TrackDescriptor[] };
+        if (Array.isArray(data.tracks) && data.tracks.length > 0) {
+          return {
+            tracks: data.tracks,
+            connected: true
+          };
+        }
+      }
+    } catch {
+      // Desktop companion not reachable or starting up
+    }
+
+    // 2. Query dawDriver directly if injected
+    if (this.dawDriver) {
+      const tracks = await this.dawDriver.getTrackList();
+      if (tracks.length > 0) {
+        return {
+          tracks,
+          connected: this.dawDriver.isConnected
+        };
+      }
+    }
+
+    // 3. STRICT RULE: NO MOCK ARRAYS! Never simulate tracks!
+    return {
+      tracks: [],
+      connected: false,
+      error: 'Keine aktive DAW-Verbindung oder kein Projekt geöffnet'
+    };
   }
 
   public async proposeMixAdjustment(args: ProposeMixAdjustmentInput): Promise<{
@@ -217,6 +228,22 @@ export class MixingToolHandlers {
       const p = this.proposals.get(args.proposalId)!;
       p.status = 'applied';
       await this.broadcastProposalToHUD(p);
+    }
+
+    // Forward execution command to Desktop Companion HUD
+    try {
+      await fetch('http://127.0.0.1:48123/api/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          trackId: args.trackId,
+          parameterName: args.parameterName,
+          value: clampedValue,
+          isMaster
+        })
+      });
+    } catch {
+      // Quiet fallback if offline
     }
 
     return {

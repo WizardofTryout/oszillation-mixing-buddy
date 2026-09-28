@@ -51,9 +51,12 @@ export const AuditionRegionSchema = z.object({
   autoPlay: z.boolean().optional().describe('Immediately trigger DAW playback on the audition region (default: true)')
 });
 
+export const GetProjectInfoSchema = z.object({});
+
 export type GetMixTelemetryInput = z.infer<typeof GetMixTelemetrySchema>;
 export type ListTracksInput = z.infer<typeof ListTracksSchema>;
 export type ParameterDeltaInput = z.infer<typeof ParameterDeltaSchema>;
 export type ProposeMixAdjustmentInput = z.infer<typeof ProposeMixAdjustmentSchema>;
 export type ExecuteMixAdjustmentInput = z.infer<typeof ExecuteMixAdjustmentSchema>;
 export type AuditionRegionInput = z.infer<typeof AuditionRegionSchema>;
+export type GetProjectInfoInput = z.infer<typeof GetProjectInfoSchema>;
