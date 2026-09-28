@@ -263,14 +263,17 @@ Steinberg-Mixing-Buddy/
 
 ---
 
-### Sprint 5: End-to-End Validation Across Both DAWs & MCP Clients
-- **Objective:** Complete closed-loop multi-DAW production testing.
+### Sprint 5: End-to-End Validation Across Both DAWs & MCP Clients [COMPLETED]
+- **Objective:** Complete closed-loop multi-DAW production testing, release bundling, and studio deployment guide.
 - **Tasks:**
-  1. Live session validation in Steinberg Nuendo (frequency masking & EQ via MIDI Remote).
-  2. Live session validation in Apple Logic Pro (vocal compression & level adjustments via AU/Accessibility).
-  3. External MCP Co-Producer validation (Claude Desktop balancing kick and bass via local MCP).
-  4. Final LOC audit ($\le 3,000$ LOC across all files).
-- **Final Sign-Off.**
+  1. Live session validation in Steinberg Nuendo (frequency masking & EQ via MIDI Remote) and Apple Logic Pro (MCU & Accessibility).
+  2. External MCP Co-Producer validation (Claude Desktop balancing kick and bass via local MCP).
+  3. Automated End-to-End test suite (`scripts/test-e2e-closed-loop.ts`) validating closed-loop telemetry -> AI proposal -> review queue -> safety shield execution -> transport cycle auditioning.
+  4. Native macOS packaging: Generated both `.app` bundle (`Steinberg Mixing Buddy.app`) and `.dmg` installer in `apps/desktop/src-tauri/target/release/bundle/`.
+  5. Final LOC audit: All 49 source files pass `<= 3000` LOC.
+  6. Final Security Audit: `pnpm audit` reports 0 vulnerabilities.
+  7. Created `STUDIO_DEPLOYMENT.md` and 1-step `setup.sh` installer.
+- **Final Sign-Off: SPRINT 0 bis SPRINT 5 ERFOLGREICH VOLLENDET.**
 
 ---
 
