@@ -175,6 +175,12 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@mixing-buddy/ai-engine':
+        specifier: workspace:*
+        version: link:../../packages/ai-engine
+      '@mixing-buddy/daw-adapters':
+        specifier: workspace:*
+        version: link:../../packages/daw-adapters
       '@mixing-buddy/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types

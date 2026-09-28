@@ -10,6 +10,8 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@mixing-buddy/ai-engine": "workspace:*",
+    "@mixing-buddy/daw-adapters": "workspace:*",
     "@mixing-buddy/shared-types": "workspace:*",
     "@tauri-apps/api": "^2.2.0",
     "@tauri-apps/plugin-shell": "^2.2.0",

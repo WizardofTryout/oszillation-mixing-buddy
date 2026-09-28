@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+use sysinfo::{ProcessesToUpdate, RefreshKind, System};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -29,7 +29,7 @@ impl Default for DAWDetector {
     fn default() -> Self {
         Self {
             system: System::new_with_specifics(
-                RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+                RefreshKind::everything(),
             ),
         }
     }
@@ -42,6 +42,48 @@ impl DAWDetector {
 
     /// Scans running processes for active DAW instances
     pub fn detect_active_daw(&mut self) -> DetectedDAW {
+        #[cfg(target_os = "macos")]
+        {
+            // 1. First priority: Fast and infallible native macOS process search via pgrep
+            if let Ok(output) = std::process::Command::new("pgrep")
+                .arg("-if")
+                .arg("Logic Pro")
+                .output()
+            {
+                if output.status.success() && !output.stdout.is_empty() {
+                    return DetectedDAW::LogicPro;
+                }
+            }
+            if let Ok(output) = std::process::Command::new("pgrep")
+                .arg("-il")
+                .arg("Logic")
+                .output()
+            {
+                if output.status.success() && !output.stdout.is_empty() {
+                    return DetectedDAW::LogicPro;
+                }
+            }
+            if let Ok(output) = std::process::Command::new("pgrep")
+                .arg("-if")
+                .arg("Nuendo")
+                .output()
+            {
+                if output.status.success() && !output.stdout.is_empty() {
+                    return DetectedDAW::Nuendo;
+                }
+            }
+            if let Ok(output) = std::process::Command::new("pgrep")
+                .arg("-if")
+                .arg("Cubase")
+                .output()
+            {
+                if output.status.success() && !output.stdout.is_empty() {
+                    return DetectedDAW::Cubase;
+                }
+            }
+        }
+
+        // 2. Comprehensive sysinfo scan
         self.system.refresh_processes(ProcessesToUpdate::All, true);
 
         for (_pid, process) in self.system.processes() {
@@ -51,7 +93,7 @@ impl DAWDetector {
                 .map(|p| p.to_string_lossy().to_lowercase())
                 .unwrap_or_default();
 
-            if name.contains("logic") || exe.contains("logic pro") || name.contains("auhosting") {
+            if name.contains("logic") || exe.contains("logic") || name.contains("auhosting") {
                 return DetectedDAW::LogicPro;
             }
             if name.contains("nuendo") || exe.contains("nuendo") {

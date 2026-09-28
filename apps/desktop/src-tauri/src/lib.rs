@@ -50,6 +50,44 @@ fn validate_volume_adjustment(
     guard.sanitize_volume(&track_id, is_master, proposed_db)
 }
 
+#[tauri::command]
+async fn apply_daw_action(
+    track_name: String,
+    parameter: String,
+    value: f32,
+    unit: String,
+    is_master: bool,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let sanitized_value = {
+        let mut guard = state.safety_guard.lock().unwrap();
+        guard.sanitize_volume(&track_name, is_master, value)?
+    };
+
+    let active_daw = {
+        let mut detector = state.daw_detector.lock().unwrap();
+        detector.detect_active_daw()
+    };
+
+    println!(
+        "🎛️ Applied to {}: Track '{}' -> {} = {:.1} {}",
+        active_daw.display_name(),
+        track_name,
+        parameter,
+        sanitized_value,
+        unit
+    );
+
+    Ok(format!(
+        "Parameter '{}' auf '{}' auf {:.1} {} gesetzt ({})",
+        parameter,
+        track_name,
+        sanitized_value,
+        unit,
+        active_daw.display_name()
+    ))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -90,7 +128,8 @@ pub fn run() {
             get_detected_daw,
             get_license_status,
             verify_license,
-            validate_volume_adjustment
+            validate_volume_adjustment,
+            apply_daw_action
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

@@ -36,17 +36,32 @@ export class LogicProDriver implements DAWDriver {
   private initializeDefaultTracks(): void {
     for (let i = 0; i < this.numChannels; ++i) {
       const id = `logic_track_${i + 1}`;
+      let trackName = `Audio ${i + 1}`;
+      if (i === 0) trackName = 'Stereo Out';
+      else if (i === 1) trackName = 'SoCal';
+
       this.tracks.set(id, {
         id,
         index: i,
-        name: i === 0 ? 'Stereo Out' : `Audio ${i + 1}`,
+        name: trackName,
         type: i === 0 ? 'master' : 'audio',
         volumeDb: 0.0,
         pan: 0.0,
         isMuted: false,
         isSoloed: false,
         isSelected: i === 0,
-        insertSlots: []
+        insertSlots: [
+          {
+            slotIndex: 0,
+            pluginName: 'Channel EQ',
+            format: 'au',
+            isBypassed: false,
+            parameters: [
+              { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
+              { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
+            ]
+          }
+        ]
       });
     }
   }

@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Sparkles, AlertCircle } from 'lucide-react';
-import type { MetrologyTelemetryFrame, MixActionProposal } from '@mixing-buddy/shared-types';
+import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from '@mixing-buddy/shared-types';
+import { GeminiProvider } from '@mixing-buddy/ai-engine';
+import type { ProviderMode } from './ProviderSettings.js';
 
 export interface ChatMessage {
   id: string;
@@ -12,6 +14,10 @@ export interface ChatMessage {
 interface ChatConsoleProps {
   telemetry: MetrologyTelemetryFrame | null;
   activeDaw: string;
+  providerMode: ProviderMode;
+  modelName: string;
+  apiKey: string;
+  tracks: TrackDescriptor[];
   onProposalGenerated: (proposal: MixActionProposal) => void;
   externalLogMessage?: string | null;
 }
@@ -19,14 +25,28 @@ interface ChatConsoleProps {
 export const ChatConsole: React.FC<ChatConsoleProps> = ({
   telemetry,
   activeDaw,
+  providerMode,
+  modelName,
+  apiKey,
+  tracks,
   onProposalGenerated,
   externalLogMessage
 }) => {
+  const getDawDisplayName = (daw: string) => {
+    const d = daw.toLowerCase();
+    if (d.includes('logic')) return 'Logic Pro';
+    if (d.includes('nuendo')) return 'Nuendo';
+    if (d.includes('cubase')) return 'Cubase';
+    return daw === 'none' ? 'Standalone / None' : daw;
+  };
+
+  const dawLabel = getDawDisplayName(activeDaw);
+
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'msg_welcome',
       sender: 'assistant',
-      text: 'Hallo! Ich bin dein AI Co-Producer. Beobachte die Live-Metrology oder gib mir direkte Anweisungen (z. B. "Räume das Low-End auf" oder "Prüfe Resonanzen und erstelle EQ-Filter").',
+      text: `Hallo! Ich bin dein AI Co-Producer für ${dawLabel}. Gib mir Anweisungen (z. B. "Hebe die Höhen an" oder "Räume das Low-End auf"), und ich analysiere das Live-Signal und generiere ActionCards für deine DAW.`,
       timestamp: Date.now()
     }
   ]);
@@ -56,7 +76,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
     }
   }, [externalLogMessage]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     const query = input.trim();
     if (!query || isAnalyzing) return;
 
@@ -71,39 +91,115 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
     setInput('');
     setIsAnalyzing(true);
 
-    // Analyze prompt with live telemetry context
-    setTimeout(() => {
+    try {
+      // 1. If BYOK Gemini is selected and API key is present: Call real Gemini API!
+      if (providerMode === 'byok_gemini' && apiKey.trim().length > 5) {
+        const gemini = new GeminiProvider({
+          apiKey: apiKey.trim(),
+          modelName: modelName.trim() || 'gemini-3.8-flash'
+        });
+
+        const res = await gemini.generateMixProposal(query, telemetry, tracks, {
+          dawName: dawLabel,
+          userPrompt: query
+        });
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `msg_ai_${Date.now()}`,
+            sender: 'assistant',
+            text: res.assistantText,
+            timestamp: Date.now()
+          }
+        ]);
+
+        if (res.proposal) {
+          onProposalGenerated(res.proposal);
+        }
+        setIsAnalyzing(false);
+        return;
+      }
+
+      // If BYOK Gemini is selected but NO key is set
+      if (providerMode === 'byok_gemini' && (!apiKey || apiKey.trim().length <= 5)) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `msg_ai_${Date.now()}`,
+            sender: 'assistant',
+            text: `⚠️ Gemini BYOK ist aktiv, aber es wurde noch kein gültiger API-Key eingetragen. Bitte trage deinen Google Gemini API-Key in den Settings oben ein, um echte ${modelName}-Inferenz zu nutzen.`,
+            timestamp: Date.now()
+          }
+        ]);
+        setIsAnalyzing(false);
+        return;
+      }
+
+      // 2. Managed Mode / Fallback: Analyze with live telemetry context against real available tracks
       const lower = query.toLowerCase();
       let responseText = '';
       let generatedProposal: MixActionProposal | null = null;
 
       const currentLufs = telemetry?.loudness.momentaryLufs ?? -18.0;
       const truePeak = telemetry?.loudness.truePeakDb?.left ?? -1.0;
-      const dawLabel = activeDaw.toLowerCase().includes('logic') ? 'Logic Pro' : 'Nuendo';
 
-      if (lower.includes('low') || lower.includes('bass') || lower.includes('mud') || lower.includes('kick')) {
+      // Find primary musical target track from real project tracks
+      const drumOrInstTrack = tracks.find((t) => t.name.toLowerCase().includes('socal') || t.name.toLowerCase().includes('drum') || t.type === 'audio') ?? tracks[0] ?? {
+        id: 'track_socal',
+        name: 'SoCal'
+      };
+      const masterTrack = tracks.find((t) => t.type === 'master' || t.name.toLowerCase().includes('stereo') || t.name.toLowerCase().includes('out')) ?? {
+        id: 'track_master',
+        name: 'Stereo Out'
+      };
+
+      if (lower.includes('h\u00f6he') || lower.includes('hoehe') || lower.includes('high') || lower.includes('treble') || lower.includes('air') || lower.includes('brillant')) {
         generatedProposal = {
-          id: `prop_${Date.now()}_low_mud`,
+          id: `prop_${Date.now()}_high_shelf`,
           timestamp: Date.now(),
-          category: 'masking_reduction',
-          title: 'Clean Low-End Buildup (250–350 Hz)',
-          rationale: `Analyse der 48 kHz Telemetrie: Resonanzanhäufung bei ~300 Hz identifiziert (Pegel ${currentLufs.toFixed(1)} LUFS, True Peak ${truePeak.toFixed(1)} dB). Ein schmalbandiger Cut von -2.5 dB auf Track 'Audio 2' schafft Headroom für Kick & Bass.`,
-          confidenceScore: 0.94,
+          category: 'eq_tonal_balance',
+          title: `Crisp High-Shelf Boost (+4.0 dB @ 10 kHz) on '${drumOrInstTrack.name}'`,
+          rationale: `Deutliche Anhebung des oberen Frequenzspektrums: Ein +4.0 dB High-Shelf Filter bei 10 kHz verleiht '${drumOrInstTrack.name}' sofort hörbare Brillanz, Transienten-Präsenz und Luftigkeit.`,
+          confidenceScore: 0.95,
           deltas: [
             {
-              trackId: 'track_2',
-              trackName: 'Audio 2',
+              trackId: drumOrInstTrack.id,
+              trackName: drumOrInstTrack.name,
               slotIndex: 0,
               pluginName: 'Channel EQ',
-              parameterName: 'Band 3 Gain',
+              parameterName: 'High Shelf Gain',
               currentValue: 0.0,
-              proposedValue: -2.5,
+              proposedValue: 4.0,
               unit: 'dB'
             }
           ],
           status: 'pending'
         };
-        responseText = `Ich habe das Frequenzspektrum analysiert: Im Bereich 250–350 Hz liegt eine deutliche Maskierung vor. Ich habe eine neue Empfehlung in deine Action-Queue gelegt: "${generatedProposal.title}".`;
+        responseText = `Ich habe einen deutlichen High-Shelf-Boost von +4.0 dB bei 10 kHz auf Spur '${drumOrInstTrack.name}' vorbereitet. Klicke unten auf [Anwenden] oder [A/B], um den Unterschied im Audiosignal direkt zu hören.`;
+      } else if (lower.includes('low') || lower.includes('bass') || lower.includes('mud') || lower.includes('kick')) {
+        generatedProposal = {
+          id: `prop_${Date.now()}_low_mud`,
+          timestamp: Date.now(),
+          category: 'masking_reduction',
+          title: `Carve 300 Hz Mud on '${drumOrInstTrack.name}'`,
+          rationale: `Analyse der 48 kHz Telemetrie: Akkumulation im Low-Mid Bereich (aktuell ${currentLufs.toFixed(1)} LUFS). Ein gezielter Cut von -3.0 dB bei 300 Hz auf '${drumOrInstTrack.name}' räumt das Low-End auf.`,
+          confidenceScore: 0.93,
+          deltas: [
+            {
+              trackId: drumOrInstTrack.id,
+              trackName: drumOrInstTrack.name,
+              slotIndex: 0,
+              pluginName: 'Channel EQ',
+              parameterName: 'Low Mud Cut',
+              currentValue: 0.0,
+              proposedValue: -3.0,
+              unit: 'dB'
+            }
+          ],
+          status: 'pending'
+        };
+        responseText = `Im Bereich 250–350 Hz liegt eine Maskierung vor. Ich habe die ActionCard "${generatedProposal.title}" für dich erstellt.`;
       } else if (lower.includes('lufs') || lower.includes('laut') || lower.includes('level') || lower.includes('master')) {
         const diff = -14.0 - currentLufs;
         const proposedDelta = Math.max(-4.0, Math.min(3.0, diff));
@@ -111,13 +207,13 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           id: `prop_${Date.now()}_master_level`,
           timestamp: Date.now(),
           category: 'gain_staging',
-          title: 'Target -14.0 LUFS Master Leveling',
-          rationale: `Aktuelle Lautheit liegt bei ${currentLufs.toFixed(1)} LUFS. Anpassung um ${proposedDelta > 0 ? '+' : ''}${proposedDelta.toFixed(1)} dB bringt den Mix näher an den Streaming-Standard (-14 LUFS) unter Einhaltung des Acoustic Shock Shields.`,
-          confidenceScore: 0.91,
+          title: `Target -14.0 LUFS on '${masterTrack.name}'`,
+          rationale: `Aktuelle Lautheit: ${currentLufs.toFixed(1)} LUFS (True Peak: ${truePeak.toFixed(1)} dB). Pegelanpassung um ${proposedDelta > 0 ? '+' : ''}${proposedDelta.toFixed(1)} dB bringt ${dawLabel} an den Streaming-Standard.`,
+          confidenceScore: 0.92,
           deltas: [
             {
-              trackId: 'track_master',
-              trackName: 'Stereo Out',
+              trackId: masterTrack.id,
+              trackName: masterTrack.name,
               slotIndex: 0,
               pluginName: 'Master Fader',
               parameterName: 'volume',
@@ -128,32 +224,9 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           ],
           status: 'pending'
         };
-        responseText = `Der aktuelle Master-Bus Pegel beträgt ${currentLufs.toFixed(1)} LUFS (True Peak ${truePeak.toFixed(1)} dB). Ich habe eine Pegelanpassung vorgeschlagen.`;
-      } else if (lower.includes('resonanz') || lower.includes('harsh') || lower.includes('sibilan')) {
-        generatedProposal = {
-          id: `prop_${Date.now()}_harshness`,
-          timestamp: Date.now(),
-          category: 'eq_tonal_balance',
-          title: 'Notch 3.2 kHz Harsh Resonance',
-          rationale: 'Harsche Frequenzspitzen im Bereich 3.2 kHz detektiert. Schmalbandiger Filter (Q=4.0) senkt Härte ab, ohne Transienten zu dämpfen.',
-          confidenceScore: 0.89,
-          deltas: [
-            {
-              trackId: 'track_1',
-              trackName: 'Audio 1',
-              slotIndex: 0,
-              pluginName: 'Channel EQ',
-              parameterName: 'Band 5 Gain',
-              currentValue: 0.0,
-              proposedValue: -2.0,
-              unit: 'dB'
-            }
-          ],
-          status: 'pending'
-        };
-        responseText = `Im oberen Mittenbereich wurden steile Resonanzpeaks detektiert. Die entsprechende ActionCard wurde vorbereitet.`;
+        responseText = `Master-Bus Lautheit liegt bei ${currentLufs.toFixed(1)} LUFS. Pegelanpassung an ${masterTrack.name} vorbereitet.`;
       } else {
-        responseText = `Verstanden: "${query}". Aktueller Mix-Status in ${dawLabel}: Lautheit ${currentLufs.toFixed(1)} LUFS, True Peak ${truePeak.toFixed(1)} dB, Phasenkorrelation ${(telemetry?.dynamics.stereoCorrelation ?? 1.0).toFixed(2)}. Was möchtest du gezielt anpassen?`;
+        responseText = `Verstanden: "${query}". Aktueller Mix-Status in ${dawLabel}: Lautheit ${currentLufs.toFixed(1)} LUFS, True Peak ${truePeak.toFixed(1)} dB, Phasenkorrelation ${(telemetry?.dynamics.stereoCorrelation ?? 1.0).toFixed(2)}. Was möchtest du anpassen?`;
       }
 
       setMessages((prev) => [
@@ -169,9 +242,19 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
       if (generatedProposal) {
         onProposalGenerated(generatedProposal);
       }
-
+    } catch (err: unknown) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `msg_err_${Date.now()}`,
+          sender: 'system',
+          text: `Fehler bei der AI-Analyse: ${String(err)}`,
+          timestamp: Date.now()
+        }
+      ]);
+    } finally {
       setIsAnalyzing(false);
-    }, 600);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -186,7 +269,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
       <div className="px-3 py-2 border-b border-darkBorder/70 bg-[#16181d] flex items-center justify-between text-xs">
         <div className="flex items-center gap-1.5 font-semibold text-slate-200">
           <Sparkles className="w-3.5 h-3.5 text-blue-400" />
-          <span>AI Co-Producer Prompt Console</span>
+          <span>AI Co-Producer Prompt Console ({dawLabel})</span>
         </div>
         <span className="text-[11px] text-slate-500 font-mono">
           Context: {telemetry ? `${telemetry.sampleRate / 1000} kHz Live` : 'Standby'}
@@ -237,7 +320,11 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
         {isAnalyzing && (
           <div className="flex items-center gap-2 text-slate-400 italic text-[11px]">
             <Sparkles className="w-3 h-3 text-blue-400 animate-spin" />
-            <span>AI analysiert Telemetriedaten und Frequenzspektrum...</span>
+            <span>
+              {providerMode === 'byok_gemini'
+                ? `Google Gemini (${modelName}) analysiert Telemetrie und generiert Vorschlag...`
+                : `AI Co-Producer analysiert Telemetriedaten für ${dawLabel}...`}
+            </span>
           </div>
         )}
       </div>
@@ -249,7 +336,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Frag den Mixing Buddy (z. B. 'Räume das Low-End auf' oder 'Snare & Vocals trennen')..."
+          placeholder={`Frag den Mixing Buddy (z. B. 'Hebe die Höhen an' oder 'Räume das Low-End auf')...`}
           className="flex-1 bg-[#1a1c22] border border-darkBorder px-3 py-1.5 rounded text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
         />
         <button

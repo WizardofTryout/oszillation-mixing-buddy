@@ -19,19 +19,45 @@ export class GeminiProvider implements AIProvider {
     tracks: TrackDescriptor[],
     context?: MixAnalysisContext
   ): Promise<MixActionProposal> {
-    const defaultCtx: MixAnalysisContext = context ?? { dawName: 'Nuendo' };
-
-    const telemetrySummary = JSON.stringify(
-      {
-        lufs: telemetry.loudness,
-        truePeak: telemetry.loudness.truePeakDb,
-        correlation: telemetry.dynamics.stereoCorrelation,
-        lowMudEnergyDb: telemetry.spectrum.frequencyBands.slice(10, 14),
-        harshnessEnergyDb: telemetry.spectrum.frequencyBands.slice(22, 26)
-      },
-      null,
-      2
+    const res = await this.generateMixProposal(
+      context?.userPrompt ?? 'Analyze the current mix balance and propose the most critical improvement.',
+      telemetry,
+      tracks,
+      context
     );
+    if (res.proposal) {
+      return res.proposal;
+    }
+    throw new Error('Gemini did not return an actionable proposal: ' + res.assistantText);
+  }
+
+  public async generateMixProposal(
+    userPrompt: string,
+    telemetry: MetrologyTelemetryFrame | null,
+    tracks: TrackDescriptor[],
+    context?: MixAnalysisContext
+  ): Promise<{ assistantText: string; proposal?: MixActionProposal }> {
+    const dawName = context?.dawName ?? 'Logic Pro';
+    const ctx: MixAnalysisContext = {
+      dawName,
+      userPrompt,
+      ...context
+    };
+
+    const telemetrySummary = telemetry
+      ? JSON.stringify(
+          {
+            sampleRate: telemetry.sampleRate,
+            lufs: telemetry.loudness,
+            truePeak: telemetry.loudness.truePeakDb,
+            correlation: telemetry.dynamics.stereoCorrelation,
+            frequencyBands32: telemetry.spectrum.frequencyBands,
+            spectralResonances: telemetry.spectrum.spectralResonances
+          },
+          null,
+          2
+        )
+      : 'No live telemetry frame available currently.';
 
     const tracksSummary = JSON.stringify(
       tracks.map((t) => ({
@@ -46,7 +72,7 @@ export class GeminiProvider implements AIProvider {
       2
     );
 
-    const userPrompt = buildAnalysisUserPrompt(telemetrySummary, tracksSummary, defaultCtx);
+    const fullPrompt = buildAnalysisUserPrompt(telemetrySummary, tracksSummary, ctx);
 
     const functionDeclaration: FunctionDeclaration = {
       name: 'mcp__propose_mix_adjustment',
@@ -84,30 +110,75 @@ export class GeminiProvider implements AIProvider {
       }
     };
 
-    const model = this.genAI.getGenerativeModel({
-      model: this.modelName,
-      systemInstruction: MIXING_BUDDY_SYSTEM_PROMPT,
-      tools: [{ functionDeclarations: [functionDeclaration] }]
-    });
+    try {
+      const model = this.genAI.getGenerativeModel({
+        model: this.modelName,
+        systemInstruction: MIXING_BUDDY_SYSTEM_PROMPT,
+        tools: [{ functionDeclarations: [functionDeclaration] }]
+      });
 
-    const result = await model.generateContent(userPrompt);
-    const response = await result.response;
-    const call = response.functionCalls()?.[0];
+      const result = await model.generateContent(fullPrompt);
+      const response = await result.response;
+      const call = response.functionCalls()?.[0];
+      const textOutput = response.text ? response.text() : '';
 
-    if (!call || call.name !== 'mcp__propose_mix_adjustment') {
-      throw new Error('Gemini response did not contain mcp__propose_mix_adjustment call');
+      if (call && call.name === 'mcp__propose_mix_adjustment') {
+        const input = call.args as any;
+        const proposal: MixActionProposal = {
+          id: `prop_${Date.now()}_gemini`,
+          timestamp: Date.now(),
+          category: input.category,
+          title: input.title,
+          rationale: input.rationale,
+          confidenceScore: input.confidenceScore,
+          deltas: input.deltas,
+          status: 'pending'
+        };
+        return {
+          assistantText: textOutput.trim() || input.rationale || `Ich habe die Anweisung analysiert und "${proposal.title}" vorgeschlagen.`,
+          proposal
+        };
+      }
+
+      // If Gemini returned structured JSON in text
+      if (textOutput.includes('mcp__propose_mix_adjustment') || textOutput.includes('deltas')) {
+        try {
+          const jsonMatch = textOutput.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            const proposal: MixActionProposal = {
+              id: `prop_${Date.now()}_gemini`,
+              timestamp: Date.now(),
+              category: parsed.category ?? 'eq_tonal_balance',
+              title: parsed.title ?? 'Mix Adjustment Proposal',
+              rationale: parsed.rationale ?? textOutput,
+              confidenceScore: parsed.confidenceScore ?? 0.9,
+              deltas: parsed.deltas ?? [],
+              status: 'pending'
+            };
+            return {
+              assistantText: parsed.rationale ?? textOutput,
+              proposal
+            };
+          }
+        } catch {
+          // JSON parsing failed, return raw text
+        }
+      }
+
+      return {
+        assistantText: textOutput.trim() || 'Gemini hat die Anweisung verarbeitet.'
+      };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('API_KEY_INVALID') || msg.includes('403') || msg.includes('API key')) {
+        return {
+          assistantText: `⚠️ Gemini API-Fehler: Der angegebene API-Key ist ungültig oder abgelaufen. Bitte prüfe den Key in den Settings oben. (${msg})`
+        };
+      }
+      return {
+        assistantText: `⚠️ Fehler bei der Gemini-Generierung: ${msg}`
+      };
     }
-
-    const input = call.args as any;
-    return {
-      id: `prop_${Date.now()}_gemini`,
-      timestamp: Date.now(),
-      category: input.category,
-      title: input.title,
-      rationale: input.rationale,
-      confidenceScore: input.confidenceScore,
-      deltas: input.deltas,
-      status: 'pending'
-    };
   }
 }

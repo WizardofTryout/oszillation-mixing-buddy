@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import type { MetrologyTelemetryFrame, MixActionProposal } from '@mixing-buddy/shared-types';
+import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from '@mixing-buddy/shared-types';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { SpectrumRTA } from './components/SpectrumRTA.js';
@@ -18,6 +18,88 @@ export const App: React.FC = () => {
   const [apiKey, setApiKey] = useState<string>('');
   const [proposals, setProposals] = useState<MixActionProposal[]>([]);
   const [chatLog, setChatLog] = useState<string | null>(null);
+
+  // Available project tracks mapped dynamically to the active DAW
+  const availableTracks: TrackDescriptor[] = React.useMemo(() => {
+    const isLogic = activeDaw.toLowerCase().includes('logic');
+    if (isLogic) {
+      return [
+        {
+          id: 'track_master',
+          index: 0,
+          name: 'Stereo Out',
+          type: 'master',
+          volumeDb: 0.0,
+          pan: 0.0,
+          isMuted: false,
+          isSoloed: false,
+          isSelected: false,
+          insertSlots: [
+            {
+              slotIndex: 0,
+              pluginName: 'Channel EQ',
+              format: 'au',
+              isBypassed: false,
+              parameters: [
+                { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
+                { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
+              ]
+            }
+          ]
+        },
+        {
+          id: 'track_socal',
+          index: 1,
+          name: 'SoCal',
+          type: 'audio',
+          volumeDb: 0.0,
+          pan: 0.0,
+          isMuted: false,
+          isSoloed: false,
+          isSelected: true,
+          insertSlots: [
+            {
+              slotIndex: 0,
+              pluginName: 'Channel EQ',
+              format: 'au',
+              isBypassed: false,
+              parameters: [
+                { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
+                { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
+              ]
+            }
+          ]
+        }
+      ];
+    }
+
+    return [
+      {
+        id: 'track_master',
+        index: 0,
+        name: 'Stereo Out',
+        type: 'master',
+        volumeDb: 0.0,
+        pan: 0.0,
+        isMuted: false,
+        isSoloed: false,
+        isSelected: false,
+        insertSlots: []
+      },
+      {
+        id: 'track_audio1',
+        index: 1,
+        name: 'Audio 1',
+        type: 'audio',
+        volumeDb: 0.0,
+        pan: 0.0,
+        isMuted: false,
+        isSoloed: false,
+        isSelected: true,
+        insertSlots: []
+      }
+    ];
+  }, [activeDaw]);
 
   // 1. Dynamic DAW detection from Rust backend
   useEffect(() => {
@@ -113,7 +195,8 @@ export const App: React.FC = () => {
     const proposal = proposals.find((p) => p.id === id);
     if (!proposal) return;
 
-    const dawLabel = activeDaw.toLowerCase().includes('logic') ? 'Logic Pro' : 'Nuendo';
+    const isLogic = activeDaw.toLowerCase().includes('logic');
+    const dawLabel = isLogic ? 'Logic Pro' : activeDaw === 'none' ? 'Standalone' : 'Nuendo';
 
     for (const delta of proposal.deltas) {
       // Validate volume adjustment with Acoustic Shock Shield in Rust Core
@@ -130,16 +213,28 @@ export const App: React.FC = () => {
         }
       }
 
-      // Check track presence simulation in DAW
-      const knownTracks = ['Stereo Out', 'Audio 1', 'Audio 2', 'SoCal', 'Kick', 'Bass'];
-      const trackExists = knownTracks.some((t) => t.toLowerCase() === delta.trackName.toLowerCase());
-
-      if (!trackExists && delta.trackName.toLowerCase().includes('snare')) {
+      // Check track presence in active DAW
+      const trackExists = availableTracks.some((t) => t.name.toLowerCase() === delta.trackName.toLowerCase());
+      if (!trackExists) {
+        const availableNames = availableTracks.map((t) => `'${t.name}'`).join(', ');
         setChatLog(
-          `⚠️ Spur 'Snare' im ${dawLabel}-Projekt nicht gefunden. Verfügbare Spuren: Stereo Out, Audio 1, Audio 2, SoCal.`
+          `⚠️ Spur '${delta.trackName}' im ${dawLabel}-Projekt nicht gefunden. Verfügbare Spuren: ${availableNames}.`
         );
         return;
       }
+    }
+
+    try {
+      const delta = proposal.deltas[0];
+      await invoke('apply_daw_action', {
+        trackName: delta?.trackName ?? 'SoCal',
+        parameter: delta?.parameterName ?? 'EQ',
+        value: delta?.proposedValue ?? 0.0,
+        unit: delta?.unit ?? 'dB',
+        isMaster: delta?.trackName.toLowerCase().includes('master') || delta?.trackName.toLowerCase().includes('stereo')
+      });
+    } catch {
+      // Ignore in pure web mode
     }
 
     setProposals((prev) =>
@@ -158,20 +253,50 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleAuditionAction = (id: string) => {
+  const handleAuditionAction = async (id: string) => {
     const prop = proposals.find((p) => p.id === id);
+    if (!prop) return;
+
+    const isLogic = activeDaw.toLowerCase().includes('logic');
+    const dawLabel = isLogic ? 'Logic Pro' : 'Nuendo';
+
     setProposals((prev) =>
       prev.map((p) => (p.id === id ? { ...p, status: 'auditioning' } : p))
     );
-    if (prop) {
-      setChatLog(`🎧 A/B Audition gestartet für: "${prop.title}". Höre den Unterschied im Audio-Signal...`);
+    setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}". Temporäre Hörprobe in ${dawLabel} gestartet...`);
+
+    try {
+      const delta = prop.deltas[0];
+      await invoke('apply_daw_action', {
+        trackName: delta?.trackName ?? 'SoCal',
+        parameter: delta?.parameterName ?? 'EQ',
+        value: delta?.proposedValue ?? 0.0,
+        unit: delta?.unit ?? 'dB',
+        isMaster: false
+      });
+    } catch {
+      // Ignore
     }
 
     // Auto-restore after 6 seconds of audition
-    setTimeout(() => {
+    setTimeout(async () => {
+      try {
+        const delta = prop.deltas[0];
+        await invoke('apply_daw_action', {
+          trackName: delta?.trackName ?? 'SoCal',
+          parameter: delta?.parameterName ?? 'EQ',
+          value: delta?.currentValue ?? 0.0,
+          unit: delta?.unit ?? 'dB',
+          isMaster: false
+        });
+      } catch {
+        // Ignore
+      }
+
       setProposals((prev) =>
         prev.map((p) => (p.id === id && p.status === 'auditioning' ? { ...p, status: 'pending' } : p))
       );
+      setChatLog(`🎧 A/B Audition beendet. Original-Zustand in ${dawLabel} wiederhergestellt.`);
     }, 6000);
   };
 
@@ -224,6 +349,10 @@ export const App: React.FC = () => {
             <ChatConsole
               telemetry={telemetry}
               activeDaw={activeDaw}
+              providerMode={providerMode}
+              modelName={modelName}
+              apiKey={apiKey}
+              tracks={availableTracks}
               onProposalGenerated={handleProposalFromChat}
               externalLogMessage={chatLog}
             />
