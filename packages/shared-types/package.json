@@ -1,0 +1,15 @@
+{
+  "name": "@mixing-buddy/shared-types",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared TypeScript definitions and contracts for Mixing Buddy",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"Shared types verified.\""
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

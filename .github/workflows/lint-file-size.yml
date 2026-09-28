@@ -1,0 +1,19 @@
+name: Enforce File Size Constraints
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  check-loc:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Verify LOC <= 3000 per source file
+        run: |
+          chmod +x scripts/lint-loc.sh
+          ./scripts/lint-loc.sh
