@@ -108,6 +108,7 @@ PluginProcessor::~PluginProcessor()
 void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
     const int numChannels = getTotalNumInputChannels();
+    scratchBuffer.setSize(std::max(1, numChannels), samplesPerBlock);
     loudnessMeter.prepare(sampleRate, samplesPerBlock, numChannels);
     spectralAnalyzer.prepare(sampleRate, samplesPerBlock, numChannels);
     telemetryClient.startStreaming(sampleRate);
@@ -134,9 +135,22 @@ void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiB
 {
     juce::ScopedNoDenormals noDenormals;
 
-    // Zero-latency passthrough: Audio samples are NOT altered
-    loudnessMeter.processBlock(buffer);
-    spectralAnalyzer.processBlock(buffer);
+    const int numChannels = buffer.getNumChannels();
+    const int numSamples = buffer.getNumSamples();
+    if (numChannels == 0 || numSamples == 0)
+        return;
+
+    // 100% BIT-TRANSPARENT PASS-THROUGH:
+    // Audio samples in the host buffer are NEVER altered or mutated.
+    // Metrology operates strictly on an isolated scratch copy.
+    scratchBuffer.setSize(numChannels, numSamples, false, false, true);
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        scratchBuffer.copyFrom(ch, 0, buffer.getReadPointer(ch), numSamples);
+    }
+
+    loudnessMeter.processBlock(scratchBuffer);
+    spectralAnalyzer.processBlock(scratchBuffer);
 
     // Update telemetry client with latest snapshots
     telemetryClient.updateMetrics(loudnessMeter.getSnapshot(), spectralAnalyzer.getSnapshot());

@@ -11,7 +11,7 @@ export class GeminiProvider implements AIProvider {
 
   constructor(config: AIProviderConfig) {
     this.genAI = new GoogleGenerativeAI(config.apiKey || process.env.GEMINI_API_KEY || 'dummy_key');
-    this.modelName = config.modelName || 'gemini-1.5-pro-latest';
+    this.modelName = config.modelName || 'gemini-3.8-flash';
   }
 
   public async analyzeMix(

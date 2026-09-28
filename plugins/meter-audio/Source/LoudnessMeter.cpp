@@ -40,6 +40,7 @@ void LoudnessMeter::prepare(double sampleRate, int samplesPerBlock, int numChann
         channels, 2, juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR, true, false
     );
     oversampler->initProcessing(static_cast<size_t>(samplesPerBlock));
+    filteredBuffer.setSize(std::max(1, channels), samplesPerBlock);
 
     reset();
 }
@@ -122,8 +123,12 @@ void LoudnessMeter::processBlock(const juce::AudioBuffer<float>& buffer)
         currentTruePeakR = peakR > 1e-5f ? 20.0f * std::log10(peakR) : -100.0f;
     }
 
-    // 2. K-Weighting filter processing
-    juce::AudioBuffer<float> filteredBuffer(buffer);
+    // 2. K-Weighting filter processing on dedicated internal buffer copy
+    filteredBuffer.setSize(channels, numSamples, false, false, true);
+    for (int ch = 0; ch < channels; ++ch)
+    {
+        filteredBuffer.copyFrom(ch, 0, buffer.getReadPointer(ch), numSamples);
+    }
     for (int ch = 0; ch < channels; ++ch)
     {
         float* channelData = filteredBuffer.getWritePointer(ch);

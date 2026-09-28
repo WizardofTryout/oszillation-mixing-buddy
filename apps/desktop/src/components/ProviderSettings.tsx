@@ -16,6 +16,10 @@ interface ProviderSettingsProps {
   isAudioConnected: boolean;
   isLicenseActive: boolean;
   mcpClientsCount: number;
+  modelName?: string;
+  onModelNameChange?: (name: string) => void;
+  apiKey?: string;
+  onApiKeyChange?: (key: string) => void;
 }
 
 export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
@@ -24,7 +28,11 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   activeDaw,
   isAudioConnected,
   isLicenseActive,
-  mcpClientsCount
+  mcpClientsCount,
+  modelName = 'gemini-3.8-flash',
+  onModelNameChange,
+  apiKey = '',
+  onApiKeyChange
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -54,6 +62,13 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     }
   };
 
+  const getEffectiveDawLabel = (daw: string) => {
+    if (daw.toLowerCase().includes('logic')) return 'Logic Pro';
+    if (daw.toLowerCase().includes('nuendo')) return 'Nuendo';
+    if (daw.toLowerCase().includes('cubase')) return 'Cubase';
+    return daw === 'none' ? 'None (Standalone)' : daw;
+  };
+
   return (
     <div className="bg-darkSurface border border-darkBorder rounded-lg p-4 shadow-lg flex flex-col gap-4">
       {/* System Status Badges */}
@@ -69,7 +84,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
           <span className="text-slate-600">|</span>
 
           <span className="text-xs text-slate-300">
-            DAW: <span className="font-semibold text-blue-400 capitalize">{activeDaw}</span>
+            DAW: <span className="font-semibold text-blue-400">{getEffectiveDawLabel(activeDaw)}</span>
           </span>
 
           <span className="text-slate-600">|</span>
@@ -130,7 +145,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             }`}
           >
             <div className="flex items-center gap-1.5 text-xs font-bold">
-              <Key className="w-3.5 h-3.5" /> Claude 3.5
+              <Key className="w-3.5 h-3.5" /> Claude 3.7 / 3.5
             </div>
             <span className="text-[10px] text-slate-500">Anthropic BYOK</span>
           </button>
@@ -145,9 +160,9 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             }`}
           >
             <div className="flex items-center gap-1.5 text-xs font-bold">
-              <Sparkles className="w-3.5 h-3.5" /> Gemini 1.5
+              <Sparkles className="w-3.5 h-3.5" /> Gemini 3.8
             </div>
-            <span className="text-[10px] text-slate-500">Google AI BYOK</span>
+            <span className="text-[10px] text-slate-500">Google AI (Flash / Pro)</span>
           </button>
 
           {/* Local Ollama */}
@@ -180,6 +195,32 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             <span className="text-[10px] text-slate-500">via stdio MCP</span>
           </button>
         </div>
+
+        {/* Dynamic Model & API Key Config Bar */}
+        {(currentMode === 'byok_gemini' || currentMode === 'byok_claude') && (
+          <div className="mt-2 p-2.5 rounded bg-[#101216] border border-darkBorder/80 flex flex-wrap items-center gap-3 text-xs">
+            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+              <span className="text-slate-400 font-medium">Model ID:</span>
+              <input
+                type="text"
+                value={modelName}
+                onChange={(e) => onModelNameChange?.(e.target.value)}
+                placeholder={currentMode === 'byok_gemini' ? 'gemini-3.8-flash' : 'claude-3-7-sonnet-20250219'}
+                className="flex-1 bg-[#1a1c23] border border-darkBorder px-2.5 py-1 rounded text-slate-200 font-mono text-xs focus:outline-none focus:border-blue-500"
+              />
+            </div>
+            <div className="flex items-center gap-2 flex-1 min-w-[220px]">
+              <span className="text-slate-400 font-medium">API Key:</span>
+              <input
+                type="password"
+                value={apiKey}
+                onChange={(e) => onApiKeyChange?.(e.target.value)}
+                placeholder={currentMode === 'byok_gemini' ? 'AIzaSy...' : 'sk-ant-...'}
+                className="flex-1 bg-[#1a1c23] border border-darkBorder px-2.5 py-1 rounded text-slate-200 font-mono text-xs focus:outline-none focus:border-blue-500"
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

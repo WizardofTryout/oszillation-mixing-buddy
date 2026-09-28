@@ -8,7 +8,7 @@ use ipc_server::IPCServer;
 use licensing::{LicenseGatekeeper, LicenseState};
 use safety_guard::SafetyGuard;
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 pub struct AppState {
     pub safety_guard: Mutex<SafetyGuard>,
@@ -19,6 +19,12 @@ pub struct AppState {
 
 #[tauri::command]
 fn get_active_daw(state: State<'_, AppState>) -> DetectedDAW {
+    let mut detector = state.daw_detector.lock().unwrap();
+    detector.detect_active_daw()
+}
+
+#[tauri::command]
+fn get_detected_daw(state: State<'_, AppState>) -> DetectedDAW {
     let mut detector = state.daw_detector.lock().unwrap();
     detector.detect_active_daw()
 }
@@ -62,10 +68,26 @@ pub fn run() {
         .setup(|app| {
             let state = app.state::<AppState>();
             state.ipc_server.set_app_handle(app.handle().clone());
+
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut detector = DAWDetector::new();
+                let mut last_detected = None;
+                loop {
+                    let detected = detector.detect_active_daw();
+                    if last_detected.as_ref() != Some(&detected) {
+                        let _ = handle.emit("daw-status-changed", &detected);
+                        last_detected = Some(detected);
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_active_daw,
+            get_detected_daw,
             get_license_status,
             verify_license,
             validate_volume_adjustment

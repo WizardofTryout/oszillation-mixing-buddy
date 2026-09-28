@@ -73,6 +73,8 @@ private:
     mutable std::mutex snapshotMutex;
     LoudnessSnapshot latestSnapshot;
 
+    juce::AudioBuffer<float> filteredBuffer;
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LoudnessMeter)
 };
 

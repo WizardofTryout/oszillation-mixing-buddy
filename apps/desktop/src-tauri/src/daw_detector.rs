@@ -2,12 +2,23 @@ use serde::{Deserialize, Serialize};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum DetectedDAW {
     Nuendo,
     Cubase,
     LogicPro,
     None,
+}
+
+impl DetectedDAW {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Nuendo => "Nuendo",
+            Self::Cubase => "Cubase",
+            Self::LogicPro => "Logic Pro",
+            Self::None => "Standalone / None",
+        }
+    }
 }
 
 pub struct DAWDetector {
@@ -35,15 +46,19 @@ impl DAWDetector {
 
         for (_pid, process) in self.system.processes() {
             let name = process.name().to_string_lossy().to_lowercase();
+            let exe = process
+                .exe()
+                .map(|p| p.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
 
-            if name.contains("nuendo") {
+            if name.contains("logic") || exe.contains("logic pro") || name.contains("auhosting") {
+                return DetectedDAW::LogicPro;
+            }
+            if name.contains("nuendo") || exe.contains("nuendo") {
                 return DetectedDAW::Nuendo;
             }
-            if name.contains("cubase") {
+            if name.contains("cubase") || exe.contains("cubase") {
                 return DetectedDAW::Cubase;
-            }
-            if name.contains("logic pro") {
-                return DetectedDAW::LogicPro;
             }
         }
 

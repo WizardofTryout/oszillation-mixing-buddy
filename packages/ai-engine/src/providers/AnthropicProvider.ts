@@ -13,7 +13,7 @@ export class AnthropicProvider implements AIProvider {
     this.client = new Anthropic({
       apiKey: config.apiKey || process.env.ANTHROPIC_API_KEY || 'dummy_key'
     });
-    this.model = config.modelName || 'claude-3-5-sonnet-20241022';
+    this.model = config.modelName || 'claude-3-7-sonnet-20250219';
   }
 
   public async analyzeMix(

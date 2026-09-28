@@ -54,6 +54,7 @@ private:
     LoudnessMeter loudnessMeter;
     SpectralAnalyzer spectralAnalyzer;
     TelemetryClient telemetryClient;
+    juce::AudioBuffer<float> scratchBuffer;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
 };
