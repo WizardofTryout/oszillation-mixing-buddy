@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Sparkles, AlertCircle } from 'lucide-react';
 import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from '@mixing-buddy/shared-types';
 import { GeminiProvider } from '@mixing-buddy/ai-engine';
+import { invoke } from '@tauri-apps/api/core';
 import type { ProviderMode } from './ProviderSettings.js';
 
 export interface ChatMessage {
@@ -46,7 +47,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
     {
       id: 'msg_welcome',
       sender: 'assistant',
-      text: `Hallo! Ich bin dein AI Co-Producer für ${dawLabel}. Gib mir Anweisungen (z. B. "Hebe die Höhen an" oder "Räume das Low-End auf"), und ich analysiere das Live-Signal und generiere ActionCards für deine DAW.`,
+      text: `Hallo! Ich bin dein AI Co-Producer für ${dawLabel}. Gib mir Anweisungen (z. B. "Hebe die Höhen an" oder "Räume das Low-End auf" oder "Erstelle eine neue Spur"), und ich analysiere das Live-Signal und generiere ActionCards für deine DAW.`,
       timestamp: Date.now()
     }
   ]);
@@ -92,6 +93,44 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
     setIsAnalyzing(true);
 
     try {
+      const lower = query.toLowerCase();
+
+      // Check for track creation intent ("erstelle eine neue spur...", "neue spur anlegen", etc.)
+      const isTrackCreation =
+        (lower.includes('spur') &&
+          (lower.includes('erstell') ||
+            lower.includes('neu') ||
+            lower.includes('anleg') ||
+            lower.includes('hinzufüg') ||
+            lower.includes('hinzufueg') ||
+            lower.includes('bereit'))) ||
+        (lower.includes('track') &&
+          (lower.includes('create') || lower.includes('new') || lower.includes('add') || lower.includes('prepare')));
+
+      if (isTrackCreation) {
+        try {
+          const trackType = lower.includes('instrument') ? 'instrument' : 'audio';
+          await invoke('create_daw_track', {
+            trackType,
+            name: trackType === 'audio' ? 'Audio Spur' : 'Instrument Spur'
+          });
+          const trackMsg = `✅ Neue ${trackType === 'audio' ? 'Audiospur' : 'Instrumentenspur'} wurde erfolgreich in ${dawLabel} angelegt (Cmd+Option+N / Menü). Der Channel EQ steht im ersten Insert bereit.`;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `msg_ai_${Date.now()}`,
+              sender: 'assistant',
+              text: trackMsg,
+              timestamp: Date.now()
+            }
+          ]);
+          setIsAnalyzing(false);
+          return;
+        } catch {
+          // Continue if invoke not available
+        }
+      }
+
       // 1. If BYOK Gemini is selected and API key is present: Call real Gemini API!
       if (providerMode === 'byok_gemini' && apiKey.trim().length > 5) {
         const gemini = new GeminiProvider({
@@ -137,7 +176,6 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
       }
 
       // 2. Managed Mode / Fallback: Analyze with live telemetry context against real available tracks
-      const lower = query.toLowerCase();
       let responseText = '';
       let generatedProposal: MixActionProposal | null = null;
 

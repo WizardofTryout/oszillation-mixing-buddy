@@ -204,6 +204,74 @@ export class LogicProDriver implements DAWDriver {
     }
 
     this.notifyTrackListChanged();
+
+    // Sende Parameter über macOS Accessibility an das aktive Plugin-Fenster
+    this.axClient.setPluginParameter(track.name, slotIndex, paramName, targetValue).catch(() => {});
+  }
+
+  /**
+   * Create a new audio or instrument track in Logic Pro
+   */
+  public async createTrack(type: 'audio' | 'instrument' = 'audio', name?: string): Promise<TrackDescriptor> {
+    const nextIndex = this.tracks.size;
+    const trackName = name || (type === 'audio' ? `Audio ${nextIndex + 1}` : `Instrument ${nextIndex + 1}`);
+    const id = `logic_track_${nextIndex + 1}`;
+
+    const newTrack: TrackDescriptor = {
+      id,
+      index: nextIndex,
+      name: trackName,
+      type,
+      volumeDb: 0.0,
+      pan: 0.0,
+      isMuted: false,
+      isSoloed: false,
+      isSelected: true,
+      insertSlots: [
+        {
+          slotIndex: 0,
+          pluginName: 'Channel EQ',
+          format: 'au',
+          isBypassed: false,
+          parameters: [
+            { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
+            { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
+          ]
+        }
+      ]
+    };
+
+    this.tracks.set(id, newTrack);
+    this.notifyTrackListChanged();
+
+    // Trigger in Logic Pro via macOS Accessibility / AppleScript
+    await this.axClient.createTrack(type, trackName);
+
+    return newTrack;
+  }
+
+  /**
+   * Toggle bypass of Channel EQ / Plugin on target track (used for A/B auditioning)
+   */
+  public async togglePluginBypass(trackNameOrId: string, slotIndex: number): Promise<boolean> {
+    let track = this.tracks.get(trackNameOrId);
+    if (!track) {
+      for (const t of this.tracks.values()) {
+        if (t.name.toLowerCase() === trackNameOrId.toLowerCase()) {
+          track = t;
+          break;
+        }
+      }
+    }
+
+    if (track && track.insertSlots[slotIndex]) {
+      const slot = track.insertSlots[slotIndex]!;
+      slot.isBypassed = !slot.isBypassed;
+      this.notifyTrackListChanged();
+    }
+
+    const targetName = track ? track.name : trackNameOrId;
+    return await this.axClient.togglePluginBypass(targetName, slotIndex);
   }
 
   public async playRegion(startBar: number, endBar: number): Promise<void> {

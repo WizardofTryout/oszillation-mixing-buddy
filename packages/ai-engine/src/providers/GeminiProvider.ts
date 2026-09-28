@@ -3,15 +3,106 @@ import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from
 import { MIXING_BUDDY_SYSTEM_PROMPT, buildAnalysisUserPrompt, type MixAnalysisContext } from '../prompts.js';
 import type { AIProvider, AIProviderConfig } from '../types.js';
 
+export interface KeyValidationResult {
+  keySnippet: string;
+  valid: boolean;
+  model: string;
+  error?: string;
+}
+
+/**
+ * Key Manager supporting multi-key round-robin rotation and cooldown handling
+ */
+export class GeminiKeyManager {
+  private keys: string[] = [];
+  private currentIndex = 0;
+  private cooldowns: Map<string, number> = new Map();
+
+  constructor(rawKeys?: string | string[]) {
+    this.setKeys(rawKeys);
+  }
+
+  public setKeys(rawKeys?: string | string[]): void {
+    if (!rawKeys) {
+      const envKey = process.env.GEMINI_API_KEY;
+      this.keys = envKey ? [envKey] : [];
+      return;
+    }
+
+    if (Array.isArray(rawKeys)) {
+      this.keys = rawKeys.map((k) => k.trim()).filter((k) => k.length > 5);
+    } else {
+      this.keys = rawKeys
+        .split(/[\n,;]+/)
+        .map((k) => k.trim())
+        .filter((k) => k.length > 5);
+    }
+  }
+
+  public getKeys(): string[] {
+    return this.keys;
+  }
+
+  public getKeysCount(): number {
+    return this.keys.length;
+  }
+
+  public getNextKey(): string | null {
+    if (this.keys.length === 0) return null;
+
+    const now = Date.now();
+    for (let attempts = 0; attempts < this.keys.length; attempts++) {
+      const idx = (this.currentIndex + attempts) % this.keys.length;
+      const candidate = this.keys[idx];
+      const cooldownUntil = this.cooldowns.get(candidate) ?? 0;
+
+      if (now >= cooldownUntil) {
+        this.currentIndex = (idx + 1) % this.keys.length;
+        return candidate;
+      }
+    }
+
+    // All keys in cooldown -> return the candidate with the earliest expiry
+    let earliestKey = this.keys[0];
+    let earliestTime = this.cooldowns.get(earliestKey) ?? 0;
+    for (const k of this.keys) {
+      const t = this.cooldowns.get(k) ?? 0;
+      if (t < earliestTime) {
+        earliestTime = t;
+        earliestKey = k;
+      }
+    }
+    return earliestKey;
+  }
+
+  public markCooldown(key: string, durationMs = 60_000): void {
+    this.cooldowns.set(key, Date.now() + durationMs);
+  }
+
+  public getActiveCooldownCount(): number {
+    const now = Date.now();
+    let count = 0;
+    for (const [_, expire] of this.cooldowns) {
+      if (expire > now) count++;
+    }
+    return count;
+  }
+}
+
 export class GeminiProvider implements AIProvider {
   public readonly id = 'gemini';
   public readonly name = 'Google Gemini (BYOK)';
-  private genAI: GoogleGenerativeAI;
+  private keyManager: GeminiKeyManager;
   private modelName: string;
 
-  constructor(config: AIProviderConfig) {
-    this.genAI = new GoogleGenerativeAI(config.apiKey || process.env.GEMINI_API_KEY || 'dummy_key');
+  constructor(config: AIProviderConfig & { apiKeys?: string | string[] }) {
+    const keys = config.apiKeys ?? config.apiKey;
+    this.keyManager = new GeminiKeyManager(keys);
     this.modelName = config.modelName || 'gemini-3.8-flash';
+  }
+
+  public getKeyManager(): GeminiKeyManager {
+    return this.keyManager;
   }
 
   public async analyzeMix(
@@ -31,6 +122,33 @@ export class GeminiProvider implements AIProvider {
     throw new Error('Gemini did not return an actionable proposal: ' + res.assistantText);
   }
 
+  /**
+   * Validate one or multiple API keys with a fast lightweight ping
+   */
+  public static async validateKey(key: string, testModel = 'gemini-2.5-flash'): Promise<KeyValidationResult> {
+    const snippet = key.length > 8 ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : key;
+    try {
+      const genAI = new GoogleGenerativeAI(key);
+      const model = genAI.getGenerativeModel({ model: testModel });
+      await model.countTokens({
+        contents: [{ role: 'user', parts: [{ text: 'ping' }] }]
+      });
+      return {
+        keySnippet: snippet,
+        valid: true,
+        model: testModel
+      };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        keySnippet: snippet,
+        valid: false,
+        model: testModel,
+        error: msg
+      };
+    }
+  }
+
   public async generateMixProposal(
     userPrompt: string,
     telemetry: MetrologyTelemetryFrame | null,
@@ -43,6 +161,12 @@ export class GeminiProvider implements AIProvider {
       userPrompt,
       ...context
     };
+
+    if (this.keyManager.getKeysCount() === 0) {
+      return {
+        assistantText: '⚠️ Kein Gemini API-Key hinterlegt. Bitte trage deinen Key in den Einstellungen oben ein.'
+      };
+    }
 
     const telemetrySummary = telemetry
       ? JSON.stringify(
@@ -110,75 +234,115 @@ export class GeminiProvider implements AIProvider {
       }
     };
 
-    try {
-      const model = this.genAI.getGenerativeModel({
-        model: this.modelName,
-        systemInstruction: MIXING_BUDDY_SYSTEM_PROMPT,
-        tools: [{ functionDeclarations: [functionDeclaration] }]
-      });
+    // Candidate fallback models when flagship model hits 503 ("high demand")
+    const modelCandidates = Array.from(
+      new Set([this.modelName, 'gemini-2.5-flash', 'gemini-1.5-flash'])
+    );
 
-      const result = await model.generateContent(fullPrompt);
-      const response = await result.response;
-      const call = response.functionCalls()?.[0];
-      const textOutput = response.text ? response.text() : '';
+    let lastError: Error | null = null;
+    let usedModel = this.modelName;
 
-      if (call && call.name === 'mcp__propose_mix_adjustment') {
-        const input = call.args as any;
-        const proposal: MixActionProposal = {
-          id: `prop_${Date.now()}_gemini`,
-          timestamp: Date.now(),
-          category: input.category,
-          title: input.title,
-          rationale: input.rationale,
-          confidenceScore: input.confidenceScore,
-          deltas: input.deltas,
-          status: 'pending'
-        };
-        return {
-          assistantText: textOutput.trim() || input.rationale || `Ich habe die Anweisung analysiert und "${proposal.title}" vorgeschlagen.`,
-          proposal
-        };
-      }
+    // Retry loop: Tries available keys and fallback models upon 503 / 429
+    for (const candidateModel of modelCandidates) {
+      const keysToTry = Math.max(1, this.keyManager.getKeysCount());
 
-      // If Gemini returned structured JSON in text
-      if (textOutput.includes('mcp__propose_mix_adjustment') || textOutput.includes('deltas')) {
+      for (let attempt = 0; attempt < keysToTry; attempt++) {
+        const apiKey = this.keyManager.getNextKey();
+        if (!apiKey) break;
+
         try {
-          const jsonMatch = textOutput.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            const parsed = JSON.parse(jsonMatch[0]);
+          const genAI = new GoogleGenerativeAI(apiKey);
+          const model = genAI.getGenerativeModel({
+            model: candidateModel,
+            systemInstruction: MIXING_BUDDY_SYSTEM_PROMPT,
+            tools: [{ functionDeclarations: [functionDeclaration] }]
+          });
+
+          const result = await model.generateContent(fullPrompt);
+          const response = await result.response;
+          const call = response.functionCalls()?.[0];
+          const textOutput = response.text ? response.text() : '';
+          usedModel = candidateModel;
+
+          let fallbackNote = '';
+          if (usedModel !== this.modelName) {
+            fallbackNote = `(Automatischer Fallback auf ${usedModel} wegen 503-Auslastung bei ${this.modelName})\n\n`;
+          }
+
+          if (call && call.name === 'mcp__propose_mix_adjustment') {
+            const input = call.args as any;
             const proposal: MixActionProposal = {
               id: `prop_${Date.now()}_gemini`,
               timestamp: Date.now(),
-              category: parsed.category ?? 'eq_tonal_balance',
-              title: parsed.title ?? 'Mix Adjustment Proposal',
-              rationale: parsed.rationale ?? textOutput,
-              confidenceScore: parsed.confidenceScore ?? 0.9,
-              deltas: parsed.deltas ?? [],
+              category: input.category,
+              title: input.title,
+              rationale: input.rationale,
+              confidenceScore: input.confidenceScore,
+              deltas: input.deltas,
               status: 'pending'
             };
             return {
-              assistantText: parsed.rationale ?? textOutput,
+              assistantText:
+                fallbackNote +
+                (textOutput.trim() || input.rationale || `Ich habe die Anweisung analysiert und "${proposal.title}" vorgeschlagen.`),
               proposal
             };
           }
-        } catch {
-          // JSON parsing failed, return raw text
+
+          // Structured JSON in text fallback
+          if (textOutput.includes('mcp__propose_mix_adjustment') || textOutput.includes('deltas')) {
+            try {
+              const jsonMatch = textOutput.match(/\{[\s\S]*\}/);
+              if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                const proposal: MixActionProposal = {
+                  id: `prop_${Date.now()}_gemini`,
+                  timestamp: Date.now(),
+                  category: parsed.category ?? 'eq_tonal_balance',
+                  title: parsed.title ?? 'Mix Adjustment Proposal',
+                  rationale: parsed.rationale ?? textOutput,
+                  confidenceScore: parsed.confidenceScore ?? 0.9,
+                  deltas: parsed.deltas ?? [],
+                  status: 'pending'
+                };
+                return {
+                  assistantText: fallbackNote + (parsed.rationale ?? textOutput),
+                  proposal
+                };
+              }
+            } catch {
+              // Ignore parse error
+            }
+          }
+
+          return {
+            assistantText: fallbackNote + (textOutput.trim() || 'Gemini hat die Anweisung verarbeitet.')
+          };
+        } catch (err: unknown) {
+          lastError = err instanceof Error ? err : new Error(String(err));
+          const msg = lastError.message;
+
+          // If rate limit (429) or temporary overload (503), put key in cooldown and rotate
+          if (msg.includes('503') || msg.includes('429') || msg.includes('ResourceExhausted') || msg.includes('high demand')) {
+            this.keyManager.markCooldown(apiKey, 60_000);
+            continue; // try next key or fallback model
+          }
+
+          // If key is invalid, continue to next key
+          if (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid')) {
+            this.keyManager.markCooldown(apiKey, 3600_000);
+            continue;
+          }
+
+          // Other error: break key loop to try fallback model
+          break;
         }
       }
-
-      return {
-        assistantText: textOutput.trim() || 'Gemini hat die Anweisung verarbeitet.'
-      };
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('API_KEY_INVALID') || msg.includes('403') || msg.includes('API key')) {
-        return {
-          assistantText: `⚠️ Gemini API-Fehler: Der angegebene API-Key ist ungültig oder abgelaufen. Bitte prüfe den Key in den Settings oben. (${msg})`
-        };
-      }
-      return {
-        assistantText: `⚠️ Fehler bei der Gemini-Generierung: ${msg}`
-      };
     }
+
+    const errDesc = lastError ? lastError.message : 'Alle Keys im Cooldown oder Modelle überlastet';
+    return {
+      assistantText: `⚠️ Gemini Anfrage fehlgeschlagen: ${errDesc}. Bitte prüfe die Keys oder weiche auf Managed Cloud / Ollama aus.`
+    };
   }
 }

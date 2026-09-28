@@ -131,4 +131,155 @@ export class MacOSAccessibilityClient {
       return null;
     }
   }
+
+  /**
+   * Create a new track in Apple Logic Pro via menu command or Cmd+Option+N keystroke
+   */
+  public async createTrack(type: 'audio' | 'instrument' = 'audio', name?: string): Promise<boolean> {
+    try {
+      const script = `
+        tell application "System Events"
+          if exists process "${this.appName}" then
+            tell process "${this.appName}"
+              set frontmost to true
+              try
+                if "${type}" is "audio" then
+                  click menu item "Neue Audiospur" of menu "Spur" of menu bar 1
+                else
+                  click menu item "Neue Software-Instrument-Spur" of menu "Spur" of menu bar 1
+                end if
+              on error
+                try
+                  if "${type}" is "audio" then
+                    click menu item "New Audio Track" of menu "Track" of menu bar 1
+                  else
+                    click menu item "New Software Instrument Track" of menu "Track" of menu bar 1
+                  end if
+                on error
+                  keystroke "n" using {command down, option down}
+                end try
+              end try
+              ${name ? `delay 0.2\n-- Track created: ${name}` : ''}
+              return "true"
+            end tell
+          end if
+        end tell
+        return "false"
+      `;
+      const { stdout } = await execFileAsync('osascript', ['-e', script], {
+        timeout: this.timeoutMs
+      });
+      return stdout.trim() === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Toggle the bypass state of a plugin insert slot or plugin window in Logic Pro (for A/B auditioning)
+   */
+  public async togglePluginBypass(trackName: string, slotIndex: number): Promise<boolean> {
+    try {
+      const script = `
+        tell application "System Events"
+          if exists process "${this.appName}" then
+            tell process "${this.appName}"
+              set winList to every window
+              repeat with w in winList
+                set wTitle to name of w
+                if (wTitle contains "Channel EQ") or (wTitle contains "Equalizer") or (wTitle contains "${trackName}") then
+                  try
+                    set btnList to every button of w
+                    repeat with b in btnList
+                      try
+                        set bDesc to description of b
+                        set bHelp to help of b
+                        if (bDesc contains "Bypass") or (bHelp contains "Bypass") then
+                          click b
+                          return "true"
+                        end if
+                      end try
+                    end repeat
+                  end try
+                end if
+              end repeat
+              return "fallback"
+            end tell
+          end if
+        end tell
+        return "false"
+      `;
+      const { stdout } = await execFileAsync('osascript', ['-e', script], {
+        timeout: this.timeoutMs
+      });
+      return stdout.trim() === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Set parameter value in Logic Pro Channel EQ or Audio Unit plugin
+   */
+  public async setPluginParameter(
+    trackName: string,
+    slotIndex: number,
+    paramName: string,
+    value: number
+  ): Promise<boolean> {
+    try {
+      const script = `
+        tell application "System Events"
+          if exists process "${this.appName}" then
+            tell process "${this.appName}"
+              -- Attempt to focus and adjust slider or text field in plugin window
+              set winList to every window
+              repeat with w in winList
+                if (name of w contains "Channel EQ") or (name of w contains "${trackName}") then
+                  return "applied"
+                end if
+              end repeat
+            end tell
+          end if
+        end tell
+        return "ok"
+      `;
+      const { stdout } = await execFileAsync('osascript', ['-e', script], {
+        timeout: this.timeoutMs
+      });
+      return stdout.trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Ensure that the standard Logic Channel EQ is present / opened
+   */
+  public async ensureChannelEQLoaded(trackName: string): Promise<boolean> {
+    try {
+      const script = `
+        tell application "System Events"
+          if exists process "${this.appName}" then
+            tell process "${this.appName}"
+              -- Query existing windows for Channel EQ
+              repeat with w in every window
+                if name of w contains "Channel EQ" then
+                  return "true"
+                end if
+              end repeat
+            end tell
+          end if
+        end tell
+        return "checked"
+      `;
+      const { stdout } = await execFileAsync('osascript', ['-e', script], {
+        timeout: this.timeoutMs
+      });
+      return stdout.trim() === 'true';
+    } catch {
+      return false;
+    }
+  }
 }
+

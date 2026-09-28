@@ -44,7 +44,29 @@ impl DAWDetector {
     pub fn detect_active_daw(&mut self) -> DetectedDAW {
         #[cfg(target_os = "macos")]
         {
-            // 1. First priority: Fast and infallible native macOS process search via pgrep
+            // 1. Bundle identifier check: com.apple.logic10 (100% reliable for Logic Pro X / 11)
+            if let Ok(output) = std::process::Command::new("osascript")
+                .args(["-e", "application id \"com.apple.logic10\" is running"])
+                .output()
+            {
+                let text = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+                if text == "true" {
+                    return DetectedDAW::LogicPro;
+                }
+            }
+
+            // 2. Exact process name match: pgrep -x "Logic Pro"
+            if let Ok(output) = std::process::Command::new("pgrep")
+                .arg("-x")
+                .arg("Logic Pro")
+                .output()
+            {
+                if output.status.success() && !output.stdout.is_empty() {
+                    return DetectedDAW::LogicPro;
+                }
+            }
+
+            // 3. Substring search for Logic Pro process
             if let Ok(output) = std::process::Command::new("pgrep")
                 .arg("-if")
                 .arg("Logic Pro")
@@ -54,15 +76,19 @@ impl DAWDetector {
                     return DetectedDAW::LogicPro;
                 }
             }
+
+            // 4. AU Plugin Host for Logic Pro (AUHostingService / AUHostingCompatibilityService)
             if let Ok(output) = std::process::Command::new("pgrep")
-                .arg("-il")
-                .arg("Logic")
+                .arg("-if")
+                .arg("AUHosting")
                 .output()
             {
                 if output.status.success() && !output.stdout.is_empty() {
                     return DetectedDAW::LogicPro;
                 }
             }
+
+            // Nuendo detection
             if let Ok(output) = std::process::Command::new("pgrep")
                 .arg("-if")
                 .arg("Nuendo")
@@ -72,6 +98,8 @@ impl DAWDetector {
                     return DetectedDAW::Nuendo;
                 }
             }
+
+            // Cubase detection
             if let Ok(output) = std::process::Command::new("pgrep")
                 .arg("-if")
                 .arg("Cubase")

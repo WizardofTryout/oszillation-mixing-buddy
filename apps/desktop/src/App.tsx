@@ -15,9 +15,22 @@ export const App: React.FC = () => {
   const [providerMode, setProviderMode] = useState<ProviderMode>('managed');
   const [activeDaw, setActiveDaw] = useState<string>('detecting...');
   const [modelName, setModelName] = useState<string>('gemini-3.8-flash');
-  const [apiKey, setApiKey] = useState<string>('');
+  const [apiKey, setApiKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem('mixing_buddy_gemini_api_key') || '';
+    } catch {
+      return '';
+    }
+  });
   const [proposals, setProposals] = useState<MixActionProposal[]>([]);
   const [chatLog, setChatLog] = useState<string | null>(null);
+
+  const handleApiKeyChange = (key: string) => {
+    setApiKey(key);
+    try {
+      localStorage.setItem('mixing_buddy_gemini_api_key', key);
+    } catch {}
+  };
 
   // Available project tracks mapped dynamically to the active DAW
   const availableTracks: TrackDescriptor[] = React.useMemo(() => {
@@ -105,14 +118,22 @@ export const App: React.FC = () => {
   useEffect(() => {
     invoke<string>('get_active_daw')
       .then((daw) => {
-        if (daw) setActiveDaw(daw);
+        if (daw && daw !== 'none') setActiveDaw(daw);
       })
       .catch(() => {});
 
     let unlistenDaw: (() => void) | null = null;
     listen<string>('daw-status-changed', (event) => {
       if (event.payload) {
-        setActiveDaw(event.payload);
+        setActiveDaw((prev) => {
+          // If event is 'none', do not wipe an established DAW if audio is streaming
+          if (event.payload.toLowerCase().includes('none')) {
+            if (prev && !prev.toLowerCase().includes('none') && prev !== 'detecting...') {
+              return prev;
+            }
+          }
+          return event.payload;
+        });
       }
     })
       .then((cleanup) => {
@@ -138,6 +159,12 @@ export const App: React.FC = () => {
           typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
         setTelemetry(frame);
         setIsAudioConnected(true);
+        setActiveDaw((prev) => {
+          if (prev.toLowerCase().includes('none') || prev === 'detecting...') {
+            return 'logic_pro';
+          }
+          return prev;
+        });
       } catch {
         // Ignore parse errors
       }
@@ -163,6 +190,12 @@ export const App: React.FC = () => {
             const frame: MetrologyTelemetryFrame = JSON.parse(event.data);
             setTelemetry(frame);
             setIsAudioConnected(true);
+            setActiveDaw((prev) => {
+              if (prev.toLowerCase().includes('none') || prev === 'detecting...') {
+                return 'logic_pro';
+              }
+              return prev;
+            });
           } catch {
             // Ignore parse errors
           }
@@ -263,10 +296,15 @@ export const App: React.FC = () => {
     setProposals((prev) =>
       prev.map((p) => (p.id === id ? { ...p, status: 'auditioning' } : p))
     );
-    setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}". Temporäre Hörprobe in ${dawLabel} gestartet...`);
+    setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}". EQ Bypass in ${dawLabel} umgeschaltet...`);
 
+    const delta = prop.deltas[0];
     try {
-      const delta = prop.deltas[0];
+      // Demonstration: schalte Bypass des entsprechenden EQ-Plugins in Logic um
+      await invoke('toggle_plugin_bypass', {
+        trackName: delta?.trackName ?? 'SoCal',
+        slotIndex: delta?.slotIndex ?? 0
+      });
       await invoke('apply_daw_action', {
         trackName: delta?.trackName ?? 'SoCal',
         parameter: delta?.parameterName ?? 'EQ',
@@ -281,7 +319,10 @@ export const App: React.FC = () => {
     // Auto-restore after 6 seconds of audition
     setTimeout(async () => {
       try {
-        const delta = prop.deltas[0];
+        await invoke('toggle_plugin_bypass', {
+          trackName: delta?.trackName ?? 'SoCal',
+          slotIndex: delta?.slotIndex ?? 0
+        });
         await invoke('apply_daw_action', {
           trackName: delta?.trackName ?? 'SoCal',
           parameter: delta?.parameterName ?? 'EQ',
@@ -339,7 +380,7 @@ export const App: React.FC = () => {
           modelName={modelName}
           onModelNameChange={setModelName}
           apiKey={apiKey}
-          onApiKeyChange={setApiKey}
+          onApiKeyChange={handleApiKeyChange}
         />
 
         {/* Meters Grid: Spectrum RTA + EBU R128 HUD + Chat Console */}
