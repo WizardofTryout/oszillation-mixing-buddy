@@ -86,7 +86,7 @@ class MockStudioDAWDriver implements DAWDriver {
   async stop(): Promise<void> {
     if (this.loopRegion) this.loopRegion.isPlaying = false;
   }
-  subscribe(_events: DAWDriverEvents) { return () => {}; }
+  subscribe(_events: DAWDriverEvents) { return () => { }; }
 }
 
 async function runClosedLoopTest() {
