@@ -1,7 +1,7 @@
 [package]
 name = "mixing-buddy-desktop"
 version = "0.1.0"
-description = "Steinberg Mixing Buddy Desktop Companion"
+description = "Oszillation Mixing Buddy Desktop Companion"
 authors = ["Matthias Köhler"]
 edition = "2021"
 

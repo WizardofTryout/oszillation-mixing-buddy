@@ -103,10 +103,10 @@ export const App: React.FC = () => {
       {/* Top Navbar */}
       <header className="h-12 border-b border-darkBorder bg-[#14161a] px-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded bg-blue-600 flex items-center justify-center font-bold text-xs text-white">
-            MB
+          <div className="w-8 h-6 rounded bg-blue-600 flex items-center justify-center font-bold text-xs text-white">
+            OMB
           </div>
-          <span className="font-bold text-sm tracking-wide text-slate-100">STEINBERG MIXING BUDDY</span>
+          <span className="font-bold text-sm tracking-wide text-slate-100">OSZILLATION MIXING BUDDY</span>
           <span className="text-xs text-blue-400 font-mono ml-2">v0.1.0</span>
         </div>
 

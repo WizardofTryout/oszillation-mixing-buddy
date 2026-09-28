@@ -25,7 +25,7 @@ export class MixingBuddyMCPServer {
   constructor(handlers?: MixingToolHandlers) {
     this.handlers = handlers ?? new MixingToolHandlers();
     this.server = new McpServer({
-      name: 'Steinberg-Mixing-Buddy',
+      name: 'oszillation-mixing-buddy',
       version: '0.1.0'
     });
 
@@ -224,7 +224,7 @@ export class MixingBuddyMCPServer {
         res.end(
           JSON.stringify({
             status: 'online',
-            service: 'Steinberg Mixing Buddy MCP',
+            service: 'Oszillation Mixing Buddy MCP',
             sessions: this.sseTransports.size
           })
         );

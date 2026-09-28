@@ -20,30 +20,37 @@ impl IPCServer {
         self.tx.subscribe()
     }
 
-    /// Spawns the local WebSocket server on a background Tokio task
+    /// Spawns the local WebSocket server on a dedicated Tokio runtime thread
     pub fn start(&self) {
         let port = self.port;
         let tx = self.tx.clone();
 
-        tokio::spawn(async move {
-            let addr = SocketAddr::from(([127, 0, 0, 1], port));
-            let listener = match TcpListener::bind(addr).await {
-                Ok(l) => {
-                    println!("📡 IPC Server listening for JUCE plugin on ws://{}", addr);
-                    l
-                }
-                Err(e) => {
-                    eprintln!("⚠️ Failed to bind IPC server on {}: {}", addr, e);
-                    return;
-                }
-            };
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to build Tokio runtime for IPC server");
 
-            while let Ok((stream, peer_addr)) = listener.accept().await {
-                let tx_clone = tx.clone();
-                tokio::spawn(async move {
-                    handle_connection(stream, peer_addr, tx_clone).await;
-                });
-            }
+            rt.block_on(async {
+                let addr = SocketAddr::from(([127, 0, 0, 1], port));
+                let listener = match TcpListener::bind(addr).await {
+                    Ok(l) => {
+                        println!("📡 IPC Server listening for JUCE plugin on ws://{}", addr);
+                        l
+                    }
+                    Err(e) => {
+                        eprintln!("⚠️ Failed to bind IPC server on {}: {}", addr, e);
+                        return;
+                    }
+                };
+
+                while let Ok((stream, peer_addr)) = listener.accept().await {
+                    let tx_clone = tx.clone();
+                    tokio::spawn(async move {
+                        handle_connection(stream, peer_addr, tx_clone).await;
+                    });
+                }
+            });
         });
     }
 }

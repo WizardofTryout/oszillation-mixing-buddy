@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/tooling/cli/schema.json",
-  "productName": "Steinberg Mixing Buddy",
+  "productName": "Oszillation Mixing Buddy",
   "version": "0.1.0",
   "identifier": "de.oszillation-studio.mixingbuddy",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Steinberg Mixing Buddy",
+        "title": "Oszillation Mixing Buddy",
         "width": 1100,
         "height": 780,
         "minWidth": 800,

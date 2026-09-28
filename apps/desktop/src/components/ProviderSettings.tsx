@@ -31,7 +31,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   const claudeDesktopConfig = JSON.stringify(
     {
       mcpServers: {
-        'steinberg-mixing-buddy': {
+        'oszillation-mixing-buddy': {
           command: 'node',
           args: [
             '/Volumes/Spacestation/MCP/Antigravity-MCP-tools/Steinberg-Mixing-Buddy/packages/mcp-server/dist/index.js',

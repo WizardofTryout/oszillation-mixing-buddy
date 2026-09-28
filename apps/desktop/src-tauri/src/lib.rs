@@ -66,5 +66,5 @@ pub fn run() {
             validate_volume_adjustment
         ])
         .run(tauri::generate_context!())
-        .expect("Error while running Steinberg Mixing Buddy companion application");
+        .expect("Error while running Oszillation Mixing Buddy companion application");
 }
