@@ -1,3 +1,4 @@
+import WebSocket from 'ws';
 import type { DAWDriver } from '@mixing-buddy/daw-adapters';
 import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from '@mixing-buddy/shared-types';
 import type {
@@ -177,6 +178,7 @@ export class MixingToolHandlers {
     };
 
     this.proposals.set(proposal.id, proposal);
+    await this.broadcastProposalToHUD(proposal);
     return { proposal, shieldStatus: 'passed' };
   }
 
@@ -214,6 +216,7 @@ export class MixingToolHandlers {
     if (args.proposalId && this.proposals.has(args.proposalId)) {
       const p = this.proposals.get(args.proposalId)!;
       p.status = 'applied';
+      await this.broadcastProposalToHUD(p);
     }
 
     return {
@@ -222,6 +225,37 @@ export class MixingToolHandlers {
       trackId: args.trackId,
       message: `Parameter '${args.parameterName}' safely applied to ${clampedValue.toFixed(2)}.`
     };
+  }
+
+  private async broadcastProposalToHUD(proposal: MixActionProposal): Promise<void> {
+    const payload = JSON.stringify({
+      type: 'action_proposal',
+      proposal
+    });
+
+    try {
+      await fetch('http://127.0.0.1:48123/api/proposals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload
+      });
+    } catch {
+      // Quiet fallback
+    }
+
+    try {
+      const client = new WebSocket('ws://127.0.0.1:48123/meter');
+      client.on('open', () => {
+        client.send(payload, () => {
+          client.close();
+        });
+      });
+      client.on('error', () => {
+        // Quiet fallback
+      });
+    } catch {
+      // Quiet fallback
+    }
   }
 
   public async auditionRegion(args: AuditionRegionInput): Promise<{

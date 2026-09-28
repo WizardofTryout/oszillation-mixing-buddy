@@ -32,87 +32,168 @@ export const App: React.FC = () => {
     } catch {}
   };
 
+  // Dynamically registered custom tracks from DAW or incoming proposals
+  const [dynamicTracks, setDynamicTracks] = useState<TrackDescriptor[]>([]);
+
   // Available project tracks mapped dynamically to the active DAW
   const availableTracks: TrackDescriptor[] = React.useMemo(() => {
     const isLogic = activeDaw.toLowerCase().includes('logic');
-    if (isLogic) {
-      return [
-        {
-          id: 'track_master',
-          index: 0,
-          name: 'Stereo Out',
-          type: 'master',
-          volumeDb: 0.0,
-          pan: 0.0,
-          isMuted: false,
-          isSoloed: false,
-          isSelected: false,
-          insertSlots: [
-            {
-              slotIndex: 0,
-              pluginName: 'Channel EQ',
-              format: 'au',
-              isBypassed: false,
-              parameters: [
-                { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
-                { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
-              ]
-            }
-          ]
-        },
-        {
-          id: 'track_socal',
-          index: 1,
-          name: 'SoCal',
-          type: 'audio',
-          volumeDb: 0.0,
-          pan: 0.0,
-          isMuted: false,
-          isSoloed: false,
-          isSelected: true,
-          insertSlots: [
-            {
-              slotIndex: 0,
-              pluginName: 'Channel EQ',
-              format: 'au',
-              isBypassed: false,
-              parameters: [
-                { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
-                { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
-              ]
-            }
-          ]
-        }
-      ];
-    }
+    const baseTracks: TrackDescriptor[] = isLogic
+      ? [
+          {
+            id: 'track_master',
+            index: 0,
+            name: 'Stereo Out',
+            type: 'master',
+            volumeDb: 0.0,
+            pan: 0.0,
+            isMuted: false,
+            isSoloed: false,
+            isSelected: false,
+            insertSlots: [
+              {
+                slotIndex: 0,
+                pluginName: 'Channel EQ',
+                format: 'au',
+                isBypassed: false,
+                parameters: [
+                  { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
+                  { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
+                ]
+              }
+            ]
+          },
+          {
+            id: 'track_audio1',
+            index: 1,
+            name: 'Audio 1',
+            type: 'audio',
+            volumeDb: 0.0,
+            pan: 0.0,
+            isMuted: false,
+            isSoloed: false,
+            isSelected: true,
+            insertSlots: [
+              {
+                slotIndex: 0,
+                pluginName: 'Channel EQ',
+                format: 'au',
+                isBypassed: false,
+                parameters: [
+                  { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
+                  { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
+                ]
+              }
+            ]
+          },
+          {
+            id: 'track_kick',
+            index: 2,
+            name: 'Kick Drum',
+            type: 'audio',
+            volumeDb: -3.5,
+            pan: 0.0,
+            isMuted: false,
+            isSoloed: false,
+            isSelected: false,
+            insertSlots: []
+          },
+          {
+            id: 'track_bass',
+            index: 3,
+            name: 'Bass Guitar',
+            type: 'audio',
+            volumeDb: -4.0,
+            pan: 0.0,
+            isMuted: false,
+            isSoloed: false,
+            isSelected: false,
+            insertSlots: []
+          },
+          {
+            id: 'track_vocal',
+            index: 4,
+            name: 'Lead Vocal',
+            type: 'audio',
+            volumeDb: -2.0,
+            pan: 0.0,
+            isMuted: false,
+            isSoloed: false,
+            isSelected: false,
+            insertSlots: []
+          }
+        ]
+      : [
+          {
+            id: 'track_master',
+            index: 0,
+            name: 'Stereo Out',
+            type: 'master',
+            volumeDb: 0.0,
+            pan: 0.0,
+            isMuted: false,
+            isSoloed: false,
+            isSelected: false,
+            insertSlots: []
+          },
+          {
+            id: 'track_channel1',
+            index: 1,
+            name: 'Channel 1',
+            type: 'audio',
+            volumeDb: 0.0,
+            pan: 0.0,
+            isMuted: false,
+            isSoloed: false,
+            isSelected: true,
+            insertSlots: []
+          },
+          {
+            id: 'track_kick',
+            index: 2,
+            name: 'Kick Drum',
+            type: 'audio',
+            volumeDb: -3.5,
+            pan: 0.0,
+            isMuted: false,
+            isSoloed: false,
+            isSelected: false,
+            insertSlots: []
+          },
+          {
+            id: 'track_bass',
+            index: 3,
+            name: 'Bass Guitar',
+            type: 'audio',
+            volumeDb: -4.0,
+            pan: 0.0,
+            isMuted: false,
+            isSoloed: false,
+            isSelected: false,
+            insertSlots: []
+          },
+          {
+            id: 'track_vocal',
+            index: 4,
+            name: 'Lead Vocal',
+            type: 'audio',
+            volumeDb: -2.0,
+            pan: 0.0,
+            isMuted: false,
+            isSoloed: false,
+            isSelected: false,
+            insertSlots: []
+          }
+        ];
 
-    return [
-      {
-        id: 'track_master',
-        index: 0,
-        name: 'Stereo Out',
-        type: 'master',
-        volumeDb: 0.0,
-        pan: 0.0,
-        isMuted: false,
-        isSoloed: false,
-        isSelected: false,
-        insertSlots: []
-      },
-      {
-        id: 'track_audio1',
-        index: 1,
-        name: 'Audio 1',
-        type: 'audio',
-        volumeDb: 0.0,
-        pan: 0.0,
-        isMuted: false,
-        isSoloed: false,
-        isSelected: true,
-        insertSlots: []
+    const combined = [...baseTracks];
+    for (const dt of dynamicTracks) {
+      if (!combined.some((t) => t.name.toLowerCase() === dt.name.toLowerCase() || t.id === dt.id)) {
+        combined.push(dt);
       }
-    ];
-  }, [activeDaw]);
+    }
+    return combined;
+  }, [activeDaw, dynamicTracks]);
 
   // 1. Dynamic DAW detection from Rust backend
   useEffect(() => {
@@ -146,13 +227,14 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // 2. Connect to local WebSocket IPC stream (ws://127.0.0.1:48123/meter) and Tauri native event
+  // 2. Connect to local WebSocket IPC stream (ws://127.0.0.1:48123/meter) and Tauri native events
   useEffect(() => {
     let ws: WebSocket | null = null;
     let retryTimer: NodeJS.Timeout;
     let unlistenTelemetry: (() => void) | null = null;
+    let unlistenProposal: (() => void) | null = null;
 
-    // A. Subscribe to native Tauri IPC event
+    // A. Subscribe to native Tauri IPC telemetry event
     listen<string | MetrologyTelemetryFrame>('telemetry-frame', (event) => {
       try {
         const frame: MetrologyTelemetryFrame =
@@ -172,11 +254,42 @@ export const App: React.FC = () => {
       .then((cleanup) => {
         unlistenTelemetry = cleanup;
       })
-      .catch(() => {
-        // Pure browser fallback
-      });
+      .catch(() => {});
 
-    // B. Connect to WebSocket stream
+    // B. Subscribe to native Tauri IPC proposal event (from MCP server or external agents)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    listen<any>('new-action-proposal', (event) => {
+      try {
+        const raw = event.payload;
+        let p: MixActionProposal | null = null;
+        if (typeof raw === 'string') {
+          const parsed = JSON.parse(raw);
+          p = parsed.proposal || (parsed.deltas ? parsed : null);
+        } else if (raw && typeof raw === 'object') {
+          p = raw.proposal || (raw.deltas ? raw : null);
+        }
+
+        if (p && p.id && Array.isArray(p.deltas)) {
+          setProposals((prev) => {
+            const exists = prev.findIndex((item) => item.id === p!.id);
+            if (exists >= 0) {
+              const copy = [...prev];
+              copy[exists] = p!;
+              return copy;
+            }
+            return [p!, ...prev];
+          });
+        }
+      } catch (err) {
+        console.error('Error handling new-action-proposal', err);
+      }
+    })
+      .then((cleanup) => {
+        unlistenProposal = cleanup;
+      })
+      .catch(() => {});
+
+    // C. Connect to WebSocket stream
     const connectWebSocket = () => {
       try {
         ws = new WebSocket('ws://127.0.0.1:48123/meter');
@@ -187,7 +300,39 @@ export const App: React.FC = () => {
 
         ws.onmessage = (event) => {
           try {
-            const frame: MetrologyTelemetryFrame = JSON.parse(event.data);
+            const data = JSON.parse(event.data);
+
+            // Handle incoming MCP action proposal
+            if (data.type === 'action_proposal' && data.proposal) {
+              const p = data.proposal as MixActionProposal;
+              setProposals((prev) => {
+                const idx = prev.findIndex((item) => item.id === p.id);
+                if (idx >= 0) {
+                  const copy = [...prev];
+                  copy[idx] = p;
+                  return copy;
+                }
+                return [p, ...prev];
+              });
+              return;
+            }
+
+            if (data.deltas && data.title) {
+              const p = data as MixActionProposal;
+              setProposals((prev) => {
+                const idx = prev.findIndex((item) => item.id === p.id);
+                if (idx >= 0) {
+                  const copy = [...prev];
+                  copy[idx] = p;
+                  return copy;
+                }
+                return [p, ...prev];
+              });
+              return;
+            }
+
+            // Normal audio telemetry frame
+            const frame: MetrologyTelemetryFrame = data;
             setTelemetry(frame);
             setIsAudioConnected(true);
             setActiveDaw((prev) => {
@@ -220,6 +365,7 @@ export const App: React.FC = () => {
       clearTimeout(retryTimer);
       ws?.close();
       if (unlistenTelemetry) unlistenTelemetry();
+      if (unlistenProposal) unlistenProposal();
     };
   }, []);
 
@@ -246,26 +392,39 @@ export const App: React.FC = () => {
         }
       }
 
-      // Check track presence in active DAW
-      const trackExists = availableTracks.some((t) => t.name.toLowerCase() === delta.trackName.toLowerCase());
+      // Check track presence in active DAW; dynamically register if not yet in list
+      const trackExists = availableTracks.some(
+        (t) => t.name.toLowerCase() === delta.trackName.toLowerCase() || t.id.toLowerCase() === delta.trackId.toLowerCase()
+      );
       if (!trackExists) {
-        const availableNames = availableTracks.map((t) => `'${t.name}'`).join(', ');
-        setChatLog(
-          `⚠️ Spur '${delta.trackName}' im ${dawLabel}-Projekt nicht gefunden. Verfügbare Spuren: ${availableNames}.`
-        );
-        return;
+        setDynamicTracks((prev) => [
+          ...prev,
+          {
+            id: delta.trackId || `track_${Date.now()}`,
+            index: availableTracks.length,
+            name: delta.trackName,
+            type: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo') ? 'master' : 'audio',
+            volumeDb: 0.0,
+            pan: 0.0,
+            isMuted: false,
+            isSoloed: false,
+            isSelected: false,
+            insertSlots: []
+          }
+        ]);
       }
     }
 
     try {
-      const delta = proposal.deltas[0];
-      await invoke('apply_daw_action', {
-        trackName: delta?.trackName ?? 'SoCal',
-        parameter: delta?.parameterName ?? 'EQ',
-        value: delta?.proposedValue ?? 0.0,
-        unit: delta?.unit ?? 'dB',
-        isMaster: delta?.trackName.toLowerCase().includes('master') || delta?.trackName.toLowerCase().includes('stereo')
-      });
+      for (const delta of proposal.deltas) {
+        await invoke('apply_daw_action', {
+          trackName: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
+          parameter: delta.parameterName || 'EQ',
+          value: delta.proposedValue ?? 0.0,
+          unit: delta.unit ?? 'dB',
+          isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo')
+        });
+      }
     } catch {
       // Ignore in pure web mode
     }

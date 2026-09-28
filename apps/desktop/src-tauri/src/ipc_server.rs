@@ -2,6 +2,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio_tungstenite::accept_async;
@@ -49,7 +50,7 @@ impl IPCServer {
                 let addr = SocketAddr::from(([127, 0, 0, 1], port));
                 let listener = match TcpListener::bind(addr).await {
                     Ok(l) => {
-                        println!("📡 IPC Server listening for JUCE plugin on ws://{}", addr);
+                        println!("📡 IPC Server listening for JUCE plugin & MCP on ws://{} and http://{}/api/proposals", addr, addr);
                         l
                     }
                     Err(e) => {
@@ -71,11 +72,77 @@ impl IPCServer {
 }
 
 async fn handle_connection(
-    stream: TcpStream,
+    mut stream: TcpStream,
     peer_addr: SocketAddr,
     tx: broadcast::Sender<String>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
 ) {
+    let mut peek_buf = [0u8; 1024];
+    let n = match stream.peek(&mut peek_buf).await {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("⚠️ Socket peek error from {}: {}", peer_addr, e);
+            return;
+        }
+    };
+
+    if n > 0 {
+        let peek_str = String::from_utf8_lossy(&peek_buf[..n]);
+        if peek_str.starts_with("POST ") {
+            // Read entire HTTP POST request (e.g. /api/proposals from MCP Server)
+            let mut req_bytes = Vec::with_capacity(4096);
+            let mut temp_buf = [0u8; 2048];
+            loop {
+                let bytes_read = match stream.read(&mut temp_buf).await {
+                    Ok(0) => break,
+                    Ok(b) => b,
+                    Err(_) => break,
+                };
+                req_bytes.extend_from_slice(&temp_buf[..bytes_read]);
+
+                if let Some(pos) = req_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let header_str = String::from_utf8_lossy(&req_bytes[..pos]);
+                    let content_len = header_str
+                        .lines()
+                        .find(|l| l.to_lowercase().starts_with("content-length:"))
+                        .and_then(|l| l.split(':').nth(1))
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+
+                    let body_start = pos + 4;
+                    if req_bytes.len() >= body_start + content_len {
+                        break;
+                    }
+                }
+            }
+
+            let body_str = if let Some(pos) = req_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                String::from_utf8_lossy(&req_bytes[pos + 4..]).to_string()
+            } else {
+                String::new()
+            };
+
+            if !body_str.trim().is_empty() {
+                let _ = tx.send(body_str.clone());
+                if let Ok(guard) = app_handle.lock() {
+                    if let Some(ref handle) = *guard {
+                        let _ = handle.emit("new-action-proposal", body_str.as_str());
+                    }
+                }
+            }
+
+            let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}";
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.flush().await;
+            return;
+        } else if peek_str.starts_with("OPTIONS ") {
+            let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, GET, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.flush().await;
+            return;
+        }
+    }
+
     let ws_stream = match accept_async(stream).await {
         Ok(ws) => {
             println!("🔗 WebSocket client connected: {}", peer_addr);
@@ -99,14 +166,18 @@ async fn handle_connection(
         }
     });
 
-    // Read incoming frames from the JUCE audio plugin and broadcast them
+    // Read incoming frames from the JUCE audio plugin or MCP clients and broadcast them
     while let Some(Ok(message)) = read.next().await {
         match message {
             Message::Text(text) => {
                 let _ = tx.send(text.to_string());
                 if let Ok(guard) = app_handle.lock() {
                     if let Some(ref handle) = *guard {
-                        let _ = handle.emit("telemetry-frame", text.as_str());
+                        if text.contains("\"deltas\"") || text.contains("\"action_proposal\"") || text.contains("\"proposal\"") {
+                            let _ = handle.emit("new-action-proposal", text.as_str());
+                        } else {
+                            let _ = handle.emit("telemetry-frame", text.as_str());
+                        }
                     }
                 }
             }
@@ -115,7 +186,11 @@ async fn handle_connection(
                     let _ = tx.send(text.clone());
                     if let Ok(guard) = app_handle.lock() {
                         if let Some(ref handle) = *guard {
-                            let _ = handle.emit("telemetry-frame", text.as_str());
+                            if text.contains("\"deltas\"") || text.contains("\"action_proposal\"") || text.contains("\"proposal\"") {
+                                let _ = handle.emit("new-action-proposal", text.as_str());
+                            } else {
+                                let _ = handle.emit("telemetry-frame", text.as_str());
+                            }
                         }
                     }
                 }
@@ -166,6 +241,32 @@ mod tests {
         } else {
             panic!("Expected text message on receiver");
         }
+    }
+
+    #[tokio::test]
+    async fn test_ipc_server_http_post_proposals() {
+        let server = IPCServer::new(48198);
+        server.start();
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        let mut sub = server.subscribe();
+
+        let client = reqwest::Client::new();
+        let proposal_body = r#"{"id":"prop_123","deltas":[{"trackId":"track_1","trackName":"Kick Drum","parameterName":"fader_db","currentValue":-3.5,"proposedValue":-1.5}]}"#;
+
+        let res = client
+            .post("http://127.0.0.1:48198/api/proposals")
+            .header("Content-Type", "application/json")
+            .body(proposal_body)
+            .send()
+            .await
+            .expect("Failed to post proposal");
+
+        assert_eq!(res.status(), 200);
+
+        let received = sub.recv().await.expect("Expected broadcasted proposal");
+        assert!(received.contains("prop_123"));
     }
 }
 

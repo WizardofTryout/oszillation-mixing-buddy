@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Cpu,
   Server,
@@ -11,7 +11,10 @@ import {
   CheckCircle2,
   AlertCircle,
   RefreshCw,
-  ListPlus
+  Plus,
+  Trash2,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { GeminiProvider } from '@mixing-buddy/ai-engine';
 
@@ -38,6 +41,14 @@ interface ProviderSettingsProps {
   onApiKeysChange?: (keys: string[]) => void;
 }
 
+interface KeyRow {
+  id: string;
+  value: string;
+  show: boolean;
+  status: 'idle' | 'checking' | 'valid' | 'invalid';
+  error?: string;
+}
+
 export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   currentMode,
   onSelectMode,
@@ -49,16 +60,182 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   onModelNameChange,
   apiKey = '',
   onApiKeyChange,
+  apiKeys,
   onApiKeysChange
 }) => {
   const [copied, setCopied] = useState(false);
-  const [isTestingKey, setIsTestingKey] = useState(false);
-  const [testResult, setTestResult] = useState<{
+  const [isTestingAll, setIsTestingAll] = useState(false);
+  const [testSummary, setTestSummary] = useState<{
     status: 'idle' | 'valid' | 'invalid';
     message: string;
-    details?: string[];
   }>({ status: 'idle', message: '' });
-  const [isExpandedTextarea, setIsExpandedTextarea] = useState(false);
+
+  const [availableModels, setAvailableModels] = useState<string[]>([
+    'gemini-3.8-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-2.5-pro'
+  ]);
+  const [isCustomModel, setIsCustomModel] = useState(false);
+
+  // Initialize structured key rows from props
+  const [keyRows, setKeyRows] = useState<KeyRow[]>(() => {
+    const rawList = apiKeys && apiKeys.length > 0
+      ? apiKeys
+      : apiKey ? apiKey.split(/[\n,;]+/).map((k) => k.trim()).filter(Boolean) : [];
+
+    if (rawList.length === 0) {
+      return [{ id: 'k_1', value: '', show: false, status: 'idle' }];
+    }
+    return rawList.map((val, idx) => ({
+      id: `k_${idx + 1}`,
+      value: val,
+      show: false,
+      status: 'idle'
+    }));
+  });
+
+  // Sync if external apiKey prop changes drastically
+  useEffect(() => {
+    if (!apiKey && (!apiKeys || apiKeys.length === 0) && keyRows.length === 1 && keyRows[0].value === '') {
+      return;
+    }
+    const currentValues = keyRows.map((r) => r.value.trim()).filter(Boolean);
+    const incoming = apiKeys ?? (apiKey ? apiKey.split(/[\n,;]+/).map((k) => k.trim()).filter(Boolean) : []);
+    if (incoming.length > 0 && incoming.join(',') !== currentValues.join(',')) {
+      setKeyRows(
+        incoming.map((val, idx) => ({
+          id: `k_${idx + 1}`,
+          value: val,
+          show: false,
+          status: 'idle'
+        }))
+      );
+    }
+  }, [apiKey, apiKeys]);
+
+  const notifyParent = (rows: KeyRow[]) => {
+    const validKeys = rows.map((r) => r.value.trim()).filter((v) => v.length > 0);
+    onApiKeysChange?.(validKeys);
+    onApiKeyChange?.(validKeys.join(','));
+  };
+
+  const handleKeyChange = (id: string, newVal: string) => {
+    const updated = keyRows.map((row) => (row.id === id ? { ...row, value: newVal, status: 'idle' as const } : row));
+    setKeyRows(updated);
+    notifyParent(updated);
+    setTestSummary({ status: 'idle', message: '' });
+  };
+
+  const handleToggleShow = (id: string) => {
+    setKeyRows((prev) => prev.map((row) => (row.id === id ? { ...row, show: !row.show } : row)));
+  };
+
+  const handleAddKey = () => {
+    const newRow: KeyRow = {
+      id: `k_${Date.now()}`,
+      value: '',
+      show: false,
+      status: 'idle'
+    };
+    const updated = [...keyRows, newRow];
+    setKeyRows(updated);
+    notifyParent(updated);
+  };
+
+  const handleDeleteKey = (id: string) => {
+    if (keyRows.length <= 1) {
+      const reset = [{ id: 'k_1', value: '', show: false, status: 'idle' as const }];
+      setKeyRows(reset);
+      notifyParent(reset);
+      return;
+    }
+    const filtered = keyRows.filter((r) => r.id !== id);
+    setKeyRows(filtered);
+    notifyParent(filtered);
+  };
+
+  const handleValidateAll = async () => {
+    const activeRows = keyRows.filter((r) => r.value.trim().length > 5);
+    if (activeRows.length === 0) {
+      setTestSummary({
+        status: 'invalid',
+        message: 'Kein gültiger API-Key eingetragen. Bitte trage mindestens einen Key ein.'
+      });
+      return;
+    }
+
+    setIsTestingAll(true);
+    setTestSummary({ status: 'idle', message: 'Prüfe Keys und lade verfügbare Modelle...' });
+
+    // Mark active rows as checking
+    setKeyRows((prev) =>
+      prev.map((r) => (r.value.trim().length > 5 ? { ...r, status: 'checking', error: undefined } : r))
+    );
+
+    try {
+      const discoveredModelSet = new Set<string>();
+      let allValid = true;
+
+      const updatedRows = await Promise.all(
+        keyRows.map(async (row) => {
+          if (row.value.trim().length <= 5) return row;
+          const result = await GeminiProvider.validateKey(row.value.trim(), modelName);
+          if (result.availableModels && result.availableModels.length > 0) {
+            for (const m of result.availableModels) discoveredModelSet.add(m);
+          }
+          if (!result.valid) allValid = false;
+          return {
+            ...row,
+            status: (result.valid ? 'valid' : 'invalid') as 'valid' | 'invalid',
+            error: result.error
+          };
+        })
+      );
+
+      setKeyRows(updatedRows);
+
+      if (discoveredModelSet.size > 0) {
+        const sorted = Array.from(discoveredModelSet).sort((a, b) => {
+          const aFlash = a.includes('flash') ? 0 : 1;
+          const bFlash = b.includes('flash') ? 0 : 1;
+          return aFlash - bFlash;
+        });
+        setAvailableModels(sorted);
+        if (!sorted.includes(modelName)) {
+          onModelNameChange?.(sorted[0]);
+        }
+      }
+
+      const validCount = updatedRows.filter((r) => r.status === 'valid').length;
+      if (allValid && validCount > 0) {
+        setTestSummary({
+          status: 'valid',
+          message:
+            validCount === 1
+              ? '🟢 API-Key aktiv & bereit (Modelle aktualisiert)'
+              : `🟢 ${validCount} API-Keys aktiv & bereit (Round-Robin & Fallback aktiv)`
+        });
+      } else if (validCount > 0) {
+        setTestSummary({
+          status: 'valid',
+          message: `🟡 ${validCount} von ${activeRows.length} Keys aktiv (${activeRows.length - validCount} fehlerhaft)`
+        });
+      } else {
+        setTestSummary({
+          status: 'invalid',
+          message: '🔴 Alle geprüften API-Keys sind ungültig oder Quota überschritten.'
+        });
+      }
+    } catch (err: unknown) {
+      setTestSummary({
+        status: 'invalid',
+        message: `🔴 Fehler bei der Prüfung: ${err instanceof Error ? err.message : String(err)}`
+      });
+    } finally {
+      setIsTestingAll(false);
+    }
+  };
 
   const claudeDesktopConfig = JSON.stringify(
     {
@@ -91,88 +268,6 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     if (daw.toLowerCase().includes('nuendo')) return 'Nuendo';
     if (daw.toLowerCase().includes('cubase')) return 'Cubase';
     return daw === 'none' ? 'None (Standalone)' : daw;
-  };
-
-  const parsedKeys = apiKey
-    ? apiKey
-        .split(/[\n,;]+/)
-        .map((k) => k.trim())
-        .filter((k) => k.length > 5)
-    : [];
-
-  const handleKeyInputChange = (val: string) => {
-    onApiKeyChange?.(val);
-    const keys = val
-      .split(/[\n,;]+/)
-      .map((k) => k.trim())
-      .filter((k) => k.length > 5);
-    onApiKeysChange?.(keys);
-    setTestResult({ status: 'idle', message: '' });
-  };
-
-  const handleTestKeys = async () => {
-    if (!apiKey || parsedKeys.length === 0) {
-      setTestResult({
-        status: 'invalid',
-        message: 'Kein API-Key hinterlegt. Bitte mindestens einen Key eintragen.'
-      });
-      return;
-    }
-
-    setIsTestingKey(true);
-    setTestResult({ status: 'idle', message: 'Prüfe Key(s)...' });
-
-    try {
-      if (currentMode === 'byok_gemini') {
-        const results = await Promise.all(
-          parsedKeys.map((k) => GeminiProvider.validateKey(k, modelName))
-        );
-
-        const validCount = results.filter((r) => r.valid).length;
-        const invalidResults = results.filter((r) => !r.valid);
-
-        if (validCount === results.length) {
-          setTestResult({
-            status: 'valid',
-            message:
-              results.length === 1
-                ? '🟢 API-Key aktiv & bereit'
-                : `🟢 ${results.length} API-Keys aktiv & bereit (Round-Robin aktiv)`
-          });
-        } else if (validCount > 0) {
-          setTestResult({
-            status: 'valid',
-            message: `🟡 ${validCount} von ${results.length} Keys bereit (${invalidResults.length} fehlerhaft)`,
-            details: invalidResults.map((r) => `${r.keySnippet}: ${r.error}`)
-          });
-        } else {
-          setTestResult({
-            status: 'invalid',
-            message: `🔴 Ungültiger Key oder Quota überschritten (${invalidResults[0]?.error || 'Fehler'})`,
-            details: invalidResults.map((r) => `${r.keySnippet}: ${r.error}`)
-          });
-        }
-      } else {
-        if (apiKey.startsWith('sk-ant-') && apiKey.length > 20) {
-          setTestResult({
-            status: 'valid',
-            message: '🟢 Anthropic API-Key Format gültig & bereit'
-          });
-        } else {
-          setTestResult({
-            status: 'invalid',
-            message: '🔴 Ungültiger API-Key: Muss mit sk-ant- beginnen'
-          });
-        }
-      }
-    } catch (err: unknown) {
-      setTestResult({
-        status: 'invalid',
-        message: `🔴 Fehler bei Validierung: ${err instanceof Error ? err.message : String(err)}`
-      });
-    } finally {
-      setIsTestingKey(false);
-    }
   };
 
   return (
@@ -266,7 +361,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             }`}
           >
             <div className="flex items-center gap-1.5 text-xs font-bold">
-              <Sparkles className="w-3.5 h-3.5" /> Gemini 3.8
+              <Sparkles className="w-3.5 h-3.5" /> Gemini Flash / Pro
             </div>
             <span className="text-[10px] text-slate-500">Google AI (Multi-Key)</span>
           </button>
@@ -302,108 +397,162 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
           </button>
         </div>
 
-        {/* Dynamic Model & Multi-API-Key Config Bar */}
+        {/* Structured Multi-Key Management & Dynamic Model Selector Bar */}
         {(currentMode === 'byok_gemini' || currentMode === 'byok_claude') && (
-          <div className="mt-2 p-3 rounded bg-[#101216] border border-darkBorder/80 flex flex-col gap-2.5 text-xs">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2 min-w-[220px]">
-                <span className="text-slate-400 font-medium">Model ID:</span>
-                <input
-                  type="text"
-                  value={modelName}
-                  onChange={(e) => onModelNameChange?.(e.target.value)}
-                  placeholder={currentMode === 'byok_gemini' ? 'gemini-3.8-flash' : 'claude-3-7-sonnet-20250219'}
-                  className="bg-[#1a1c23] border border-darkBorder px-2.5 py-1 rounded text-slate-200 font-mono text-xs focus:outline-none focus:border-blue-500 w-44"
-                />
+          <div className="mt-2 p-3 rounded bg-[#101216] border border-darkBorder/80 flex flex-col gap-3 text-xs">
+            {/* Top row: Model Selector Dropdown & Actions */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-darkBorder/50">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400 font-medium">Modell:</span>
+                {currentMode === 'byok_gemini' ? (
+                  <div className="flex items-center gap-2">
+                    {!isCustomModel ? (
+                      <select
+                        value={modelName}
+                        onChange={(e) => {
+                          if (e.target.value === '__custom__') {
+                            setIsCustomModel(true);
+                          } else {
+                            onModelNameChange?.(e.target.value);
+                          }
+                        }}
+                        className="bg-[#1a1c23] border border-darkBorder px-2.5 py-1 rounded text-slate-200 font-mono text-xs focus:outline-none focus:border-blue-500"
+                      >
+                        {availableModels.map((m) => (
+                          <option key={m} value={m}>
+                            {m} {m.includes('flash') ? '⚡' : '🧠'}
+                          </option>
+                        ))}
+                        <option value="__custom__">+ Manuelles Modell...</option>
+                      </select>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="text"
+                          value={modelName}
+                          onChange={(e) => onModelNameChange?.(e.target.value)}
+                          placeholder="gemini-3.8-flash"
+                          className="bg-[#1a1c23] border border-darkBorder px-2 py-1 rounded text-slate-200 font-mono text-xs w-40"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setIsCustomModel(false)}
+                          className="text-[10px] text-slate-400 hover:text-slate-200 underline"
+                        >
+                          Liste
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <input
+                    type="text"
+                    value={modelName}
+                    onChange={(e) => onModelNameChange?.(e.target.value)}
+                    placeholder="claude-3-7-sonnet-20250219"
+                    className="bg-[#1a1c23] border border-darkBorder px-2.5 py-1 rounded text-slate-200 font-mono text-xs w-52"
+                  />
+                )}
               </div>
 
-              <div className="flex items-center gap-2 flex-1 min-w-[280px]">
-                <span className="text-slate-400 font-medium whitespace-nowrap">
-                  {currentMode === 'byok_gemini' ? 'API-Keys (Multi/Round-Robin):' : 'API Key:'}
-                </span>
-
-                <div className="flex-1 flex items-center gap-1.5">
-                  {!isExpandedTextarea ? (
-                    <input
-                      type="password"
-                      value={apiKey}
-                      onChange={(e) => handleKeyInputChange(e.target.value)}
-                      placeholder={
-                        currentMode === 'byok_gemini'
-                          ? 'Key 1, Key 2... (kommagetrennt oder mehrzeilig)'
-                          : 'sk-ant-...'
-                      }
-                      className="flex-1 bg-[#1a1c23] border border-darkBorder px-2.5 py-1 rounded text-slate-200 font-mono text-xs focus:outline-none focus:border-blue-500"
-                    />
-                  ) : null}
-
-                  {currentMode === 'byok_gemini' && (
-                    <button
-                      type="button"
-                      onClick={() => setIsExpandedTextarea(!isExpandedTextarea)}
-                      className="p-1 rounded bg-[#1f222e] hover:bg-[#282c3c] text-slate-300 border border-darkBorder text-[11px] flex items-center gap-1"
-                      title={isExpandedTextarea ? 'Kompaktansicht' : 'Mehrzeilige Eingabe für Multi-Keys'}
-                    >
-                      <ListPlus className="w-3.5 h-3.5 text-blue-400" />
-                      <span>{isExpandedTextarea ? 'Kompakt' : `Mehrere (${parsedKeys.length})`}</span>
-                    </button>
-                  )}
-                </div>
-
-                {/* Key Prüfen Button */}
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleTestKeys}
-                  disabled={isTestingKey || !apiKey.trim()}
+                  onClick={handleAddKey}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#1c1f2b] hover:bg-[#252a3b] text-blue-300 border border-blue-500/30 text-xs font-medium transition-all"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Key hinzufügen</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleValidateAll}
+                  disabled={isTestingAll || keyRows.every((r) => r.value.trim().length <= 5)}
                   className="flex items-center gap-1.5 px-3 py-1 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium text-xs transition-all shadow-sm"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${isTestingKey ? 'animate-spin' : ''}`} />
-                  <span>{isTestingKey ? 'Prüfe...' : 'Key Prüfen'}</span>
+                  <RefreshCw className={`w-3.5 h-3.5 ${isTestingAll ? 'animate-spin' : ''}`} />
+                  <span>{isTestingAll ? 'Prüfe...' : 'Keys Prüfen & Modelle laden'}</span>
                 </button>
               </div>
             </div>
 
-            {/* Expandable Textarea for Multiple API Keys */}
-            {isExpandedTextarea && currentMode === 'byok_gemini' && (
-              <div className="flex flex-col gap-1 mt-1">
-                <div className="flex justify-between items-center text-[11px] text-slate-400">
-                  <span>Trage einen Key pro Zeile ein (oder kommagetrennt). Automatische Round-Robin-Rotation & 60s Cooldown bei 503/429:</span>
-                  <span className="font-mono text-blue-400">{parsedKeys.length} Key{parsedKeys.length === 1 ? '' : 's'} aktiv</span>
-                </div>
-                <textarea
-                  rows={3}
-                  value={apiKey}
-                  onChange={(e) => handleKeyInputChange(e.target.value)}
-                  placeholder="AIzaSyKey1...&#10;AIzaSyKey2...&#10;AIzaSyKey3..."
-                  className="w-full bg-[#1a1c23] border border-darkBorder p-2 rounded text-slate-200 font-mono text-xs focus:outline-none focus:border-blue-500"
-                />
-              </div>
-            )}
+            {/* Structured Key Rows */}
+            <div className="flex flex-col gap-2">
+              <span className="text-[11px] text-slate-400 font-medium">
+                {currentMode === 'byok_gemini'
+                  ? 'API-Keys (Standardmäßig maskiert • Automatische Round-Robin-Rotation & 60s Cooldown bei 503/429):'
+                  : 'Anthropic API-Key:'}
+              </span>
 
-            {/* Visual Validation Status Indicator */}
-            {testResult.status !== 'idle' && (
+              {keyRows.map((row, idx) => (
+                <div key={row.id} className="flex items-center gap-2 bg-[#14161f] border border-darkBorder/70 p-1.5 rounded">
+                  <span className="text-[11px] font-mono text-slate-400 w-14 shrink-0 pl-1">
+                    Key #{idx + 1}:
+                  </span>
+
+                  {/* Masked Password Input */}
+                  <input
+                    type={row.show ? 'text' : 'password'}
+                    value={row.value}
+                    onChange={(e) => handleKeyChange(row.id, e.target.value)}
+                    placeholder={currentMode === 'byok_gemini' ? 'AIzaSy...' : 'sk-ant-...'}
+                    className="flex-1 bg-[#1a1c26] border border-darkBorder px-2 py-1 rounded text-slate-200 font-mono text-xs focus:outline-none focus:border-blue-500 tracking-wider"
+                  />
+
+                  {/* Toggle Show/Hide Eye Icon */}
+                  <button
+                    type="button"
+                    onClick={() => handleToggleShow(row.id)}
+                    className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all"
+                    title={row.show ? 'Key maskieren' : 'Key im Klartext anzeigen'}
+                  >
+                    {row.show ? <EyeOff className="w-4 h-4 text-amber-400" /> : <Eye className="w-4 h-4" />}
+                  </button>
+
+                  {/* Delete Button */}
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteKey(row.id)}
+                    className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-all"
+                    title="Diesen Key entfernen"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+
+                  {/* Per-Key Status Icon */}
+                  <div className="w-6 flex items-center justify-center shrink-0">
+                    {row.status === 'checking' && <RefreshCw className="w-3.5 h-3.5 text-blue-400 animate-spin" />}
+                    {row.status === 'valid' && (
+                      <span title="Key ist gültig und einsatzbereit">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      </span>
+                    )}
+                    {row.status === 'invalid' && (
+                      <span title={row.error || 'Ungültiger Key oder Quota überschritten'}>
+                        <AlertCircle className="w-4 h-4 text-rose-400" />
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Validation Summary Banner */}
+            {testSummary.status !== 'idle' && (
               <div
-                className={`p-2 rounded border flex flex-col gap-1 text-xs transition-all ${
-                  testResult.status === 'valid'
+                className={`p-2 rounded border flex items-center gap-2 text-xs transition-all ${
+                  testSummary.status === 'valid'
                     ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
                     : 'bg-rose-950/40 border-rose-500/40 text-rose-200'
                 }`}
               >
-                <div className="flex items-center gap-1.5 font-medium">
-                  {testResult.status === 'valid' ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-                  )}
-                  <span>{testResult.message}</span>
-                </div>
-                {testResult.details && testResult.details.length > 0 && (
-                  <ul className="list-disc list-inside text-[11px] text-slate-400 pl-1">
-                    {testResult.details.map((d, i) => (
-                      <li key={i}>{d}</li>
-                    ))}
-                  </ul>
+                {testSummary.status === 'valid' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
                 )}
+                <span>{testSummary.message}</span>
               </div>
             )}
           </div>
@@ -412,4 +561,5 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     </div>
   );
 };
+
 

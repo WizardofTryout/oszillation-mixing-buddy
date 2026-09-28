@@ -7,6 +7,7 @@ export interface KeyValidationResult {
   keySnippet: string;
   valid: boolean;
   model: string;
+  availableModels?: string[];
   error?: string;
 }
 
@@ -94,15 +95,65 @@ export class GeminiProvider implements AIProvider {
   public readonly name = 'Google Gemini (BYOK)';
   private keyManager: GeminiKeyManager;
   private modelName: string;
+  private availableModels: string[] = [];
 
-  constructor(config: AIProviderConfig & { apiKeys?: string | string[] }) {
+  constructor(
+    config: AIProviderConfig & {
+      apiKeys?: string | string[];
+      availableModels?: string[];
+    }
+  ) {
     const keys = config.apiKeys ?? config.apiKey;
     this.keyManager = new GeminiKeyManager(keys);
     this.modelName = config.modelName || 'gemini-3.8-flash';
+    this.availableModels = config.availableModels ?? [];
   }
 
   public getKeyManager(): GeminiKeyManager {
     return this.keyManager;
+  }
+
+  /**
+   * Dynamically query all available Gemini models supporting generateContent from the Google AI API
+   */
+  public static async fetchAvailableModels(apiKey: string): Promise<string[]> {
+    if (!apiKey || apiKey.trim().length <= 5) {
+      return ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-pro'];
+    }
+
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey.trim()}`
+      );
+      if (res.ok) {
+        const data = (await res.json()) as { models?: Array<{ name: string; supportedGenerationMethods?: string[] }> };
+        if (Array.isArray(data.models)) {
+          const models = data.models
+            .filter(
+              (m) =>
+                Array.isArray(m.supportedGenerationMethods) &&
+                m.supportedGenerationMethods.includes('generateContent') &&
+                !m.name.includes('1.5') && // Exclude legacy deprecated 1.5 models
+                !m.name.includes('embedding') &&
+                !m.name.includes('aqa')
+            )
+            .map((m) => m.name.replace(/^models\//, ''))
+            .sort((a, b) => {
+              const aFlash = a.includes('flash') ? 0 : 1;
+              const bFlash = b.includes('flash') ? 0 : 1;
+              return aFlash - bFlash;
+            });
+
+          if (models.length > 0) {
+            return models;
+          }
+        }
+      }
+    } catch {
+      // Fallback to modern stable models
+    }
+
+    return ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-pro'];
   }
 
   public async analyzeMix(
@@ -123,27 +174,39 @@ export class GeminiProvider implements AIProvider {
   }
 
   /**
-   * Validate one or multiple API keys with a fast lightweight ping
+   * Validate one or multiple API keys with a fast lightweight ping and query available models
    */
-  public static async validateKey(key: string, testModel = 'gemini-2.5-flash'): Promise<KeyValidationResult> {
+  public static async validateKey(
+    key: string,
+    preferredModel = 'gemini-2.5-flash'
+  ): Promise<KeyValidationResult> {
     const snippet = key.length > 8 ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : key;
     try {
+      // 1. Discover available models dynamically from API
+      const models = await GeminiProvider.fetchAvailableModels(key);
+      const testModel = models.includes(preferredModel)
+        ? preferredModel
+        : models.find((m) => m.includes('flash')) || models[0] || 'gemini-2.5-flash';
+
+      // 2. Perform lightweight countTokens verification
       const genAI = new GoogleGenerativeAI(key);
       const model = genAI.getGenerativeModel({ model: testModel });
       await model.countTokens({
         contents: [{ role: 'user', parts: [{ text: 'ping' }] }]
       });
+
       return {
         keySnippet: snippet,
         valid: true,
-        model: testModel
+        model: testModel,
+        availableModels: models
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       return {
         keySnippet: snippet,
         valid: false,
-        model: testModel,
+        model: preferredModel,
         error: msg
       };
     }
@@ -235,8 +298,13 @@ export class GeminiProvider implements AIProvider {
     };
 
     // Candidate fallback models when flagship model hits 503 ("high demand")
+    // Dynamically populated from discovered models; strictly excludes deprecated 1.5 models
+    const fallbackList = this.availableModels.filter(
+      (m) => m !== this.modelName && m.includes('flash') && !m.includes('1.5')
+    );
+    const safeDefaults = ['gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'];
     const modelCandidates = Array.from(
-      new Set([this.modelName, 'gemini-2.5-flash', 'gemini-1.5-flash'])
+      new Set([this.modelName, ...fallbackList, ...safeDefaults].filter((m) => !m.includes('1.5')))
     );
 
     let lastError: Error | null = null;

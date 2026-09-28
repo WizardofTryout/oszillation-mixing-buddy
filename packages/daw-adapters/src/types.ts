@@ -23,12 +23,14 @@ export interface DAWDriver {
 
   // Mixer & Channel Strip Control
   getTrackList(): Promise<TrackDescriptor[]>;
+  createTrack(type: 'audio' | 'instrument', name?: string): Promise<TrackDescriptor>;
   setTrackVolume(trackId: string, volumeDb: number): Promise<void>;
   setTrackPan(trackId: string, pan: number): Promise<void>;
   setTrackMute(trackId: string, muted: boolean): Promise<void>;
 
   // Insert Plugin & Parameter Control
   inspectPluginSlot(trackId: string, slotIndex: number): Promise<PluginMetadata | null>;
+  ensurePlugin(trackId: string, pluginType: 'eq' | 'compressor'): Promise<PluginMetadata>;
   setPluginParameter(
     trackId: string,
     slotIndex: number,
@@ -36,6 +38,7 @@ export interface DAWDriver {
     targetValue: number,
     unit?: string
   ): Promise<void>;
+  togglePluginBypass(trackId: string, slotIndex: number): Promise<boolean>;
 
   // Transport & Auditioning
   playRegion(startBar: number, endBar: number): Promise<void>;

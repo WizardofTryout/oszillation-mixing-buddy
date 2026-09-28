@@ -71,9 +71,102 @@ export class NuendoDriver implements DAWDriver {
     return Array.from(this.tracks.values());
   }
 
+  public async createTrack(type: 'audio' | 'instrument' = 'audio', name?: string): Promise<TrackDescriptor> {
+    const nextIndex = this.tracks.size;
+    const trackName = name || (type === 'audio' ? `Audio ${nextIndex + 1}` : `Instrument ${nextIndex + 1}`);
+    const id = `track_${nextIndex + 1}`;
+
+    const newTrack: TrackDescriptor = {
+      id,
+      index: nextIndex,
+      name: trackName,
+      type,
+      volumeDb: 0.0,
+      pan: 0.0,
+      isMuted: false,
+      isSoloed: false,
+      isSelected: true,
+      insertSlots: [
+        {
+          slotIndex: 0,
+          pluginName: 'Frequency 2',
+          format: 'vst3',
+          isBypassed: false,
+          parameters: [
+            { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
+            { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
+          ]
+        }
+      ]
+    };
+
+    this.tracks.set(id, newTrack);
+    // Send Nuendo Remote KeyCommand: Add Track (CC 120)
+    this.sendMIDI([0xb0, 120, type === 'audio' ? 1 : 2]);
+    this.notifyTrackListChanged();
+    return newTrack;
+  }
+
+  private findOrCreateTrack(idOrName: string): TrackDescriptor {
+    let track = this.tracks.get(idOrName);
+    if (track) return track;
+    for (const t of this.tracks.values()) {
+      if (t.name.toLowerCase() === idOrName.toLowerCase() || t.id.toLowerCase() === idOrName.toLowerCase()) {
+        return t;
+      }
+    }
+    const isMaster = idOrName.toLowerCase().includes('stereo') || idOrName.toLowerCase().includes('master');
+    const newTrack: TrackDescriptor = {
+      id: idOrName,
+      index: this.tracks.size,
+      name: idOrName,
+      type: isMaster ? 'master' : 'audio',
+      volumeDb: 0.0,
+      pan: 0.0,
+      isMuted: false,
+      isSoloed: false,
+      isSelected: false,
+      insertSlots: []
+    };
+    this.tracks.set(idOrName, newTrack);
+    return newTrack;
+  }
+
+  public async ensurePlugin(trackId: string, pluginType: 'eq' | 'compressor'): Promise<PluginMetadata> {
+    const track = this.findOrCreateTrack(trackId);
+
+    const pluginName = pluginType === 'eq' ? 'Frequency 2' : 'Compressor';
+    let slot = track.insertSlots.find((s) => s && (s.pluginName.toLowerCase().includes(pluginType) || (pluginType === 'eq' && s.pluginName.toLowerCase().includes('frequency'))));
+    if (!slot) {
+      slot = {
+        slotIndex: track.insertSlots.length,
+        pluginName,
+        format: 'vst3',
+        isBypassed: false,
+        parameters: []
+      };
+      track.insertSlots.push(slot);
+      this.notifyTrackListChanged();
+    }
+    return slot;
+  }
+
+  public async togglePluginBypass(trackId: string, slotIndex: number): Promise<boolean> {
+    const track = this.findOrCreateTrack(trackId);
+
+    if (track.insertSlots[slotIndex]) {
+      const slot = track.insertSlots[slotIndex]!;
+      slot.isBypassed = !slot.isBypassed;
+      // Send Nuendo MIDI Quick Control Bypass (CC 64 + slot)
+      this.sendMIDI([0xb0, 64 + (slotIndex % 8), slot.isBypassed ? 127 : 0]);
+      this.notifyTrackListChanged();
+      return true;
+    }
+    return false;
+  }
+
   public async setTrackVolume(trackId: string, volumeDb: number): Promise<void> {
-    const track = this.tracks.get(trackId);
-    if (!track) throw new Error(`Track ${trackId} not found in Nuendo driver.`);
+    const track = this.findOrCreateTrack(trackId);
 
     // Clamp volume to safety boundaries [-96.0 dB, +6.0 dB]
     const clampedDb = Math.max(-96.0, Math.min(6.0, volumeDb));
@@ -97,8 +190,7 @@ export class NuendoDriver implements DAWDriver {
   }
 
   public async setTrackPan(trackId: string, pan: number): Promise<void> {
-    const track = this.tracks.get(trackId);
-    if (!track) throw new Error(`Track ${trackId} not found in Nuendo driver.`);
+    const track = this.findOrCreateTrack(trackId);
 
     const clampedPan = Math.max(-1.0, Math.min(1.0, pan));
     track.pan = clampedPan;
@@ -112,8 +204,7 @@ export class NuendoDriver implements DAWDriver {
   }
 
   public async setTrackMute(trackId: string, muted: boolean): Promise<void> {
-    const track = this.tracks.get(trackId);
-    if (!track) throw new Error(`Track ${trackId} not found in Nuendo driver.`);
+    const track = this.findOrCreateTrack(trackId);
 
     track.isMuted = muted;
     const channelIndex = track.index % this.numChannels;
@@ -124,8 +215,7 @@ export class NuendoDriver implements DAWDriver {
   }
 
   public async inspectPluginSlot(trackId: string, slotIndex: number): Promise<PluginMetadata | null> {
-    const track = this.tracks.get(trackId);
-    if (!track) return null;
+    const track = this.findOrCreateTrack(trackId);
     return track.insertSlots[slotIndex] ?? null;
   }
 
@@ -136,8 +226,7 @@ export class NuendoDriver implements DAWDriver {
     targetValue: number,
     unit: string = ''
   ): Promise<void> {
-    const track = this.tracks.get(trackId);
-    if (!track) throw new Error(`Track ${trackId} not found.`);
+    const track = this.findOrCreateTrack(trackId);
 
     // Map through Steinberg Focused Quick Controls (knobs 0..7)
     const qcIndex = slotIndex % 8;

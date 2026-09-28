@@ -38,7 +38,6 @@ export class LogicProDriver implements DAWDriver {
       const id = `logic_track_${i + 1}`;
       let trackName = `Audio ${i + 1}`;
       if (i === 0) trackName = 'Stereo Out';
-      else if (i === 1) trackName = 'SoCal';
 
       this.tracks.set(id, {
         id,
@@ -64,6 +63,39 @@ export class LogicProDriver implements DAWDriver {
         ]
       });
     }
+  }
+
+  private findOrCreateTrack(idOrName: string): TrackDescriptor {
+    let track = this.tracks.get(idOrName);
+    if (track) return track;
+    for (const t of this.tracks.values()) {
+      if (t.name.toLowerCase() === idOrName.toLowerCase() || t.id.toLowerCase() === idOrName.toLowerCase()) {
+        return t;
+      }
+    }
+    const isMaster = idOrName.toLowerCase().includes('stereo') || idOrName.toLowerCase().includes('master');
+    const newTrack: TrackDescriptor = {
+      id: idOrName,
+      index: this.tracks.size,
+      name: idOrName,
+      type: isMaster ? 'master' : 'audio',
+      volumeDb: 0.0,
+      pan: 0.0,
+      isMuted: false,
+      isSoloed: false,
+      isSelected: false,
+      insertSlots: [
+        {
+          slotIndex: 0,
+          pluginName: 'Channel EQ',
+          format: 'au',
+          isBypassed: false,
+          parameters: []
+        }
+      ]
+    };
+    this.tracks.set(idOrName, newTrack);
+    return newTrack;
   }
 
   public async connect(): Promise<boolean> {
@@ -104,8 +136,7 @@ export class LogicProDriver implements DAWDriver {
   }
 
   public async setTrackVolume(trackId: string, volumeDb: number): Promise<void> {
-    const track = this.tracks.get(trackId);
-    if (!track) throw new Error(`Track ${trackId} not found in Logic Pro driver.`);
+    const track = this.findOrCreateTrack(trackId);
 
     const clampedDb = Math.max(-96.0, Math.min(6.0, volumeDb));
     track.volumeDb = clampedDb;
@@ -125,8 +156,7 @@ export class LogicProDriver implements DAWDriver {
   }
 
   public async setTrackPan(trackId: string, pan: number): Promise<void> {
-    const track = this.tracks.get(trackId);
-    if (!track) throw new Error(`Track ${trackId} not found in Logic Pro driver.`);
+    const track = this.findOrCreateTrack(trackId);
 
     const clampedPan = Math.max(-1.0, Math.min(1.0, pan));
     track.pan = clampedPan;
@@ -140,8 +170,7 @@ export class LogicProDriver implements DAWDriver {
   }
 
   public async setTrackMute(trackId: string, muted: boolean): Promise<void> {
-    const track = this.tracks.get(trackId);
-    if (!track) throw new Error(`Track ${trackId} not found in Logic Pro driver.`);
+    const track = this.findOrCreateTrack(trackId);
 
     track.isMuted = muted;
     const ch = track.index % 8;
@@ -152,8 +181,7 @@ export class LogicProDriver implements DAWDriver {
   }
 
   public async inspectPluginSlot(trackId: string, slotIndex: number): Promise<PluginMetadata | null> {
-    const track = this.tracks.get(trackId);
-    if (!track) return null;
+    const track = this.findOrCreateTrack(trackId);
 
     // Try live inspection via AXUIElement
     const live = await this.axClient.inspectPluginWindow(track.name, slotIndex);
@@ -172,8 +200,7 @@ export class LogicProDriver implements DAWDriver {
     targetValue: number,
     unit: string = ''
   ): Promise<void> {
-    const track = this.tracks.get(trackId);
-    if (!track) throw new Error(`Track ${trackId} not found.`);
+    const track = this.findOrCreateTrack(trackId);
 
     if (!track.insertSlots[slotIndex]) {
       track.insertSlots[slotIndex] = {
@@ -248,6 +275,31 @@ export class LogicProDriver implements DAWDriver {
     await this.axClient.createTrack(type, trackName);
 
     return newTrack;
+  }
+
+  /**
+   * Ensure standard plugin (Channel EQ or Compressor) is loaded on track
+   */
+  public async ensurePlugin(trackId: string, pluginType: 'eq' | 'compressor'): Promise<PluginMetadata> {
+    const track = this.findOrCreateTrack(trackId);
+
+    const pluginName = pluginType === 'eq' ? 'Channel EQ' : 'Compressor';
+    let slot = track.insertSlots.find((s) => s && (s.pluginName.toLowerCase().includes(pluginType) || (pluginType === 'eq' && s.pluginName.toLowerCase().includes('channel eq'))));
+    if (!slot) {
+      slot = {
+        slotIndex: track.insertSlots.length,
+        pluginName,
+        format: 'au',
+        isBypassed: false,
+        parameters: []
+      };
+      track.insertSlots.push(slot);
+      this.notifyTrackListChanged();
+      if (pluginType === 'eq') {
+        await this.axClient.ensureChannelEQLoaded(track.name);
+      }
+    }
+    return slot;
   }
 
   /**
