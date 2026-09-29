@@ -264,10 +264,11 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   };
 
   const getEffectiveDawLabel = (daw: string) => {
-    if (daw.toLowerCase().includes('logic')) return 'Logic Pro';
-    if (daw.toLowerCase().includes('nuendo')) return 'Nuendo';
-    if (daw.toLowerCase().includes('cubase')) return 'Cubase';
-    return daw === 'none' ? 'None (Standalone)' : daw;
+    const d = daw.toLowerCase();
+    if (d.includes('logic')) return 'Logic Pro';
+    if (d.includes('nuendo')) return 'Nuendo';
+    if (d.includes('cubase')) return 'Cubase';
+    return d === 'none' || d.includes('detecting') || !d.trim() ? 'Keine / Standalone' : daw;
   };
 
   return (
@@ -277,15 +278,15 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1.5 text-xs text-slate-300">
             <span
-              className={`w-2 h-2 rounded-full ${isAudioConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}
+              className={`w-2 h-2 rounded-full ${isAudioConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`}
             />
-            Audio: <span className="font-mono font-bold">{isAudioConnected ? 'Live (48123)' : 'Waiting...'}</span>
+            Audio: <span className="font-mono font-bold">{isAudioConnected ? 'Live (48123)' : 'Offline'}</span>
           </span>
 
           <span className="text-slate-600">|</span>
 
           <span className="text-xs text-slate-300">
-            DAW: <span className="font-semibold text-blue-400">{getEffectiveDawLabel(activeDaw)}</span>
+            DAW: <span className={`font-semibold ${activeDaw === 'none' ? 'text-slate-400' : 'text-blue-400'}`}>{getEffectiveDawLabel(activeDaw)}</span>
           </span>
 
           <span className="text-slate-600">|</span>

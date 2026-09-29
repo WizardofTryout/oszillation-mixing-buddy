@@ -1,6 +1,8 @@
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -10,11 +12,20 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::daw_detector::{DAWDetector, DetectedDAW};
 use crate::mcu_bridge::{AssignmentMode, McuBridge};
 
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 pub struct IPCServer {
     port: u16,
     tx: broadcast::Sender<String>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
     shared_tracks: Arc<Mutex<Vec<serde_json::Value>>>,
+    last_telemetry_ms: Arc<AtomicU64>,
+    is_streaming: Arc<AtomicBool>,
     pub mcu_bridge: Arc<McuBridge>,
 }
 
@@ -27,6 +38,8 @@ impl IPCServer {
             tx,
             app_handle: Arc::new(Mutex::new(None)),
             shared_tracks: Arc::new(Mutex::new(Vec::new())),
+            last_telemetry_ms: Arc::new(AtomicU64::new(0)),
+            is_streaming: Arc::new(AtomicBool::new(false)),
             mcu_bridge,
         }
     }
@@ -41,7 +54,7 @@ impl IPCServer {
         self.tx.subscribe()
     }
 
-    /// Spawns the local WebSocket server on a dedicated Tokio runtime thread
+    /// Spawns the local WebSocket server and 1.5s audio heartbeat watchdog on a dedicated Tokio runtime thread
     pub fn start(&self) {
         if let Err(e) = self.mcu_bridge.start() {
             eprintln!("⚠️ [MCU Bridge] Warning during start: {}", e);
@@ -51,6 +64,8 @@ impl IPCServer {
         let tx = self.tx.clone();
         let app_handle = self.app_handle.clone();
         let shared_tracks = self.shared_tracks.clone();
+        let last_telemetry_ms = self.last_telemetry_ms.clone();
+        let is_streaming = self.is_streaming.clone();
         let mcu_bridge = self.mcu_bridge.clone();
 
         std::thread::spawn(move || {
@@ -72,13 +87,50 @@ impl IPCServer {
                     }
                 };
 
+                // Heartbeat Watchdog: if no telemetry frame arrives within > 1,500 ms, mark streaming: false
+                let watchdog_handle = app_handle.clone();
+                let watchdog_last_ms = last_telemetry_ms.clone();
+                let watchdog_streaming = is_streaming.clone();
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+                    loop {
+                        interval.tick().await;
+                        let last = watchdog_last_ms.load(Ordering::Relaxed);
+                        let now = now_millis();
+                        let active = last > 0 && now.saturating_sub(last) <= 1500;
+                        let prev = watchdog_streaming.swap(active, Ordering::Relaxed);
+                        if prev != active {
+                            if let Ok(guard) = watchdog_handle.lock() {
+                                if let Some(ref handle) = *guard {
+                                    let _ = handle.emit(
+                                        "audio-streaming-status",
+                                        serde_json::json!({ "streaming": active }),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                });
+
                 while let Ok((stream, peer_addr)) = listener.accept().await {
                     let tx_clone = tx.clone();
                     let app_handle_clone = app_handle.clone();
                     let tracks_clone = shared_tracks.clone();
+                    let last_ms_clone = last_telemetry_ms.clone();
+                    let streaming_clone = is_streaming.clone();
                     let mcu_clone = mcu_bridge.clone();
                     tokio::spawn(async move {
-                        handle_connection(stream, peer_addr, tx_clone, app_handle_clone, tracks_clone, mcu_clone).await;
+                        handle_connection(
+                            stream,
+                            peer_addr,
+                            tx_clone,
+                            app_handle_clone,
+                            tracks_clone,
+                            last_ms_clone,
+                            streaming_clone,
+                            mcu_clone,
+                        )
+                        .await;
                     });
                 }
             });
@@ -92,6 +144,8 @@ async fn handle_connection(
     tx: broadcast::Sender<String>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
     shared_tracks: Arc<Mutex<Vec<serde_json::Value>>>,
+    last_telemetry_ms: Arc<AtomicU64>,
+    is_streaming: Arc<AtomicBool>,
     mcu_bridge: Arc<McuBridge>,
 ) {
     let mut peek_buf = [0u8; 1024];
@@ -309,11 +363,17 @@ async fn handle_connection(
         match message {
             Message::Text(text) => {
                 let _ = tx.send(text.to_string());
+                let is_proposal = text.contains("\"deltas\"") || text.contains("\"action_proposal\"") || text.contains("\"proposal\"");
+                let is_execute = text.contains("\"execute\"") || text.contains("\"parameterName\"");
+                if !is_proposal && !is_execute {
+                    last_telemetry_ms.store(now_millis(), Ordering::Relaxed);
+                    is_streaming.store(true, Ordering::Relaxed);
+                }
                 if let Ok(guard) = app_handle.lock() {
                     if let Some(ref handle) = *guard {
-                        if text.contains("\"deltas\"") || text.contains("\"action_proposal\"") || text.contains("\"proposal\"") {
+                        if is_proposal {
                             let _ = handle.emit("new-action-proposal", text.as_str());
-                        } else if text.contains("\"execute\"") || text.contains("\"parameterName\"") {
+                        } else if is_execute {
                             let _ = handle.emit("execute-daw-action", text.as_str());
                         } else {
                             let _ = handle.emit("telemetry-frame", text.as_str());
@@ -322,6 +382,8 @@ async fn handle_connection(
                 }
             }
             Message::Binary(bin) => {
+                last_telemetry_ms.store(now_millis(), Ordering::Relaxed);
+                is_streaming.store(true, Ordering::Relaxed);
                 if let Ok(text) = String::from_utf8(bin.to_vec()) {
                     let _ = tx.send(text.clone());
                     if let Ok(guard) = app_handle.lock() {

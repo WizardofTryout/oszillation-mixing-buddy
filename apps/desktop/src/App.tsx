@@ -13,7 +13,7 @@ export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<MetrologyTelemetryFrame | null>(null);
   const [isAudioConnected, setIsAudioConnected] = useState<boolean>(false);
   const [providerMode, setProviderMode] = useState<ProviderMode>('managed');
-  const [activeDaw, setActiveDaw] = useState<string>('detecting...');
+  const [activeDaw, setActiveDaw] = useState<string>('none');
   const [modelName, setModelName] = useState<string>('gemini-3.8-flash');
   const [apiKey, setApiKey] = useState<string>(() => {
     try {
@@ -78,26 +78,22 @@ export const App: React.FC = () => {
   void lastTrackFetch;
 
 
-  // 1. Dynamic DAW detection from Rust backend
+  // 1. Dynamic DAW detection from Rust backend (updates immediately when DAW opens or closes)
   useEffect(() => {
     invoke<string>('get_active_daw')
       .then((daw) => {
-        if (daw && daw !== 'none') setActiveDaw(daw);
+        setActiveDaw(daw || 'none');
       })
-      .catch(() => {});
+      .catch(() => {
+        setActiveDaw('none');
+      });
 
     let unlistenDaw: (() => void) | null = null;
     listen<string>('daw-status-changed', (event) => {
-      if (event.payload) {
-        setActiveDaw((prev) => {
-          // If event is 'none', do not wipe an established DAW if audio is streaming
-          if (event.payload.toLowerCase().includes('none')) {
-            if (prev && !prev.toLowerCase().includes('none') && prev !== 'detecting...') {
-              return prev;
-            }
-          }
-          return event.payload;
-        });
+      const nextDaw = event.payload || 'none';
+      setActiveDaw(nextDaw);
+      if (nextDaw.toLowerCase().includes('none')) {
+        setLiveTracks([]);
       }
     })
       .then((cleanup) => {
@@ -114,29 +110,48 @@ export const App: React.FC = () => {
   useEffect(() => {
     let ws: WebSocket | null = null;
     let retryTimer: NodeJS.Timeout;
+    let streamWatchdogTimer: NodeJS.Timeout;
     let unlistenTelemetry: (() => void) | null = null;
+    let unlistenStreamingStatus: (() => void) | null = null;
     let unlistenProposal: (() => void) | null = null;
     let unlistenExecute: (() => void) | null = null;
+
+    const resetStreamWatchdog = () => {
+      clearTimeout(streamWatchdogTimer);
+      streamWatchdogTimer = setTimeout(() => {
+        setIsAudioConnected(false);
+        setTelemetry(null);
+      }, 1500);
+    };
 
     // A. Subscribe to native Tauri IPC telemetry event
     listen<string | MetrologyTelemetryFrame>('telemetry-frame', (event) => {
       try {
         const frame: MetrologyTelemetryFrame =
           typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
-        setTelemetry(frame);
-        setIsAudioConnected(true);
-        setActiveDaw((prev) => {
-          if (prev.toLowerCase().includes('none') || prev === 'detecting...') {
-            return 'logic_pro';
-          }
-          return prev;
-        });
+        if (frame && frame.loudness) {
+          setTelemetry(frame);
+          setIsAudioConnected(true);
+          resetStreamWatchdog();
+        }
       } catch {
         // Ignore parse errors
       }
     })
       .then((cleanup) => {
         unlistenTelemetry = cleanup;
+      })
+      .catch(() => {});
+
+    // A2. Subscribe to Rust backend 1.5s heartbeat watchdog event
+    listen<{ streaming: boolean }>('audio-streaming-status', (event) => {
+      if (event.payload && event.payload.streaming === false) {
+        setIsAudioConnected(false);
+        setTelemetry(null);
+      }
+    })
+      .then((cleanup) => {
+        unlistenStreamingStatus = cleanup;
       })
       .catch(() => {});
 
@@ -199,14 +214,10 @@ export const App: React.FC = () => {
       })
       .catch(() => {});
 
-    // C. Connect to WebSocket stream
+    // D. Connect to WebSocket stream (only set isAudioConnected=true when real telemetry frames arrive)
     const connectWebSocket = () => {
       try {
         ws = new WebSocket('ws://127.0.0.1:48123/meter');
-
-        ws.onopen = () => {
-          setIsAudioConnected(true);
-        };
 
         ws.onmessage = (event) => {
           try {
@@ -241,16 +252,13 @@ export const App: React.FC = () => {
               return;
             }
 
-            // Normal audio telemetry frame
-            const frame: MetrologyTelemetryFrame = data;
-            setTelemetry(frame);
-            setIsAudioConnected(true);
-            setActiveDaw((prev) => {
-              if (prev.toLowerCase().includes('none') || prev === 'detecting...') {
-                return 'logic_pro';
-              }
-              return prev;
-            });
+            // Normal audio telemetry frame from "The Ear" plugin
+            if (data && data.loudness) {
+              const frame: MetrologyTelemetryFrame = data;
+              setTelemetry(frame);
+              setIsAudioConnected(true);
+              resetStreamWatchdog();
+            }
           } catch {
             // Ignore parse errors
           }
@@ -258,6 +266,7 @@ export const App: React.FC = () => {
 
         ws.onclose = () => {
           setIsAudioConnected(false);
+          setTelemetry(null);
           retryTimer = setTimeout(connectWebSocket, 2000);
         };
 
@@ -273,8 +282,10 @@ export const App: React.FC = () => {
 
     return () => {
       clearTimeout(retryTimer);
+      clearTimeout(streamWatchdogTimer);
       ws?.close();
       if (unlistenTelemetry) unlistenTelemetry();
+      if (unlistenStreamingStatus) unlistenStreamingStatus();
       if (unlistenProposal) unlistenProposal();
       if (unlistenExecute) unlistenExecute();
     };

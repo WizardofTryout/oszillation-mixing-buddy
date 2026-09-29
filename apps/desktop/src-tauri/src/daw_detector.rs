@@ -40,7 +40,7 @@ impl DAWDetector {
         Self::default()
     }
 
-    /// Scans running processes for active DAW instances
+    /// Scans running processes for active DAW instances (strictly main DAW binary, no AUHosting helpers)
     pub fn detect_active_daw(&mut self) -> DetectedDAW {
         #[cfg(target_os = "macos")]
         {
@@ -55,31 +55,9 @@ impl DAWDetector {
                 }
             }
 
-            // 2. Substring search for Logic Pro process
+            // 2. Exact Nuendo process match
             if let Ok(output) = std::process::Command::new("pgrep")
-                .arg("-if")
-                .arg("Logic Pro")
-                .output()
-            {
-                if output.status.success() && !output.stdout.is_empty() {
-                    return DetectedDAW::LogicPro;
-                }
-            }
-
-            // 3. AU Plugin Host for Logic Pro (AUHostingService / AUHostingCompatibilityService)
-            if let Ok(output) = std::process::Command::new("pgrep")
-                .arg("-if")
-                .arg("AUHosting")
-                .output()
-            {
-                if output.status.success() && !output.stdout.is_empty() {
-                    return DetectedDAW::LogicPro;
-                }
-            }
-
-            // Nuendo detection
-            if let Ok(output) = std::process::Command::new("pgrep")
-                .arg("-if")
+                .arg("-x")
                 .arg("Nuendo")
                 .output()
             {
@@ -88,9 +66,9 @@ impl DAWDetector {
                 }
             }
 
-            // Cubase detection
+            // 3. Exact Cubase process match
             if let Ok(output) = std::process::Command::new("pgrep")
-                .arg("-if")
+                .arg("-x")
                 .arg("Cubase")
                 .output()
             {
@@ -100,23 +78,23 @@ impl DAWDetector {
             }
         }
 
-        // 2. Comprehensive sysinfo scan
+        // Fallback sysinfo scan with strict executable/process name matching (no AUHosting or generic substrings)
         self.system.refresh_processes(ProcessesToUpdate::All, true);
 
         for (_pid, process) in self.system.processes() {
-            let name = process.name().to_string_lossy().to_lowercase();
+            let name = process.name().to_string_lossy();
             let exe = process
                 .exe()
-                .map(|p| p.to_string_lossy().to_lowercase())
+                .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default();
 
-            if name.contains("logic") || exe.contains("logic") || name.contains("auhosting") {
+            if name == "Logic Pro" || exe.ends_with("/Logic Pro.app/Contents/MacOS/Logic Pro") {
                 return DetectedDAW::LogicPro;
             }
-            if name.contains("nuendo") || exe.contains("nuendo") {
+            if name.starts_with("Nuendo") || exe.contains("/Nuendo") && exe.contains(".app/Contents/MacOS/") {
                 return DetectedDAW::Nuendo;
             }
-            if name.contains("cubase") || exe.contains("cubase") {
+            if name.starts_with("Cubase") || exe.contains("/Cubase") && exe.contains(".app/Contents/MacOS/") {
                 return DetectedDAW::Cubase;
             }
         }

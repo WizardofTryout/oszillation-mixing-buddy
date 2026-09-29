@@ -38,7 +38,8 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
     if (d.includes('logic')) return 'Logic Pro';
     if (d.includes('nuendo')) return 'Nuendo';
     if (d.includes('cubase')) return 'Cubase';
-    return daw === 'none' ? 'Standalone / None' : daw;
+    if (d === 'none' || d.includes('detecting') || !d.trim()) return 'Standalone / Keine DAW';
+    return daw;
   };
 
   const dawLabel = getDawDisplayName(activeDaw);
@@ -47,7 +48,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
     {
       id: 'msg_welcome',
       sender: 'assistant',
-      text: `Hallo! Ich bin dein AI Co-Producer für ${dawLabel}. Gib mir Anweisungen (z. B. "Hebe die Höhen an" oder "Räume das Low-End auf" oder "Erstelle eine neue Spur"), und ich analysiere das Live-Signal und generiere ActionCards für deine DAW.`,
+      text: `Hallo! Ich bin dein AI Co-Producer. Gib mir Anweisungen (z. B. "Hebe die Höhen an", "Räume das Low-End auf" oder "Erstelle eine neue Spur"), und ich analysiere das Live-Signal und generiere ActionCards für deine DAW.`,
       timestamp: Date.now()
     }
   ]);
