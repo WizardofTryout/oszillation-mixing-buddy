@@ -23,3 +23,6 @@ futures-util = "0.3"
 sysinfo = "0.33"
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+coremidi = "0.9.2"

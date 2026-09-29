@@ -32,47 +32,51 @@ export const App: React.FC = () => {
     } catch {}
   };
 
-  // Dynamically registered custom tracks from DAW or incoming proposals
-  const [dynamicTracks, setDynamicTracks] = useState<TrackDescriptor[]>([]);
+  // Live track state — populated exclusively from GET /api/tracks (no static fallbacks)
+  const [liveTracks, setLiveTracks] = useState<TrackDescriptor[]>([]);
+  const [lastTrackFetch, setLastTrackFetch] = useState<number>(0);
 
-  // Available project tracks mapped dynamically to the active DAW
-  const availableTracks: TrackDescriptor[] = React.useMemo(() => {
-    const baseTracks: TrackDescriptor[] = activeDaw === 'none'
-      ? []
-      : [
-          {
-            id: 'track_master',
-            index: 0,
-            name: 'Stereo Out',
-            type: 'master',
-            volumeDb: 0.0,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: false,
-            insertSlots: [
-              {
-                slotIndex: 0,
-                pluginName: 'Channel EQ',
-                format: 'au',
-                isBypassed: false,
-                parameters: [
-                  { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
-                  { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
-                ]
-              }
-            ]
+  // Poll /api/tracks every 2 seconds + on window-focus for live plugin data
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+
+    const fetchTracks = async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:48123/api/tracks');
+        if (res.ok) {
+          const json = await res.json();
+          const tracks: TrackDescriptor[] = Array.isArray(json.tracks)
+            ? json.tracks
+            : Array.isArray(json)
+            ? json
+            : [];
+          if (tracks.length > 0) {
+            setLiveTracks(tracks);
+            setLastTrackFetch(Date.now());
           }
-        ];
-
-    const combined = [...baseTracks];
-    for (const dt of dynamicTracks) {
-      if (!combined.some((t) => t.name.toLowerCase() === dt.name.toLowerCase() || t.id === dt.id)) {
-        combined.push(dt);
+        }
+      } catch {
+        // IPC server not yet running — silently wait
       }
-    }
-    return combined;
-  }, [activeDaw, dynamicTracks]);
+      timer = setTimeout(fetchTracks, 2000);
+    };
+
+    fetchTracks();
+
+    const onFocus = () => fetchTracks();
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, []);
+
+  // availableTracks is the live feed — never static
+  const availableTracks: TrackDescriptor[] = liveTracks;
+  // Expose lastTrackFetch to suppress lint warning
+  void lastTrackFetch;
+
 
   // 1. Dynamic DAW detection from Rust backend
   useEffect(() => {
@@ -276,16 +280,28 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Synchronize active project tracks with Companion HTTP API for MCP server
-  useEffect(() => {
-    if (availableTracks.length > 0) {
-      fetch('http://127.0.0.1:48123/api/tracks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracks: availableTracks })
-      }).catch(() => {});
+  // When a proposal references a track not yet in liveTracks, add it dynamically
+  const ensureProposalTrackExists = (trackId: string, trackName: string) => {
+    if (!liveTracks.some((t) => t.name.toLowerCase() === trackName.toLowerCase() || t.id === trackId)) {
+      setLiveTracks((prev) => [
+        ...prev,
+        {
+          id: trackId || `track_${Date.now()}`,
+          index: prev.length,
+          name: trackName,
+          type: (trackName.toLowerCase().includes('master') || trackName.toLowerCase().includes('stereo'))
+            ? 'master'
+            : 'audio',
+          volumeDb: 0.0,
+          pan: 0.0,
+          isMuted: false,
+          isSoloed: false,
+          isSelected: false,
+          insertSlots: []
+        }
+      ]);
     }
-  }, [availableTracks]);
+  };
 
   // 3. Wired Action Handlers
   const handleApplyAction = async (id: string) => {
@@ -295,8 +311,8 @@ export const App: React.FC = () => {
     const isLogic = activeDaw.toLowerCase().includes('logic');
     const dawLabel = isLogic ? 'Logic Pro' : activeDaw === 'none' ? 'Standalone' : 'Nuendo';
 
+    // Validate volume adjustments through Acoustic Shock Shield
     for (const delta of proposal.deltas) {
-      // Validate volume adjustment with Acoustic Shock Shield in Rust Core
       if (delta.parameterName === 'volume' || delta.parameterName === 'fader_db') {
         try {
           await invoke('validate_volume_adjustment', {
@@ -309,28 +325,11 @@ export const App: React.FC = () => {
           return;
         }
       }
+    }
 
-      // Check track presence in active DAW; dynamically register if not yet in list
-      const trackExists = availableTracks.some(
-        (t) => t.name.toLowerCase() === delta.trackName.toLowerCase() || t.id.toLowerCase() === delta.trackId.toLowerCase()
-      );
-      if (!trackExists) {
-        setDynamicTracks((prev) => [
-          ...prev,
-          {
-            id: delta.trackId || `track_${Date.now()}`,
-            index: availableTracks.length,
-            name: delta.trackName,
-            type: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo') ? 'master' : 'audio',
-            volumeDb: 0.0,
-            pan: 0.0,
-            isMuted: false,
-            isSoloed: false,
-            isSelected: false,
-            insertSlots: []
-          }
-        ]);
-      }
+    // Ensure all referenced tracks exist in liveTracks
+    for (const delta of proposal.deltas) {
+      ensureProposalTrackExists(delta.trackId, delta.trackName);
     }
 
     try {
@@ -343,15 +342,16 @@ export const App: React.FC = () => {
           isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo')
         });
       }
-    } catch {
-      // Ignore in pure web mode
-    }
 
-    setProposals((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, status: 'applied' } : p))
-    );
-    setChatLog(`✅ Anpassung angewendet: "${proposal.title}" erfolgreich an ${dawLabel} gesendet.`);
+      setProposals((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, status: 'applied' } : p))
+      );
+      setChatLog(`✅ Anpassung angewendet: "${proposal.title}" erfolgreich an ${dawLabel} gesendet.`);
+    } catch (err: unknown) {
+      setChatLog(`❌ Fehler beim Anwenden: ${String(err)}`);
+    }
   };
+
 
   const handleRejectAction = (id: string) => {
     const prop = proposals.find((p) => p.id === id);
@@ -369,52 +369,65 @@ export const App: React.FC = () => {
 
     const isLogic = activeDaw.toLowerCase().includes('logic');
     const dawLabel = isLogic ? 'Logic Pro' : 'Nuendo';
+    const previousStatus = prop.status;
 
     setProposals((prev) =>
       prev.map((p) => (p.id === id ? { ...p, status: 'auditioning' } : p))
     );
-    setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}". EQ Bypass in ${dawLabel} umgeschaltet...`);
 
     const delta = prop.deltas[0];
+    const targetTrack = delta?.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
+
     try {
-      // Demonstration: schalte Bypass des entsprechenden EQ-Plugins in Logic um
-      await invoke('toggle_plugin_bypass', {
-        trackName: delta?.trackName ?? 'SoCal',
-        slotIndex: delta?.slotIndex ?? 0
-      });
-      await invoke('apply_daw_action', {
-        trackName: delta?.trackName ?? 'SoCal',
-        parameter: delta?.parameterName ?? 'EQ',
-        value: delta?.proposedValue ?? 0.0,
-        unit: delta?.unit ?? 'dB',
-        isMaster: false
-      });
-    } catch {
-      // Ignore
+      if (previousStatus === 'applied') {
+        setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}". Plugin-Bypass auf '${targetTrack}' in ${dawLabel} umgeschaltet...`);
+        await invoke('toggle_plugin_bypass', {
+          trackName: targetTrack,
+          slotIndex: delta?.slotIndex ?? 0
+        });
+      } else {
+        setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}". Vorschlag (${delta?.proposedValue ?? 0.0} ${delta?.unit ?? 'dB'}) für 6s in ${dawLabel} aktiviert...`);
+        await invoke('apply_daw_action', {
+          trackName: targetTrack,
+          parameter: delta?.parameterName ?? 'EQ',
+          value: delta?.proposedValue ?? 0.0,
+          unit: delta?.unit ?? 'dB',
+          isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo')
+        });
+      }
+    } catch (err: unknown) {
+      setProposals((prev) =>
+        prev.map((p) => (p.id === id ? { ...p, status: previousStatus } : p))
+      );
+      setChatLog(`❌ Fehler bei A/B Audition: ${String(err)}`);
+      return;
     }
 
     // Auto-restore after 6 seconds of audition
     setTimeout(async () => {
       try {
-        await invoke('toggle_plugin_bypass', {
-          trackName: delta?.trackName ?? 'SoCal',
-          slotIndex: delta?.slotIndex ?? 0
-        });
-        await invoke('apply_daw_action', {
-          trackName: delta?.trackName ?? 'SoCal',
-          parameter: delta?.parameterName ?? 'EQ',
-          value: delta?.currentValue ?? 0.0,
-          unit: delta?.unit ?? 'dB',
-          isMaster: false
-        });
-      } catch {
-        // Ignore
+        if (previousStatus === 'applied') {
+          await invoke('toggle_plugin_bypass', {
+            trackName: targetTrack,
+            slotIndex: delta?.slotIndex ?? 0
+          });
+        } else {
+          await invoke('apply_daw_action', {
+            trackName: targetTrack,
+            parameter: delta?.parameterName ?? 'EQ',
+            value: delta?.currentValue ?? 0.0,
+            unit: delta?.unit ?? 'dB',
+            isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo')
+          });
+        }
+        setChatLog(`🎧 A/B Audition beendet. Vorheriger Zustand in ${dawLabel} wiederhergestellt.`);
+      } catch (err: unknown) {
+        setChatLog(`❌ Fehler beim Wiederherstellen nach A/B Audition: ${String(err)}`);
       }
 
       setProposals((prev) =>
-        prev.map((p) => (p.id === id && p.status === 'auditioning' ? { ...p, status: 'pending' } : p))
+        prev.map((p) => (p.id === id && p.status === 'auditioning' ? { ...p, status: previousStatus } : p))
       );
-      setChatLog(`🎧 A/B Audition beendet. Original-Zustand in ${dawLabel} wiederhergestellt.`);
     }, 6000);
   };
 

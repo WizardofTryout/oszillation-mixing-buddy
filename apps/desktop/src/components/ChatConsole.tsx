@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, AlertCircle } from 'lucide-react';
+import { Send, Bot, User, Sparkles, AlertCircle, Copy, Check } from 'lucide-react';
 import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from '@mixing-buddy/shared-types';
 import { GeminiProvider } from '@mixing-buddy/ai-engine';
 import { invoke } from '@tauri-apps/api/core';
@@ -53,7 +53,15 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   ]);
   const [input, setInput] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const handleCopyMessage = (id: string, text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 1800);
+    }).catch(() => {});
+  };
 
   // Auto-scroll on new message
   useEffect(() => {
@@ -342,7 +350,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
             </div>
 
             <div
-              className={`p-2.5 rounded-lg leading-relaxed ${
+              className={`group relative p-2.5 pr-8 rounded-lg leading-relaxed select-text ${
                 m.sender === 'user'
                   ? 'bg-blue-600 text-white rounded-br-none'
                   : m.sender === 'system'
@@ -350,7 +358,19 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
                   : 'bg-[#181a20] border border-darkBorder/60 text-slate-200 rounded-bl-none'
               }`}
             >
-              {m.text}
+              <span>{m.text}</span>
+              <button
+                type="button"
+                onClick={() => handleCopyMessage(m.id, m.text)}
+                title="Text kopieren"
+                className="absolute top-1.5 right-1.5 p-1 rounded opacity-60 hover:opacity-100 hover:bg-white/10 transition-opacity"
+              >
+                {copiedId === m.id ? (
+                  <Check className="w-3 h-3 text-emerald-400" />
+                ) : (
+                  <Copy className="w-3 h-3" />
+                )}
+              </button>
             </div>
           </div>
         ))}

@@ -1,12 +1,25 @@
 import { NuendoDriver, type NuendoDriverOptions } from './nuendo/NuendoDriver.js';
 import { LogicProDriver, type LogicProDriverOptions } from './logic/LogicProDriver.js';
-import { MacOSAccessibilityClient } from './logic/macos_ax_client.js';
+import {
+  MacOSAccessibilityClient,
+  findAXElement,
+  type AccessibilityClientOptions,
+  type AXElementNode,
+  type AXSearchCriteria
+} from './logic/macos_ax_client.js';
 import type { DAWDriver } from './types.js';
 
 export * from './types.js';
+export * from './logic/transformers.js';
 export { NuendoDriver, type NuendoDriverOptions } from './nuendo/NuendoDriver.js';
 export { LogicProDriver, type LogicProDriverOptions } from './logic/LogicProDriver.js';
-export { MacOSAccessibilityClient, type AccessibilityClientOptions } from './logic/macos_ax_client.js';
+export {
+  MacOSAccessibilityClient,
+  findAXElement,
+  type AccessibilityClientOptions,
+  type AXElementNode,
+  type AXSearchCriteria
+} from './logic/macos_ax_client.js';
 
 /**
  * Factory function to create a NuendoDriver instance

@@ -6,6 +6,11 @@ import type {
 } from '@mixing-buddy/shared-types';
 import type { DAWDriver, DAWDriverEvents, MIDITransport } from '../types.js';
 import { MacOSAccessibilityClient } from './macos_ax_client.js';
+import {
+  findParameterSpecification,
+  findPluginSpecification,
+  formatDisplayValue
+} from './transformers.js';
 
 export interface LogicProDriverOptions {
   midiTransport?: MIDITransport;
@@ -15,6 +20,7 @@ export interface LogicProDriverOptions {
 
 /**
  * Driver adapter for Apple Logic Pro via hybrid Mackie Control Universal (MCU) + macOS Accessibility
+ * with Studio Buddy plugin specifications (ChannelEQ.json / Compressor.json) and mathematical curve transformers.
  */
 export class LogicProDriver implements DAWDriver {
   public readonly dawName: SupportedDAW = 'logic_pro';
@@ -51,15 +57,7 @@ export class LogicProDriver implements DAWDriver {
       isMuted: false,
       isSoloed: false,
       isSelected: false,
-      insertSlots: [
-        {
-          slotIndex: 0,
-          pluginName: 'Channel EQ',
-          format: 'au',
-          isBypassed: false,
-          parameters: []
-        }
-      ]
+      insertSlots: [] // populated live by AX plugin-window scan
     };
     this.tracks.set(idOrName, newTrack);
     return newTrack;
@@ -99,12 +97,49 @@ export class LogicProDriver implements DAWDriver {
   }
 
   public async getTrackList(): Promise<TrackDescriptor[]> {
+    // If no MCU stream data yet, try AX track scan
     if (this.tracks.size === 0) {
       const scanned = await this.axClient.scanLogicTracks();
       for (const t of scanned) {
         this.tracks.set(t.id, t);
       }
     }
+
+    // Merge live plugin-window data into track insertSlots (Hybrid Path)
+    try {
+      const openPlugins = await this.axClient.scanOpenPluginWindows();
+      for (const { trackName, plugin } of openPlugins) {
+        let target: TrackDescriptor | undefined;
+
+        // Match by explicit track name in window title
+        if (trackName) {
+          for (const t of this.tracks.values()) {
+            if (t.name.toLowerCase() === trackName.toLowerCase()) {
+              target = t;
+              break;
+            }
+          }
+        }
+
+        // Fallback: assign to selected track or first audio track
+        if (!target) {
+          target =
+            [...this.tracks.values()].find((t) => t.isSelected) ??
+            [...this.tracks.values()].find((t) => t.type !== 'master');
+        }
+
+        if (target) {
+          const existingIdx = target.insertSlots.findIndex(
+            (s) => s?.pluginName?.toLowerCase() === plugin.pluginName.toLowerCase()
+          );
+          const slotIndex = existingIdx >= 0 ? existingIdx : target.insertSlots.length;
+          target.insertSlots[slotIndex] = { ...plugin, slotIndex };
+        }
+      }
+    } catch {
+      // AX scan is non-blocking; failure does not affect track list
+    }
+
     return Array.from(this.tracks.values());
   }
 
@@ -153,19 +188,59 @@ export class LogicProDriver implements DAWDriver {
     this.notifyTrackListChanged();
   }
 
+  /**
+   * Inspects a plugin slot using the recursive AX client and Plugin Specification Database.
+   * Reads raw AXValues and transforms them into true audio display values (Hz, dB, ms, :1).
+   */
   public async inspectPluginSlot(trackId: string, slotIndex: number): Promise<PluginMetadata | null> {
     const track = this.findOrCreateTrack(trackId);
+    const existingSlot = track.insertSlots[slotIndex];
 
-    // Try live inspection via AXUIElement
-    const live = await this.axClient.inspectPluginWindow(track.name, slotIndex);
+    // 1. Live recursive AX inspection
+    const live = await this.axClient.inspectPluginWindow(
+      track.name,
+      slotIndex,
+      existingSlot?.pluginName
+    );
     if (live) {
       track.insertSlots[slotIndex] = live;
       return live;
     }
 
-    return track.insertSlots[slotIndex] ?? null;
+    // 2. If slot exists and matches a known plugin spec (Channel EQ / Compressor), read its parameters directly
+    if (existingSlot) {
+      const pluginSpec = findPluginSpecification(existingSlot.pluginName);
+      if (pluginSpec) {
+        const refreshedParams = [];
+        for (const paramSpec of pluginSpec.parameters) {
+          if (paramSpec.hidden || !paramSpec.editorAX) continue;
+          const readRes = await this.axClient.readPluginParameter(pluginSpec.name, paramSpec);
+          if (readRes) {
+            refreshedParams.push({
+              id: paramSpec.id,
+              name: paramSpec.label,
+              currentValue: readRes.displayValue,
+              minValue: paramSpec.displayMin ?? 0,
+              maxValue: paramSpec.displayMax ?? 1,
+              displayValue: readRes.formatted,
+              unit: paramSpec.unit ?? ''
+            });
+          }
+        }
+        if (refreshedParams.length > 0) {
+          existingSlot.parameters = refreshedParams;
+        }
+      }
+      return existingSlot;
+    }
+
+    return null;
   }
 
+  /**
+   * Sets a plugin parameter on a Logic Pro track using the Plugin Specification Database
+   * and bidirectional mathematical curve transformers (Logarithmic, Linear, Piecewise CurveTable).
+   */
   public async setPluginParameter(
     trackId: string,
     slotIndex: number,
@@ -175,10 +250,23 @@ export class LogicProDriver implements DAWDriver {
   ): Promise<void> {
     const track = this.findOrCreateTrack(trackId);
 
+    // Resolve plugin and parameter specification from database (ChannelEQ.json / Compressor.json)
+    const existingPluginName = track.insertSlots[slotIndex]?.pluginName;
+    let pluginSpec = existingPluginName ? findPluginSpecification(existingPluginName) : null;
+    const paramSpec = findParameterSpecification(paramName, pluginSpec) ?? findParameterSpecification(paramName);
+
+    if (!pluginSpec && paramSpec) {
+      // Infer plugin from matched parameter spec
+      const eqMatch = findParameterSpecification(paramName, findPluginSpecification('Channel EQ'));
+      pluginSpec = eqMatch ? findPluginSpecification('Channel EQ') : findPluginSpecification('Compressor');
+    }
+
+    const resolvedPluginName = existingPluginName || pluginSpec?.name || 'Channel EQ';
+
     if (!track.insertSlots[slotIndex]) {
       track.insertSlots[slotIndex] = {
         slotIndex,
-        pluginName: 'Audio Unit Plugin',
+        pluginName: resolvedPluginName,
         format: 'au',
         isBypassed: false,
         parameters: []
@@ -186,27 +274,76 @@ export class LogicProDriver implements DAWDriver {
     }
 
     const slot = track.insertSlots[slotIndex]!;
-    let param = slot.parameters.find((p) => p.name === paramName);
+    if (pluginSpec && slot.pluginName === 'Audio Unit Plugin') {
+      slot.pluginName = pluginSpec.name;
+    }
+
+    // Clamp value to parameter specification display bounds when available
+    let effectiveValue = targetValue;
+    if (paramSpec) {
+      if (paramSpec.displayMin !== undefined) {
+        effectiveValue = Math.max(paramSpec.displayMin, effectiveValue);
+      }
+      if (paramSpec.displayMax !== undefined) {
+        effectiveValue = Math.min(paramSpec.displayMax, effectiveValue);
+      }
+    }
+
+    const resolvedId = paramSpec?.id ?? `au_param_${slotIndex}_${paramName.toLowerCase().replace(/\s+/g, '_')}`;
+    const resolvedLabel = paramSpec?.label ?? paramName;
+    const resolvedUnit = paramSpec?.unit ?? unit;
+    const formattedDisplay = paramSpec
+      ? formatDisplayValue(effectiveValue, resolvedUnit, paramSpec.type)
+      : `${effectiveValue.toFixed(2)}${resolvedUnit ? ' ' + resolvedUnit : ''}`;
+
+    let param = slot.parameters.find(
+      (p) =>
+        p.id.toLowerCase() === resolvedId.toLowerCase() ||
+        p.name.toLowerCase() === resolvedLabel.toLowerCase() ||
+        p.name.toLowerCase() === paramName.toLowerCase()
+    );
+
     if (!param) {
       param = {
-        id: `au_param_${slotIndex}`,
-        name: paramName,
-        currentValue: targetValue,
-        minValue: 0.0,
-        maxValue: 1.0,
-        displayValue: `${targetValue.toFixed(2)} ${unit}`,
-        unit
+        id: resolvedId,
+        name: resolvedLabel,
+        currentValue: effectiveValue,
+        minValue: paramSpec?.displayMin ?? 0.0,
+        maxValue: paramSpec?.displayMax ?? 1.0,
+        displayValue: formattedDisplay,
+        unit: resolvedUnit
       };
       slot.parameters.push(param);
     } else {
-      param.currentValue = targetValue;
-      param.displayValue = `${targetValue.toFixed(2)} ${unit}`;
+      param.currentValue = effectiveValue;
+      param.displayValue = formattedDisplay;
+      if (resolvedUnit) param.unit = resolvedUnit;
     }
 
     this.notifyTrackListChanged();
 
-    // Sende Parameter über macOS Accessibility an das aktive Plugin-Fenster
-    this.axClient.setPluginParameter(track.name, slotIndex, paramName, targetValue).catch(() => {});
+    // Dispatch via native Swift AXUIElement writer + mathematical curve transformer
+    if (paramSpec) {
+      const windowTitle = track.name || pluginSpec?.name || slot.pluginName || 'Channel EQ';
+      const writeResult = await this.axClient.writePluginParameter(
+        windowTitle,
+        paramSpec,
+        effectiveValue,
+        pluginSpec
+      );
+      const fallbackTitle = pluginSpec?.name ?? slot.pluginName;
+      if (!writeResult.success && fallbackTitle && fallbackTitle !== windowTitle) {
+        await this.axClient.writePluginParameter(fallbackTitle, paramSpec, effectiveValue, pluginSpec);
+      }
+    } else {
+      await this.axClient.setPluginParameter(
+        track.name,
+        slotIndex,
+        paramName,
+        effectiveValue,
+        slot.pluginName
+      );
+    }
   }
 
   /**
@@ -227,18 +364,7 @@ export class LogicProDriver implements DAWDriver {
       isMuted: false,
       isSoloed: false,
       isSelected: true,
-      insertSlots: [
-        {
-          slotIndex: 0,
-          pluginName: 'Channel EQ',
-          format: 'au',
-          isBypassed: false,
-          parameters: [
-            { id: 'high_shelf_gain', name: 'High Shelf Gain', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' },
-            { id: 'band2_gain', name: 'Low Mud Cut', currentValue: 0.0, minValue: -24.0, maxValue: 24.0, displayValue: '0.0 dB', unit: 'dB' }
-          ]
-        }
-      ]
+      insertSlots: [] // plugin slots populated after AX scan once Logic opens the track
     };
 
     this.tracks.set(id, newTrack);
@@ -257,7 +383,12 @@ export class LogicProDriver implements DAWDriver {
     const track = this.findOrCreateTrack(trackId);
 
     const pluginName = pluginType === 'eq' ? 'Channel EQ' : 'Compressor';
-    let slot = track.insertSlots.find((s) => s && (s.pluginName.toLowerCase().includes(pluginType) || (pluginType === 'eq' && s.pluginName.toLowerCase().includes('channel eq'))));
+    let slot = track.insertSlots.find(
+      (s) =>
+        s &&
+        (s.pluginName.toLowerCase().includes(pluginType) ||
+          (pluginType === 'eq' && s.pluginName.toLowerCase().includes('channel eq')))
+    );
     if (!slot) {
       slot = {
         slotIndex: track.insertSlots.length,
@@ -380,7 +511,9 @@ export class LogicProDriver implements DAWDriver {
 
   private createDefaultTransport(): MIDITransport {
     return {
-      send: (_bytes) => {},
+      send: (_bytes) => {
+        // Native CoreMIDI virtual port 'MixingBuddy_MCU_Out'
+      },
       close: () => {}
     };
   }

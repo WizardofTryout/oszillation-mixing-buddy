@@ -39,9 +39,12 @@ export const ProposeMixAdjustmentSchema = z.object({
 
 export const ExecuteMixAdjustmentSchema = z.object({
   proposalId: z.string().optional().describe('Optional ID of a previously approved proposal from the HUD queue'),
-  trackId: z.string().describe('DAW Track ID to modify'),
-  parameterName: z.string().describe('Parameter to adjust ("fader_db", "pan", or plugin param)'),
-  value: z.number().describe('Target numeric value to send to the DAW'),
+  trackId: z.string().describe('DAW Track ID or name to modify'),
+  slotIndex: z.number().int().nonnegative().optional().describe('0-indexed insert plugin slot (default: 0)'),
+  pluginName: z.string().optional().describe('Target plugin name (e.g. "Channel EQ", "Compressor")'),
+  parameterName: z.string().describe('Parameter to adjust ("fader_db", "pan", or plugin parameter like "low_cut_frequency", "peak_1_gain", "threshold", "ratio", "attack", "release", "make_up", "knee")'),
+  value: z.number().describe('Target numeric display value in audio units (Hz, dB, ms, :1, Q)'),
+  unit: z.string().optional().describe('Optional measurement unit (e.g. "dB", "Hz", "ms", ":1", "Q")'),
   isMaster: z.boolean().optional().describe('Set to true if adjusting master fader (enforces master <= 0 dB clamp)')
 });
 

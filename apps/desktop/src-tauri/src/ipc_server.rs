@@ -8,22 +8,26 @@ use tokio::sync::broadcast;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
 use crate::daw_detector::{DAWDetector, DetectedDAW};
+use crate::mcu_bridge::{AssignmentMode, McuBridge};
 
 pub struct IPCServer {
     port: u16,
     tx: broadcast::Sender<String>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
     shared_tracks: Arc<Mutex<Vec<serde_json::Value>>>,
+    pub mcu_bridge: Arc<McuBridge>,
 }
 
 impl IPCServer {
     pub fn new(port: u16) -> Self {
         let (tx, _) = broadcast::channel(100);
+        let mcu_bridge = Arc::new(McuBridge::new());
         Self {
             port,
             tx,
             app_handle: Arc::new(Mutex::new(None)),
             shared_tracks: Arc::new(Mutex::new(Vec::new())),
+            mcu_bridge,
         }
     }
 
@@ -39,10 +43,15 @@ impl IPCServer {
 
     /// Spawns the local WebSocket server on a dedicated Tokio runtime thread
     pub fn start(&self) {
+        if let Err(e) = self.mcu_bridge.start() {
+            eprintln!("⚠️ [MCU Bridge] Warning during start: {}", e);
+        }
+
         let port = self.port;
         let tx = self.tx.clone();
         let app_handle = self.app_handle.clone();
         let shared_tracks = self.shared_tracks.clone();
+        let mcu_bridge = self.mcu_bridge.clone();
 
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_multi_thread()
@@ -67,8 +76,9 @@ impl IPCServer {
                     let tx_clone = tx.clone();
                     let app_handle_clone = app_handle.clone();
                     let tracks_clone = shared_tracks.clone();
+                    let mcu_clone = mcu_bridge.clone();
                     tokio::spawn(async move {
-                        handle_connection(stream, peer_addr, tx_clone, app_handle_clone, tracks_clone).await;
+                        handle_connection(stream, peer_addr, tx_clone, app_handle_clone, tracks_clone, mcu_clone).await;
                     });
                 }
             });
@@ -82,6 +92,7 @@ async fn handle_connection(
     tx: broadcast::Sender<String>,
     app_handle: Arc<Mutex<Option<AppHandle>>>,
     shared_tracks: Arc<Mutex<Vec<serde_json::Value>>>,
+    mcu_bridge: Arc<McuBridge>,
 ) {
     let mut peek_buf = [0u8; 1024];
     let n = match stream.peek(&mut peek_buf).await {
@@ -121,14 +132,25 @@ async fn handle_connection(
 
         // 2. GET /api/tracks
         if peek_str.starts_with("GET /api/tracks") {
-            let mut track_list = shared_tracks.lock().map(|g| g.clone()).unwrap_or_default();
-            if track_list.is_empty() {
+            // Priority 1: Live MCU SysEx LCD Stream from Logic Pro
+            let mcu_tracks = mcu_bridge.get_tracks();
+            let track_list = if !mcu_tracks.is_empty() {
+                mcu_tracks
+            } else {
                 let mut detector = DAWDetector::new();
                 let daw = detector.detect_active_daw();
                 if daw == DetectedDAW::LogicPro {
-                    track_list = detector.scan_logic_pro_tracks();
+                    let scanned = detector.scan_logic_pro_tracks();
+                    if !scanned.is_empty() {
+                        scanned
+                    } else {
+                        shared_tracks.lock().map(|g| g.clone()).unwrap_or_default()
+                    }
+                } else {
+                    shared_tracks.lock().map(|g| g.clone()).unwrap_or_default()
                 }
-            }
+            };
+
             let body = serde_json::json!({
                 "tracks": track_list
             }).to_string();
@@ -205,6 +227,29 @@ async fn handle_connection(
                     if let Ok(guard) = app_handle.lock() {
                         if let Some(ref handle) = *guard {
                             let _ = handle.emit("execute-daw-action", body_str.as_str());
+                        }
+                    }
+
+                    // Directly dispatch via MCU virtual CoreMIDI bridge
+                    if let Ok(exec_val) = serde_json::from_str::<serde_json::Value>(&body_str) {
+                        let action_type = exec_val.get("actionType")
+                            .or_else(|| exec_val.get("type"))
+                            .or_else(|| exec_val.get("parameterName"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if action_type.contains("volume") || action_type.contains("fader") {
+                            let ch = exec_val.get("trackIndex").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                            let target_db = exec_val.get("proposedValue")
+                                .or_else(|| exec_val.get("targetValue"))
+                                .or_else(|| exec_val.get("value"))
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.0) as f32;
+                            let _ = mcu_bridge.apply_fader_delta_with_automation(ch, target_db);
+                        } else if action_type.contains("eq") {
+                            let ch = exec_val.get("trackIndex").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                            let delta = exec_val.get("delta").and_then(|v| v.as_i64()).unwrap_or(1) as i8;
+                            let _ = mcu_bridge.set_assignment_mode(AssignmentMode::EQ);
+                            let _ = mcu_bridge.send_vpot_delta(ch, delta);
                         }
                     }
                 }

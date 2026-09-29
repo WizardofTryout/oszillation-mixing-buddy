@@ -244,6 +244,31 @@ export class MixingBuddyMCPServer {
         return;
       }
 
+      if (url.pathname === '/api/ax-bridge' && req.method === 'POST') {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+        }
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+            args?: string[];
+          };
+          const cliArgs = Array.isArray(body.args) ? body.args.map(String) : [];
+          const { execFile } = await import('node:child_process');
+          const { promisify } = await import('node:util');
+          const execFileAsync = promisify(execFile);
+          const bridgeBin =
+            '/Volumes/Spacestation/MCP/Antigravity-MCP-tools/Steinberg-Mixing-Buddy/packages/daw-adapters/bin/logic-ax-bridge';
+          const { stdout } = await execFileAsync(bridgeBin, cliArgs, { timeout: 4000 });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(stdout.trim() || '{"success":false,"error":"Empty output from logic-ax-bridge"}');
+        } catch (err: unknown) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: String(err) }));
+        }
+        return;
+      }
+
       if (url.pathname === '/health' && req.method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
@@ -261,8 +286,12 @@ export class MixingBuddyMCPServer {
     });
 
     return new Promise((resolve) => {
+      this.httpServer?.on('error', () => {
+        // Ignore EADDRINUSE if another MCP instance is already listening on 48124
+        resolve();
+      });
       this.httpServer?.listen(port, host, () => {
-        console.error(`[MCP Server] SSE server listening on http://${host}:${port}/sse`);
+        console.error(`[MCP Server] SSE & AX-Bridge server listening on http://${host}:${port}`);
         resolve();
       });
     });

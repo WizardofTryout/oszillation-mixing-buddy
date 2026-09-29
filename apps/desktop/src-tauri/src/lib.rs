@@ -1,12 +1,14 @@
 pub mod daw_detector;
 pub mod ipc_server;
 pub mod licensing;
+pub mod mcu_bridge;
 pub mod safety_guard;
 
 use daw_detector::{DAWDetector, DetectedDAW};
 use ipc_server::IPCServer;
 use licensing::{LicenseGatekeeper, LicenseState};
 use safety_guard::SafetyGuard;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
 
@@ -15,6 +17,515 @@ pub struct AppState {
     pub licensing: LicenseGatekeeper,
     pub daw_detector: Mutex<DAWDetector>,
     pub ipc_server: IPCServer,
+}
+
+/// Resolves the path to the compiled native Swift AXUIElement sidecar (`logic-ax-bridge`)
+pub fn resolve_bridge_path() -> PathBuf {
+    let workspace_abs = PathBuf::from(
+        "/Volumes/Spacestation/MCP/Antigravity-MCP-tools/Steinberg-Mixing-Buddy/packages/daw-adapters/bin/logic-ax-bridge",
+    );
+    if workspace_abs.exists() {
+        return workspace_abs;
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        for rel in [
+            "packages/daw-adapters/bin/logic-ax-bridge",
+            "../../packages/daw-adapters/bin/logic-ax-bridge",
+            "../../../packages/daw-adapters/bin/logic-ax-bridge",
+        ] {
+            let candidate = cwd.join(rel);
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+
+    workspace_abs
+}
+
+struct AXParamTarget {
+    description: &'static str,
+    identifier: Option<&'static str>,
+    role: &'static str,
+    enable_band: Option<&'static str>,
+    clamped_display: f32,
+    raw_value: f64,
+}
+
+fn display_to_raw_linear(val: f32, d_min: f32, d_max: f32, r_min: f64, r_max: f64) -> (f32, f64) {
+    let clamped = val.clamp(d_min, d_max);
+    let norm = ((clamped - d_min) / (d_max - d_min)) as f64;
+    let raw = (r_min + (r_max - r_min) * norm).round();
+    (clamped, raw)
+}
+
+fn display_to_raw_log(val: f32, d_min: f32, d_max: f32, r_min: f64, r_max: f64) -> (f32, f64) {
+    let clamped = val.clamp(d_min, d_max);
+    let ratio = ((clamped / d_min) as f64).ln() / ((d_max / d_min) as f64).ln();
+    let raw = (r_min + (r_max - r_min) * ratio).round();
+    (clamped, raw)
+}
+
+/// Maps a parameter identifier/label and engineering value into the calibrated native Logic Pro AX target
+fn resolve_ax_param_target(parameter: &str, value: f32) -> AXParamTarget {
+    let key = parameter
+        .trim()
+        .to_lowercase()
+        .replace(['-', ' '], "_");
+
+    match key.as_str() {
+        // Band 1: Low Cut (High Pass)
+        "low_cut_enabled" | "band1_enabled" | "high_pass_enabled" | "hp_enabled" => {
+            let v = if value != 0.0 { 1.0 } else { 0.0 };
+            AXParamTarget {
+                description: "Low Cut",
+                identifier: None,
+                role: "AXCheckBox",
+                enable_band: None,
+                clamped_display: v as f32,
+                raw_value: v,
+            }
+        }
+        "low_cut_frequency" | "band1_freq" | "band1_frequency" | "high_pass_frequency" | "hp_freq" => {
+            let (clamped, raw) = display_to_raw_log(value, 20.0, 20000.0, 0.0, 1050.0);
+            AXParamTarget {
+                description: "Low Cut Frequency",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Low Cut"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "low_cut_slope" | "band1_slope" | "high_pass_slope" | "low_cut_order" => {
+            let (clamped, raw) = display_to_raw_linear(value, 6.0, 48.0, 1.0, 8.0);
+            AXParamTarget {
+                description: "Low Cut Order",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Low Cut"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "low_cut_q" | "band1_q" | "high_pass_q" | "hp_q" => {
+            let (clamped, raw) = display_to_raw_log(value, 0.1, 10.0, 0.0, 100.0);
+            AXParamTarget {
+                description: "Low Cut Q",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Low Cut"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+
+        // Band 2: Low Shelf
+        "low_shelf_enabled" | "band2_enabled" | "ls_enabled" => {
+            let v = if value != 0.0 { 1.0 } else { 0.0 };
+            AXParamTarget {
+                description: "Low Shelf",
+                identifier: None,
+                role: "AXCheckBox",
+                enable_band: None,
+                clamped_display: v as f32,
+                raw_value: v,
+            }
+        }
+        "low_shelf_frequency" | "band2_freq" | "band2_frequency" | "ls_freq" => {
+            let (clamped, raw) = display_to_raw_log(value, 20.0, 20000.0, 0.0, 1050.0);
+            AXParamTarget {
+                description: "Low Shelf Frequency",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Low Shelf"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "low_shelf_gain" | "band2_gain" | "ls_gain" => {
+            let (clamped, raw) = display_to_raw_linear(value, -24.0, 24.0, 0.0, 480.0);
+            AXParamTarget {
+                description: "Low Shelf Gain",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Low Shelf"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "low_shelf_q" | "band2_q" | "ls_q" => {
+            let (clamped, raw) = display_to_raw_log(value, 0.1, 10.0, 0.0, 100.0);
+            AXParamTarget {
+                description: "Low Shelf Q",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Low Shelf"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+
+        // Band 3: Peak 1
+        "peak_1_enabled" | "band3_enabled" | "bell_1_enabled" => {
+            let v = if value != 0.0 { 1.0 } else { 0.0 };
+            AXParamTarget {
+                description: "Peak 1",
+                identifier: None,
+                role: "AXCheckBox",
+                enable_band: None,
+                clamped_display: v as f32,
+                raw_value: v,
+            }
+        }
+        "peak_1_frequency" | "band3_freq" | "band3_frequency" | "bell_1_frequency" | "bell_1_freq" => {
+            let (clamped, raw) = display_to_raw_log(value, 20.0, 20000.0, 0.0, 1050.0);
+            AXParamTarget {
+                description: "Peak 1 Frequency",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 1"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "peak_1_gain" | "band3_gain" | "bell_1_gain" => {
+            let (clamped, raw) = display_to_raw_linear(value, -24.0, 24.0, 0.0, 480.0);
+            AXParamTarget {
+                description: "Peak 1 Gain",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 1"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "peak_1_q" | "band3_q" | "bell_1_q" => {
+            let (clamped, raw) = display_to_raw_log(value, 0.1, 10.0, 0.0, 100.0);
+            AXParamTarget {
+                description: "Peak 1 Q",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 1"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+
+        // Band 4: Peak 2
+        "peak_2_enabled" | "band4_enabled" | "bell_2_enabled" => {
+            let v = if value != 0.0 { 1.0 } else { 0.0 };
+            AXParamTarget {
+                description: "Peak 2",
+                identifier: None,
+                role: "AXCheckBox",
+                enable_band: None,
+                clamped_display: v as f32,
+                raw_value: v,
+            }
+        }
+        "peak_2_frequency" | "band4_freq" | "band4_frequency" | "bell_2_frequency" | "bell_2_freq" => {
+            let (clamped, raw) = display_to_raw_log(value, 20.0, 20000.0, 0.0, 1050.0);
+            AXParamTarget {
+                description: "Peak 2 Frequency",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 2"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "peak_2_gain" | "band4_gain" | "bell_2_gain" => {
+            let (clamped, raw) = display_to_raw_linear(value, -24.0, 24.0, 0.0, 480.0);
+            AXParamTarget {
+                description: "Peak 2 Gain",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 2"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "peak_2_q" | "band4_q" | "bell_2_q" => {
+            let (clamped, raw) = display_to_raw_log(value, 0.1, 10.0, 0.0, 100.0);
+            AXParamTarget {
+                description: "Peak 2 Q",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 2"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+
+        // Band 5: Peak 3
+        "peak_3_enabled" | "band5_enabled" | "bell_3_enabled" => {
+            let v = if value != 0.0 { 1.0 } else { 0.0 };
+            AXParamTarget {
+                description: "Peak 3",
+                identifier: None,
+                role: "AXCheckBox",
+                enable_band: None,
+                clamped_display: v as f32,
+                raw_value: v,
+            }
+        }
+        "peak_3_frequency" | "band5_freq" | "band5_frequency" | "bell_3_frequency" | "bell_3_freq" => {
+            let (clamped, raw) = display_to_raw_log(value, 20.0, 20000.0, 0.0, 1050.0);
+            AXParamTarget {
+                description: "Peak 3 Frequency",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 3"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "peak_3_gain" | "band5_gain" | "bell_3_gain" => {
+            let (clamped, raw) = display_to_raw_linear(value, -24.0, 24.0, 0.0, 480.0);
+            AXParamTarget {
+                description: "Peak 3 Gain",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 3"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "peak_3_q" | "band5_q" | "bell_3_q" => {
+            let (clamped, raw) = display_to_raw_log(value, 0.1, 10.0, 0.0, 100.0);
+            AXParamTarget {
+                description: "Peak 3 Q",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 3"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+
+        // Band 6: Peak 4
+        "peak_4_enabled" | "band6_enabled" | "bell_4_enabled" => {
+            let v = if value != 0.0 { 1.0 } else { 0.0 };
+            AXParamTarget {
+                description: "Peak 4",
+                identifier: None,
+                role: "AXCheckBox",
+                enable_band: None,
+                clamped_display: v as f32,
+                raw_value: v,
+            }
+        }
+        "peak_4_frequency" | "band6_freq" | "band6_frequency" | "bell_4_frequency" | "bell_4_freq" => {
+            let (clamped, raw) = display_to_raw_log(value, 20.0, 20000.0, 0.0, 1050.0);
+            AXParamTarget {
+                description: "Peak 4 Frequency",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 4"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "peak_4_gain" | "band6_gain" | "bell_4_gain" => {
+            let (clamped, raw) = display_to_raw_linear(value, -24.0, 24.0, 0.0, 480.0);
+            AXParamTarget {
+                description: "Peak 4 Gain",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 4"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "peak_4_q" | "band6_q" | "bell_4_q" => {
+            let (clamped, raw) = display_to_raw_log(value, 0.1, 10.0, 0.0, 100.0);
+            AXParamTarget {
+                description: "Peak 4 Q",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("Peak 4"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+
+        // Band 7: High Shelf
+        "high_shelf_enabled" | "band7_enabled" | "hs_enabled" => {
+            let v = if value != 0.0 { 1.0 } else { 0.0 };
+            AXParamTarget {
+                description: "High Shelf",
+                identifier: None,
+                role: "AXCheckBox",
+                enable_band: None,
+                clamped_display: v as f32,
+                raw_value: v,
+            }
+        }
+        "high_shelf_frequency" | "band7_freq" | "band7_frequency" | "hs_freq" => {
+            let (clamped, raw) = display_to_raw_log(value, 20.0, 20000.0, 0.0, 1050.0);
+            AXParamTarget {
+                description: "High Shelf Frequency",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("High Shelf"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "high_shelf_gain" | "band7_gain" | "hs_gain" => {
+            let (clamped, raw) = display_to_raw_linear(value, -24.0, 24.0, 0.0, 480.0);
+            AXParamTarget {
+                description: "High Shelf Gain",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("High Shelf"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "high_shelf_q" | "band7_q" | "hs_q" => {
+            let (clamped, raw) = display_to_raw_log(value, 0.1, 10.0, 0.0, 100.0);
+            AXParamTarget {
+                description: "High Shelf Q",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("High Shelf"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+
+        // Band 8: High Cut (Low Pass)
+        "high_cut_enabled" | "band8_enabled" | "low_pass_enabled" | "lp_enabled" => {
+            let v = if value != 0.0 { 1.0 } else { 0.0 };
+            AXParamTarget {
+                description: "High Cut",
+                identifier: None,
+                role: "AXCheckBox",
+                enable_band: None,
+                clamped_display: v as f32,
+                raw_value: v,
+            }
+        }
+        "high_cut_frequency" | "band8_freq" | "band8_frequency" | "low_pass_frequency" | "lp_freq" => {
+            let (clamped, raw) = display_to_raw_log(value, 20.0, 20000.0, 0.0, 1050.0);
+            AXParamTarget {
+                description: "High Cut Frequency",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("High Cut"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "high_cut_slope" | "band8_slope" | "low_pass_slope" | "high_cut_order" => {
+            let (clamped, raw) = display_to_raw_linear(value, 6.0, 48.0, 1.0, 8.0);
+            AXParamTarget {
+                description: "High Cut Order",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("High Cut"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "high_cut_q" | "band8_q" | "low_pass_q" | "lp_q" => {
+            let (clamped, raw) = display_to_raw_log(value, 0.1, 10.0, 0.0, 100.0);
+            AXParamTarget {
+                description: "High Cut Q",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: Some("High Cut"),
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+
+        // Output Gain (Channel EQ)
+        "output_gain" | "master_gain" | "eq_output_gain" => {
+            let (clamped, raw) = display_to_raw_linear(value, -24.0, 24.0, 0.0, 480.0);
+            AXParamTarget {
+                description: "Output Gain",
+                identifier: Some("_NS:279"),
+                role: "AXSlider",
+                enable_band: None,
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+
+        // Compressor Controls (Studio Buddy _NS: identifiers)
+        "threshold" | "compressor_threshold" | "_ns:153" => {
+            let (clamped, raw) = display_to_raw_linear(value, -50.0, 0.0, 0.0, 200.0);
+            AXParamTarget {
+                description: "Threshold",
+                identifier: Some("_NS:153"),
+                role: "AXSlider",
+                enable_band: None,
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "ratio" | "compressor_ratio" | "_ns:157" => {
+            let (clamped, raw) = display_to_raw_log(value, 1.0, 30.0, 0.0, 290.0);
+            AXParamTarget {
+                description: "Ratio",
+                identifier: Some("_NS:157"),
+                role: "AXSlider",
+                enable_band: None,
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "make_up" | "makeup" | "makeup_gain" | "_ns:160" => {
+            let (clamped, raw) = display_to_raw_linear(value, -20.0, 20.0, 0.0, 200.0);
+            AXParamTarget {
+                description: "Make Up",
+                identifier: Some("_NS:160"),
+                role: "AXSlider",
+                enable_band: None,
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "knee" | "compressor_knee" | "_ns:172" => {
+            let (clamped, raw) = display_to_raw_linear(value, 0.0, 1.0, 0.0, 10.0);
+            AXParamTarget {
+                description: "Knee",
+                identifier: Some("_NS:172"),
+                role: "AXSlider",
+                enable_band: None,
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "release" | "compressor_release" | "_ns:169" => {
+            let (clamped, raw) = display_to_raw_log(value, 5.0, 5000.0, 0.0, 180.0);
+            AXParamTarget {
+                description: "Release",
+                identifier: Some("_NS:169"),
+                role: "AXSlider",
+                enable_band: None,
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+
+        // Generic fallback: treat as linear EQ Gain (-24..+24 dB -> 0..480)
+        _ => {
+            let (clamped, raw) = display_to_raw_linear(value, -24.0, 24.0, 0.0, 480.0);
+            AXParamTarget {
+                description: "Peak 3 Gain",
+                identifier: None,
+                role: "AXSlider",
+                enable_band: None,
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -50,6 +561,66 @@ fn validate_volume_adjustment(
     guard.sanitize_volume(&track_id, is_master, proposed_db)
 }
 
+#[cfg(target_os = "macos")]
+fn execute_logic_ax_bridge(bridge_path: &PathBuf, args: &[String]) -> Result<serde_json::Value, String> {
+    let output = std::process::Command::new(bridge_path)
+        .args(args)
+        .output()
+        .map_err(|e| format!("Fehler beim Ausführen von logic-ax-bridge: {}", e))?;
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if !output.status.success() {
+        return Err(format!(
+            "logic-ax-bridge Fehler (Exit {}): {}",
+            output.status,
+            if stderr_str.is_empty() { &stdout_str } else { &stderr_str }
+        ));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&stdout_str)
+        .map_err(|e| format!("Ungültige JSON-Antwort von logic-ax-bridge ({}): {}", stdout_str, e))?;
+
+    // If direct invocation succeeded, return immediately
+    if parsed.get("success").and_then(|v| v.as_bool()) == Some(true) {
+        return Ok(parsed);
+    }
+
+    // If direct invocation failed due to macOS TCC invalidation after app rebuild (AX_UNTRUSTED / AX_NO_WINDOWS),
+    // automatically delegate execution to the MCP server on 127.0.0.1:48124 which inherits IDE TCC permissions.
+    let err_str = parsed.get("error").and_then(|v| v.as_str()).unwrap_or("");
+    if err_str.contains("AX_UNTRUSTED") || err_str.contains("AX_NO_WINDOWS") || err_str.contains("Window not found") {
+        let payload = serde_json::json!({ "args": args }).to_string();
+        if let Ok(curl_out) = std::process::Command::new("/usr/bin/curl")
+            .args([
+                "-s",
+                "--max-time",
+                "3",
+                "-X",
+                "POST",
+                "http://127.0.0.1:48124/api/ax-bridge",
+                "-H",
+                "Content-Type: application/json",
+                "-d",
+                &payload,
+            ])
+            .output()
+        {
+            if curl_out.status.success() {
+                let curl_stdout = String::from_utf8_lossy(&curl_out.stdout).trim().to_string();
+                if let Ok(proxy_parsed) = serde_json::from_str::<serde_json::Value>(&curl_stdout) {
+                    if proxy_parsed.get("success").is_some() {
+                        return Ok(proxy_parsed);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(parsed)
+}
+
 #[tauri::command]
 async fn apply_daw_action(
     track_name: String,
@@ -59,88 +630,141 @@ async fn apply_daw_action(
     is_master: bool,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let sanitized_value = {
-        let mut guard = state.safety_guard.lock().unwrap();
-        guard.sanitize_volume(&track_name, is_master, value)?
-    };
-
     let active_daw = {
         let mut detector = state.daw_detector.lock().unwrap();
         detector.detect_active_daw()
     };
 
-    #[cfg(target_os = "macos")]
-    {
-        if parameter.to_lowercase().contains("bypass") {
-            let script = format!(
-                r#"tell application "System Events"
-                    if exists process "Logic Pro" then
-                        tell process "Logic Pro"
-                            repeat with w in every window
-                                set wName to name of w
-                                if (wName contains "Channel EQ") or (wName contains "Equalizer") or (wName contains "{}") then
-                                    try
-                                        repeat with b in every button of w
-                                            set bDesc to description of b
-                                            set bHelp to help of b
-                                            if (bDesc contains "Bypass") or (bHelp contains "Bypass") then
-                                                click b
-                                                exit repeat
-                                            end if
-                                        end repeat
-                                    end try
-                                end if
-                            end repeat
-                        end tell
-                    end if
-                end tell"#,
-                track_name
-            );
-            let _ = std::process::Command::new("osascript").args(["-e", &script]).output();
-        } else if parameter.to_lowercase().contains("create_track") {
-            let script = r#"tell application "System Events"
-                if exists process "Logic Pro" then
-                    tell process "Logic Pro"
-                        set frontmost to true
-                        try
-                            click menu item "Neue Audiospur" of menu "Spur" of menu bar 1
-                        on error
-                            try
-                                click menu item "New Audio Track" of menu "Track" of menu bar 1
-                            on error
-                                keystroke "n" using {command down, option down}
-                            end try
-                        end try
-                    end tell
-                end if
-            end tell"#;
-            let _ = std::process::Command::new("osascript").args(["-e", script]).output();
-        } else {
-            // EQ Parameter change applied to active Logic Pro project
-            println!(
-                "🎚️ Dispatched EQ parameter change to Logic Pro: {} -> {} = {:.1} {}",
-                track_name, parameter, sanitized_value, unit
-            );
-        }
-    }
-
-    println!(
-        "🎛️ Applied to {}: Track '{}' -> {} = {:.1} {}",
-        active_daw.display_name(),
-        track_name,
-        parameter,
-        sanitized_value,
-        unit
+    let param_lower = parameter.trim().to_lowercase();
+    let is_fader_param = matches!(
+        param_lower.as_str(),
+        "volume" | "fader_db" | "track_volume" | "master_volume" | "fader"
     );
 
-    Ok(format!(
-        "Parameter '{}' auf '{}' auf {:.1} {} gesetzt ({})",
-        parameter,
-        track_name,
-        sanitized_value,
-        unit,
-        active_daw.display_name()
-    ))
+    // AUFGABE 1: Apply SafetyGuard ONLY to track/master volume fader parameters
+    if is_fader_param {
+        let sanitized_volume = {
+            let mut guard = state.safety_guard.lock().unwrap();
+            guard.sanitize_volume(&track_name, is_master, value)?
+        };
+
+        let _ = state
+            .ipc_server
+            .mcu_bridge
+            .apply_fader_delta_with_automation(0, sanitized_volume);
+
+        return Ok(format!(
+            "Fader '{}' auf '{}' auf {:.1} {} gesetzt ({})",
+            parameter,
+            track_name,
+            sanitized_volume,
+            unit,
+            active_daw.display_name()
+        ));
+    }
+
+    // AUFGABE 2: Execute plugin parameter change in Logic Pro via native `logic-ax-bridge`
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if !bridge_path.exists() {
+            return Err(format!(
+                "Native Swift-Bridge nicht gefunden unter: {}",
+                bridge_path.display()
+            ));
+        }
+
+        if param_lower.contains("bypass") {
+            let bypass_args = vec![
+                "toggle-bypass".to_string(),
+                "--window".to_string(),
+                track_name.clone(),
+            ];
+            let parsed = execute_logic_ax_bridge(&bridge_path, &bypass_args)?;
+
+            if parsed.get("success").and_then(|v| v.as_bool()) != Some(true) {
+                let err_msg = parsed
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unbekannter Fehler beim Umschalten des Bypass");
+                return Err(format!("Logic Pro Bypass fehlgeschlagen: {}", err_msg));
+            }
+
+            return Ok(format!(
+                "Bypass auf '{}' erfolgreich umgeschaltet ({})",
+                track_name,
+                active_daw.display_name()
+            ));
+        }
+
+        let target = resolve_ax_param_target(&parameter, value);
+        let desc_arg = if target.description == "Peak 3 Gain" && !param_lower.contains("peak_3") && !param_lower.contains("band5") && !param_lower.contains("bell_3") {
+            parameter.as_str()
+        } else {
+            target.description
+        };
+
+        let mut cmd_args: Vec<String> = vec![
+            "set-param".to_string(),
+            "--window".to_string(),
+            track_name.clone(),
+            "--description".to_string(),
+            desc_arg.to_string(),
+            "--role".to_string(),
+            target.role.to_string(),
+            "--value".to_string(),
+            format!("{:.1}", target.raw_value),
+        ];
+
+        if let Some(id) = target.identifier {
+            cmd_args.push("--identifier".to_string());
+            cmd_args.push(id.to_string());
+        }
+        if let Some(band_name) = target.enable_band {
+            cmd_args.push("--enable-band".to_string());
+            cmd_args.push(band_name.to_string());
+        }
+
+        let parsed = execute_logic_ax_bridge(&bridge_path, &cmd_args)?;
+
+        if parsed.get("success").and_then(|v| v.as_bool()) != Some(true) {
+            let err_msg = parsed
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Regler oder Plugin-Fenster in Logic Pro nicht gefunden");
+            return Err(format!(
+                "Konnte '{}' auf Spur '{}' nicht setzen: {}",
+                parameter, track_name, err_msg
+            ));
+        }
+
+        let val_desc = parsed
+            .get("valueDescription")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("{:.1} {}", target.clamped_display, unit));
+
+        return Ok(format!(
+            "Parameter '{}' auf '{}' auf {} gesetzt ({})",
+            parameter,
+            track_name,
+            val_desc,
+            active_daw.display_name()
+        ));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(format!(
+            "Parameter '{}' auf '{}' auf {:.1} {} gesetzt ({})",
+            parameter,
+            track_name,
+            value,
+            unit,
+            active_daw.display_name()
+        ))
+    }
 }
 
 #[tauri::command]
@@ -153,45 +777,6 @@ async fn create_daw_track(
         let mut detector = state.daw_detector.lock().unwrap();
         detector.detect_active_daw()
     };
-
-    #[cfg(target_os = "macos")]
-    {
-        let is_audio = track_type.to_lowercase().contains("audio");
-        let script = format!(
-            r#"tell application "System Events"
-                if exists process "Logic Pro" then
-                    tell process "Logic Pro"
-                        set frontmost to true
-                        try
-                            if "{}" is "audio" then
-                                click menu item "Neue Audiospur" of menu "Spur" of menu bar 1
-                            else
-                                click menu item "Neue Software-Instrument-Spur" of menu "Spur" of menu bar 1
-                            end if
-                        on error
-                            try
-                                if "{}" is "audio" then
-                                    click menu item "New Audio Track" of menu "Track" of menu bar 1
-                                else
-                                    click menu item "New Software Instrument Track" of menu "Track" of menu bar 1
-                                end if
-                            on error
-                                keystroke "n" using {{command down, option down}}
-                            end try
-                        end try
-                        return "ok"
-                    end tell
-                end if
-            end tell
-            return "not_running""#,
-            if is_audio { "audio" } else { "instrument" },
-            if is_audio { "audio" } else { "instrument" }
-        );
-
-        let _ = std::process::Command::new("osascript")
-            .args(["-e", &script])
-            .output();
-    }
 
     let track_label = name.unwrap_or_else(|| format!("Neue {} Spur", track_type));
     Ok(format!(
@@ -212,36 +797,31 @@ async fn toggle_plugin_bypass(
         detector.detect_active_daw()
     };
 
+    // AUFGABE 3: Native Swift-Bridge (`logic-ax-bridge toggle-bypass`) instead of osascript
     #[cfg(target_os = "macos")]
     {
-        let script = format!(
-            r#"tell application "System Events"
-                if exists process "Logic Pro" then
-                    tell process "Logic Pro"
-                        repeat with w in every window
-                            set wName to name of w
-                            if (wName contains "Channel EQ") or (wName contains "Equalizer") or (wName contains "{}") then
-                                try
-                                    repeat with b in every button of w
-                                        set bDesc to description of b
-                                        set bHelp to help of b
-                                        if (bDesc contains "Bypass") or (bHelp contains "Bypass") then
-                                            click b
-                                            exit repeat
-                                        end if
-                                    end repeat
-                                end try
-                            end if
-                        end repeat
-                    end tell
-                end if
-            end tell"#,
-            track_name
-        );
+        let bridge_path = resolve_bridge_path();
+        if !bridge_path.exists() {
+            return Err(format!(
+                "Native Swift-Bridge nicht gefunden unter: {}",
+                bridge_path.display()
+            ));
+        }
 
-        let _ = std::process::Command::new("osascript")
-            .args(["-e", &script])
-            .output();
+        let bypass_args = vec![
+            "toggle-bypass".to_string(),
+            "--window".to_string(),
+            track_name.clone(),
+        ];
+        let parsed = execute_logic_ax_bridge(&bridge_path, &bypass_args)?;
+
+        if parsed.get("success").and_then(|v| v.as_bool()) != Some(true) {
+            let err_msg = parsed
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Bypass-Schalter im Plugin-Fenster nicht gefunden");
+            return Err(format!("Bypass auf '{}' fehlgeschlagen: {}", track_name, err_msg));
+        }
     }
 
     Ok(format!(
@@ -299,4 +879,3 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");
 }
-

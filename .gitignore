@@ -51,3 +51,8 @@ Cargo.lock
 *.sublime-workspace
 .env
 .env.local
+
+# External reference repos & compiled sidecar binaries
+Studio-Buddy-ai-demo/
+packages/daw-adapters/bin/
+

@@ -1,5 +1,9 @@
 import WebSocket from 'ws';
-import type { DAWDriver } from '@mixing-buddy/daw-adapters';
+import {
+  findParameterSpecification,
+  findPluginSpecification,
+  type DAWDriver
+} from '@mixing-buddy/daw-adapters';
 import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from '@mixing-buddy/shared-types';
 import type {
   AuditionRegionInput,
@@ -117,7 +121,22 @@ export class MixingToolHandlers {
     connected: boolean;
     error?: string;
   }> {
-    // 1. Live query to Desktop Companion HTTP API on 127.0.0.1:48123/api/tracks
+    // 1. Query dawDriver directly for live AX track & open plugin parameter inspection
+    if (this.dawDriver) {
+      try {
+        const liveTracks = await this.dawDriver.getTrackList();
+        if (liveTracks.length > 0) {
+          return {
+            tracks: liveTracks,
+            connected: this.dawDriver.isConnected
+          };
+        }
+      } catch {
+        // Fallback to HTTP API below
+      }
+    }
+
+    // 2. Live query to Desktop Companion HTTP API on 127.0.0.1:48123/api/tracks
     try {
       const res = await fetch('http://127.0.0.1:48123/api/tracks', {
         signal: AbortSignal.timeout(2000)
@@ -135,17 +154,6 @@ export class MixingToolHandlers {
       // Desktop companion not reachable or starting up
     }
 
-    // 2. Query dawDriver directly if injected
-    if (this.dawDriver) {
-      const tracks = await this.dawDriver.getTrackList();
-      if (tracks.length > 0) {
-        return {
-          tracks,
-          connected: this.dawDriver.isConnected
-        };
-      }
-    }
-
     // 3. STRICT RULE: NO MOCK ARRAYS! Never simulate tracks!
     return {
       tracks: [],
@@ -158,7 +166,9 @@ export class MixingToolHandlers {
     proposal: MixActionProposal;
     shieldStatus: 'passed' | 'clamped' | 'rejected';
   }> {
-    // Validate each delta against Acoustic Shock Shield
+    let shieldStatus: 'passed' | 'clamped' | 'rejected' = 'passed';
+
+    // Validate each delta against Acoustic Shock Shield and Plugin Specification bounds
     for (const delta of args.deltas) {
       if (delta.parameterName === 'fader_db' || delta.parameterName === 'volume') {
         const isMaster = delta.trackName.toLowerCase().includes('master');
@@ -173,6 +183,24 @@ export class MixingToolHandlers {
           throw new Error(
             `Acoustic Shield: Single-step jump of +${(delta.proposedValue - prev).toFixed(1)} dB exceeds safety threshold of +3.0 dB`
           );
+        }
+      } else if (delta.parameterName !== 'pan') {
+        const pluginSpec = delta.pluginName ? findPluginSpecification(delta.pluginName) : null;
+        const paramSpec =
+          findParameterSpecification(delta.parameterName, pluginSpec) ??
+          findParameterSpecification(delta.parameterName);
+        if (paramSpec) {
+          if (paramSpec.displayMin !== undefined && delta.proposedValue < paramSpec.displayMin) {
+            delta.proposedValue = paramSpec.displayMin;
+            shieldStatus = 'clamped';
+          }
+          if (paramSpec.displayMax !== undefined && delta.proposedValue > paramSpec.displayMax) {
+            delta.proposedValue = paramSpec.displayMax;
+            shieldStatus = 'clamped';
+          }
+          if (!delta.unit && paramSpec.unit) {
+            delta.unit = paramSpec.unit;
+          }
         }
       }
     }
@@ -190,7 +218,7 @@ export class MixingToolHandlers {
 
     this.proposals.set(proposal.id, proposal);
     await this.broadcastProposalToHUD(proposal);
-    return { proposal, shieldStatus: 'passed' };
+    return { proposal, shieldStatus };
   }
 
   public async executeMixAdjustment(args: ExecuteMixAdjustmentInput): Promise<{
@@ -203,6 +231,8 @@ export class MixingToolHandlers {
     const maxCeiling = isMaster ? 0.0 : 6.0;
 
     let clampedValue = args.value;
+    const slotIndex = args.slotIndex ?? 0;
+
     if (args.parameterName === 'fader_db' || args.parameterName === 'volume') {
       clampedValue = Math.min(Math.max(args.value, -96.0), maxCeiling);
 
@@ -222,6 +252,31 @@ export class MixingToolHandlers {
       if (this.dawDriver) {
         await this.dawDriver.setTrackPan(args.trackId, clampedValue);
       }
+    } else {
+      // Plugin Parameter adjustment (Channel EQ, Compressor, or 3rd-party AU/VST3)
+      const pluginSpec = args.pluginName ? findPluginSpecification(args.pluginName) : null;
+      const paramSpec =
+        findParameterSpecification(args.parameterName, pluginSpec) ??
+        findParameterSpecification(args.parameterName);
+
+      if (paramSpec) {
+        if (paramSpec.displayMin !== undefined) {
+          clampedValue = Math.max(paramSpec.displayMin, clampedValue);
+        }
+        if (paramSpec.displayMax !== undefined) {
+          clampedValue = Math.min(paramSpec.displayMax, clampedValue);
+        }
+      }
+
+      if (this.dawDriver) {
+        await this.dawDriver.setPluginParameter(
+          args.trackId,
+          slotIndex,
+          paramSpec?.id ?? args.parameterName,
+          clampedValue,
+          args.unit ?? paramSpec?.unit ?? ''
+        );
+      }
     }
 
     if (args.proposalId && this.proposals.has(args.proposalId)) {
@@ -230,15 +285,18 @@ export class MixingToolHandlers {
       await this.broadcastProposalToHUD(p);
     }
 
-    // Forward execution command to Desktop Companion HUD
+    // Forward execution command to Desktop Companion HUD (/api/execute-action)
     try {
-      await fetch('http://127.0.0.1:48123/api/execute', {
+      await fetch('http://127.0.0.1:48123/api/execute-action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           trackId: args.trackId,
+          slotIndex,
+          pluginName: args.pluginName,
           parameterName: args.parameterName,
           value: clampedValue,
+          unit: args.unit,
           isMaster
         })
       });
