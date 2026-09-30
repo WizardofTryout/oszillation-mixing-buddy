@@ -1,6 +1,11 @@
 #include "TelemetryClient.h"
 #include <random>
 
+#if JUCE_MAC
+#include <sys/socket.h>
+#include <signal.h>
+#endif
+
 namespace mixing_buddy
 {
 
@@ -24,10 +29,12 @@ void TelemetryClient::startStreaming(double sampleRate)
 void TelemetryClient::stopStreaming()
 {
     shouldStop.store(true);
+    connected.store(false);
     signalThreadShouldExit();
+    notify();
     if (socket.isConnected())
         socket.close();
-    stopThread(2000);
+    stopThread(1000);
 }
 
 void TelemetryClient::updateMetrics(const LoudnessSnapshot& loudness, const SpectralSnapshot& spectral)
@@ -42,9 +49,19 @@ bool TelemetryClient::attemptConnect()
     if (socket.isConnected())
         socket.close();
 
-    // Connect to local companion engine on port 48123 (timeout 500ms)
-    if (!socket.connect("127.0.0.1", 48123, 500))
+    // Connect to local companion engine on port 48123 (timeout 300ms)
+    if (!socket.connect("127.0.0.1", 48123, 300))
         return false;
+
+#if JUCE_MAC
+    int handle = socket.getRawSocketHandle();
+    if (handle >= 0)
+    {
+        int set = 1;
+        setsockopt(handle, SOL_SOCKET, SO_NOSIGPIPE, &set, sizeof(set));
+    }
+    signal(SIGPIPE, SIG_IGN);
+#endif
 
     if (!sendWebSocketHandshake())
     {
@@ -142,6 +159,9 @@ bool TelemetryClient::sendWebSocketTextFrame(const juce::String& text)
     }
     frame.append(maskedPayload.getData(), payloadLen);
 
+    if (!socket.isConnected())
+        return false;
+
     int written = socket.write(frame.getData(), static_cast<int>(frame.getSize()));
     return written == static_cast<int>(frame.getSize());
 }
@@ -201,6 +221,10 @@ juce::String TelemetryClient::buildJsonPayload(uint64_t seq)
 
 void TelemetryClient::run()
 {
+#if JUCE_MAC
+    signal(SIGPIPE, SIG_IGN);
+#endif
+
     while (!threadShouldExit() && !shouldStop.load())
     {
         if (!connected.load())
@@ -211,8 +235,11 @@ void TelemetryClient::run()
             }
             else
             {
-                // Wait 1.5 seconds before retrying connection
-                wait(1500);
+                // Wait safely in small increments so we can exit immediately if requested
+                for (int i = 0; i < 30 && !threadShouldExit() && !shouldStop.load(); ++i)
+                {
+                    wait(50);
+                }
                 continue;
             }
         }
@@ -224,8 +251,13 @@ void TelemetryClient::run()
         if (!sendWebSocketTextFrame(payload))
         {
             connected.store(false);
-            socket.close();
-            wait(1000);
+            if (socket.isConnected())
+                socket.close();
+
+            for (int i = 0; i < 20 && !threadShouldExit() && !shouldStop.load(); ++i)
+            {
+                wait(50);
+            }
         }
         else
         {

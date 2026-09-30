@@ -149,11 +149,13 @@ func findTargetWindow(_ appElement: AXUIElement, query: String) -> AXUIElement? 
 }
 
 func buildWindowError(_ appElement: AXUIElement, query: String) -> String {
-    if !AXIsProcessTrusted() {
-        return "AX_UNTRUSTED: Fehlende macOS Bedienungshilfen-Berechtigung für den aufrufenden Prozess"
-    }
     let windows = getLogicWindows(appElement)
     if windows.isEmpty {
+        if !AXIsProcessTrusted() {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+            return "AX_UNTRUSTED: Fehlende macOS Bedienungshilfen-Berechtigung für den aufrufenden Prozess"
+        }
         return "AX_NO_WINDOWS: Keine zugänglichen Fenster in Logic Pro gefunden"
     }
     let names = windows.compactMap { w -> String? in
@@ -607,11 +609,6 @@ guard let appElement = findLogicApplicationElement() else {
         exit(0)
     }
     printJSON(["success": false, "error": "Logic Pro is not running"])
-    exit(0)
-}
-
-if !AXIsProcessTrusted() {
-    printJSON(["success": false, "error": "AX_UNTRUSTED: Fehlende macOS Bedienungshilfen-Berechtigung"])
     exit(0)
 }
 
@@ -1112,6 +1109,12 @@ case "set-fader":
     }
     
     guard let strip = targetStrip else {
+        if stripElements.isEmpty && !AXIsProcessTrusted() {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+            printJSON(["success": false, "error": "AX_UNTRUSTED: Fehlende macOS Bedienungshilfen-Berechtigung"])
+            exit(0)
+        }
         let known = stripElements.map { parseChannelStripElement($0).trackName }.joined(separator: ", ")
         printJSON(["success": false, "error": "Kanal für Spur '\(trackQuery)' nicht gefunden. Verfügbar: [\(known)]"])
         exit(0)
@@ -1157,6 +1160,12 @@ case "set-pan":
     }
     
     guard let strip = targetStrip else {
+        if stripElements.isEmpty && !AXIsProcessTrusted() {
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+            printJSON(["success": false, "error": "AX_UNTRUSTED: Fehlende macOS Bedienungshilfen-Berechtigung"])
+            exit(0)
+        }
         let known = stripElements.map { parseChannelStripElement($0).trackName }.joined(separator: ", ")
         printJSON(["success": false, "error": "Kanal für Spur '\(trackQuery)' nicht gefunden. Verfügbar: [\(known)]"])
         exit(0)

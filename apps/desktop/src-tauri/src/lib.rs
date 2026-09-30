@@ -758,13 +758,13 @@ async fn apply_daw_action(
     let param_lower = parameter.trim().to_lowercase();
     let is_fader_param = matches!(
         param_lower.as_str(),
-        "volume" | "fader_db" | "track_volume" | "master_volume" | "fader"
-    );
+        "volume" | "fader_db" | "track_volume" | "master_volume" | "fader" | "volume fader" | "fader volume" | "vol" | "lautstärke" | "pegel"
+    ) || param_lower.contains("volume") || param_lower.contains("fader") || param_lower.contains("lautstärke");
 
     let is_pan_param = matches!(
         param_lower.as_str(),
-        "pan" | "stereo_pan" | "balance"
-    );
+        "pan" | "stereo_pan" | "balance" | "panorama"
+    ) || param_lower.contains("pan") || param_lower.contains("balance") || param_lower.contains("panorama");
 
     // ── Direct Fader: no window needed ──────────────────────────────────────────
     if is_fader_param {

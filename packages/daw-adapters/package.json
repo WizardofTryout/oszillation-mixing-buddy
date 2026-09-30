@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build:swift": "mkdir -p bin && swiftc -O -framework ApplicationServices -framework Cocoa src/logic/swift/LogicAXBridge.swift -o bin/logic-ax-bridge && chmod +x bin/logic-ax-bridge",
+    "build:swift": "mkdir -p bin && swiftc -O -framework ApplicationServices -framework Cocoa src/logic/swift/LogicAXBridge.swift -o bin/logic-ax-bridge && chmod +x bin/logic-ax-bridge && codesign -f -s - --identifier \"de.oszillation-studio.mixingbuddy\" bin/logic-ax-bridge",
     "build": "pnpm run build:swift && tsc",
     "test": "echo \"DAW adapters verified.\""
   },

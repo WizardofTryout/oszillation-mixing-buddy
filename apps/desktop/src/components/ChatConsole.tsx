@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, AlertCircle, Copy, Check } from 'lucide-react';
+import { Send, Bot, User, Sparkles, AlertCircle, Copy, Check, MessageSquarePlus } from 'lucide-react';
 import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from '@mixing-buddy/shared-types';
 import { GeminiProvider } from '@mixing-buddy/ai-engine';
 import { invoke } from '@tauri-apps/api/core';
@@ -58,10 +58,45 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const handleCopyMessage = (id: string, text: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopiedId(id);
-      setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 1800);
-    }).catch(() => {});
+    const copyFallback = () => {
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        textArea.style.top = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textArea);
+        if (successful) {
+          setCopiedId(id);
+          setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 2000);
+        }
+      } catch (err) {
+        console.warn('Clipboard fallback error:', err);
+      }
+    };
+
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard
+        .writeText(text)
+        .then(() => {
+          setCopiedId(id);
+          setTimeout(() => setCopiedId((prev) => (prev === id ? null : prev)), 2000);
+        })
+        .catch(() => {
+          copyFallback();
+        });
+    } else {
+      copyFallback();
+    }
+  };
+
+  const handleAskAboutMessage = (text: string) => {
+    handleCopyMessage(`copy_${Date.now()}`, text);
+    setInput(`Wie behebe ich diesen Fehler in Logic Pro: "${text}"`);
   };
 
   // Auto-scroll on new message
@@ -401,18 +436,30 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
               }`}
             >
               <span>{m.text}</span>
-              <button
-                type="button"
-                onClick={() => handleCopyMessage(m.id, m.text)}
-                title="Text kopieren"
-                className="absolute top-1.5 right-1.5 p-1 rounded opacity-60 hover:opacity-100 hover:bg-white/10 transition-opacity"
-              >
-                {copiedId === m.id ? (
-                  <Check className="w-3 h-3 text-emerald-400" />
-                ) : (
-                  <Copy className="w-3 h-3" />
+              <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
+                {m.sender === 'system' && (
+                  <button
+                    type="button"
+                    onClick={() => handleAskAboutMessage(m.text)}
+                    title="Frage zu diesem Fehler direkt im Prompt stellen"
+                    className="p-1 rounded opacity-70 hover:opacity-100 hover:bg-white/10 text-amber-300 transition-all"
+                  >
+                    <MessageSquarePlus className="w-3.5 h-3.5" />
+                  </button>
                 )}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleCopyMessage(m.id, m.text)}
+                  title="Text in die Zwischenablage kopieren"
+                  className="p-1 rounded opacity-70 hover:opacity-100 hover:bg-white/10 transition-opacity"
+                >
+                  {copiedId === m.id ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         ))}
