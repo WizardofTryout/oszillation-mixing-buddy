@@ -45,6 +45,14 @@ public:
   void getStateInformation(juce::MemoryBlock &destData) override;
   void setStateInformation(const void *data, int sizeInBytes) override;
 
+  // Project context & DAW session persistence (Sprint 3)
+  void setProjectContext(const juce::String &scope, const juce::String &genre,
+                         const juce::String &notes, double lufs);
+  juce::String getTargetScope() const;
+  juce::String getGenreProfile() const;
+  juce::String getCustomNotes() const;
+  double getTargetLufs() const;
+
   // Metrology readouts
   LoudnessSnapshot getLoudnessSnapshot() const {
     return loudnessMeter.getSnapshot();
@@ -61,6 +69,12 @@ private:
   SpectralAnalyzer spectralAnalyzer;
   TelemetryClient telemetryClient;
   juce::AudioBuffer<float> scratchBuffer;
+
+  mutable std::mutex contextMutex;
+  juce::String currentTargetScope { "mix_bus" };
+  juce::String currentGenreProfile { "pop_radio" };
+  juce::String currentCustomNotes { "" };
+  double currentTargetLufs { -12.0 };
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
 };

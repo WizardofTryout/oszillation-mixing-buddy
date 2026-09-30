@@ -5,16 +5,20 @@
 #include "SpectralAnalyzer.h"
 #include <atomic>
 #include <mutex>
+#include <functional>
 
 namespace mixing_buddy
 {
 
 /**
  * Non-blocking background WebSocket client streaming metrology JSON frames to ws://127.0.0.1:48123/meter
+ * and synchronizing session target profiles with the DAW project.
  */
 class TelemetryClient : public juce::Thread
 {
 public:
+    using ContextCallback = std::function<void(const juce::String&, const juce::String&, const juce::String&, double)>;
+
     TelemetryClient();
     ~TelemetryClient() override;
 
@@ -24,6 +28,9 @@ public:
     void updateMetrics(const LoudnessSnapshot& loudness, const SpectralSnapshot& spectral);
     bool isConnected() const noexcept { return connected.load(); }
 
+    void sendProjectContextSync(const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs);
+    void setContextReceivedCallback(ContextCallback cb);
+
     void run() override;
 
 private:
@@ -31,6 +38,8 @@ private:
     bool sendWebSocketHandshake();
     bool sendWebSocketTextFrame(const juce::String& text);
     juce::String buildJsonPayload(uint64_t seq);
+    void processIncomingWebSocketData();
+    void parseIncomingMessage(const juce::String& msg);
 
     std::atomic<bool> shouldStop { false };
     std::atomic<bool> connected { false };
@@ -41,6 +50,11 @@ private:
     mutable std::mutex dataMutex;
     LoudnessSnapshot latestLoudness;
     SpectralSnapshot latestSpectral;
+
+    std::mutex syncMutex;
+    juce::String pendingContextSync;
+    std::atomic<bool> hasPendingSync { false };
+    ContextCallback onContextReceived;
 
     uint64_t sequenceNumber { 0 };
 

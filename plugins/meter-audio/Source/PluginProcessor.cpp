@@ -98,6 +98,14 @@ PluginProcessor::PluginProcessor()
                            .withInput("Input", juce::AudioChannelSet::stereo(), true)
                            .withOutput("Output", juce::AudioChannelSet::stereo(), true))
 {
+    // Register listener for project context changes from the Desktop HUD
+    telemetryClient.setContextReceivedCallback([this](const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs) {
+        std::lock_guard<std::mutex> lock(contextMutex);
+        currentTargetScope = scope;
+        currentGenreProfile = genre;
+        currentCustomNotes = notes;
+        currentTargetLufs = lufs;
+    });
 }
 
 PluginProcessor::~PluginProcessor()
@@ -161,13 +169,85 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
     return new PluginEditor(*this);
 }
 
-void PluginProcessor::getStateInformation(juce::MemoryBlock& /*destData*/)
+void PluginProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    // Meter plugin has no persistent state
+    // DAW Project Persistence (Sprint 3)
+    // Saved into .logicx or .cpr project file when user saves in DAW (Cmd + S)
+    juce::XmlElement xml("MixingBuddyMeterSettings");
+    xml.setAttribute("version", 1);
+    {
+        std::lock_guard<std::mutex> lock(contextMutex);
+        xml.setAttribute("targetScope", currentTargetScope);
+        xml.setAttribute("genreProfile", currentGenreProfile);
+        xml.setAttribute("customNotes", currentCustomNotes);
+        xml.setAttribute("targetLufs", currentTargetLufs);
+    }
+    copyXmlToBinary(xml, destData);
 }
 
-void PluginProcessor::setStateInformation(const void* /*data*/, int /*sizeInBytes*/)
+void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
+    // Restored automatically by DAW host when opening a project file
+    std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
+    if (xmlState != nullptr && xmlState->hasTagName("MixingBuddyMeterSettings"))
+    {
+        juce::String scope;
+        juce::String genre;
+        juce::String notes;
+        double lufs = -12.0;
+
+        {
+            std::lock_guard<std::mutex> lock(contextMutex);
+            currentTargetScope = xmlState->getStringAttribute("targetScope", "mix_bus");
+            currentGenreProfile = xmlState->getStringAttribute("genreProfile", "pop_radio");
+            currentCustomNotes = xmlState->getStringAttribute("customNotes", "");
+            currentTargetLufs = xmlState->getDoubleAttribute("targetLufs", -12.0);
+
+            scope = currentTargetScope;
+            genre = currentGenreProfile;
+            notes = currentCustomNotes;
+            lufs = currentTargetLufs;
+        }
+
+        // Broadcast restored context to the Desktop Companion HUD
+        telemetryClient.sendProjectContextSync(scope, genre, notes, lufs);
+    }
+}
+
+void PluginProcessor::setProjectContext(const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs)
+{
+    {
+        std::lock_guard<std::mutex> lock(contextMutex);
+        currentTargetScope = scope;
+        currentGenreProfile = genre;
+        currentCustomNotes = notes;
+        currentTargetLufs = lufs;
+    }
+    telemetryClient.sendProjectContextSync(scope, genre, notes, lufs);
+}
+
+juce::String PluginProcessor::getTargetScope() const
+{
+    std::lock_guard<std::mutex> lock(contextMutex);
+    return currentTargetScope;
+}
+
+juce::String PluginProcessor::getGenreProfile() const
+{
+    std::lock_guard<std::mutex> lock(contextMutex);
+    return currentGenreProfile;
+}
+
+juce::String PluginProcessor::getCustomNotes() const
+{
+    std::lock_guard<std::mutex> lock(contextMutex);
+    return currentCustomNotes;
+}
+
+double PluginProcessor::getTargetLufs() const
+{
+    std::lock_guard<std::mutex> lock(contextMutex);
+    return currentTargetLufs;
 }
 
 } // namespace mixing_buddy

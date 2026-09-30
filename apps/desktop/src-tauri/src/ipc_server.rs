@@ -482,15 +482,18 @@ async fn handle_connection(
         match message {
             Message::Text(text) => {
                 let _ = tx.send(text.to_string());
+                let is_project_sync = text.contains("\"project_context_sync\"") || text.contains("\"type\":\"project_context_sync\"");
                 let is_proposal = text.contains("\"deltas\"") || text.contains("\"action_proposal\"") || text.contains("\"proposal\"");
                 let is_execute = text.contains("\"execute\"") || text.contains("\"parameterName\"");
-                if !is_proposal && !is_execute {
+                if !is_proposal && !is_execute && !is_project_sync {
                     last_telemetry_ms.store(now_millis(), Ordering::Relaxed);
                     is_streaming.store(true, Ordering::Relaxed);
                 }
                 if let Ok(guard) = app_handle.lock() {
                     if let Some(ref handle) = *guard {
-                        if is_proposal {
+                        if is_project_sync {
+                            let _ = handle.emit("project-context-sync", text.as_str());
+                        } else if is_proposal {
                             let _ = handle.emit("new-action-proposal", text.as_str());
                         } else if is_execute {
                             let _ = handle.emit("execute-daw-action", text.as_str());
@@ -501,15 +504,22 @@ async fn handle_connection(
                 }
             }
             Message::Binary(bin) => {
-                last_telemetry_ms.store(now_millis(), Ordering::Relaxed);
-                is_streaming.store(true, Ordering::Relaxed);
                 if let Ok(text) = String::from_utf8(bin.to_vec()) {
                     let _ = tx.send(text.clone());
+                    let is_project_sync = text.contains("\"project_context_sync\"") || text.contains("\"type\":\"project_context_sync\"");
+                    let is_proposal = text.contains("\"deltas\"") || text.contains("\"action_proposal\"") || text.contains("\"proposal\"");
+                    let is_execute = text.contains("\"execute\"") || text.contains("\"parameterName\"");
+                    if !is_proposal && !is_execute && !is_project_sync {
+                        last_telemetry_ms.store(now_millis(), Ordering::Relaxed);
+                        is_streaming.store(true, Ordering::Relaxed);
+                    }
                     if let Ok(guard) = app_handle.lock() {
                         if let Some(ref handle) = *guard {
-                            if text.contains("\"deltas\"") || text.contains("\"action_proposal\"") || text.contains("\"proposal\"") {
+                            if is_project_sync {
+                                let _ = handle.emit("project-context-sync", text.as_str());
+                            } else if is_proposal {
                                 let _ = handle.emit("new-action-proposal", text.as_str());
-                            } else if text.contains("\"execute\"") || text.contains("\"parameterName\"") {
+                            } else if is_execute {
                                 let _ = handle.emit("execute-daw-action", text.as_str());
                             } else {
                                 let _ = handle.emit("telemetry-frame", text.as_str());

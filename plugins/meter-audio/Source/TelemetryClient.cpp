@@ -44,6 +44,35 @@ void TelemetryClient::updateMetrics(const LoudnessSnapshot& loudness, const Spec
     latestSpectral = spectral;
 }
 
+void TelemetryClient::setContextReceivedCallback(ContextCallback cb)
+{
+    std::lock_guard<std::mutex> lock(syncMutex);
+    onContextReceived = std::move(cb);
+}
+
+void TelemetryClient::sendProjectContextSync(const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs)
+{
+    juce::String json = "{";
+    json += "\"type\":\"project_context_sync\",";
+    json += "\"targetScope\":\"" + scope.replace("\"", "\\\"") + "\",";
+    json += "\"genreProfile\":\"" + genre.replace("\"", "\\\"") + "\",";
+    json += "\"customNotes\":\"" + notes.replace("\"", "\\\"") + "\",";
+    json += "\"targetLufs\":" + juce::String(lufs, 1);
+    json += "}";
+
+    {
+        std::lock_guard<std::mutex> lock(syncMutex);
+        pendingContextSync = json;
+        hasPendingSync.store(true);
+    }
+
+    if (connected.load())
+    {
+        sendWebSocketTextFrame(json);
+        hasPendingSync.store(false);
+    }
+}
+
 bool TelemetryClient::attemptConnect()
 {
     if (socket.isConnected())
@@ -67,6 +96,17 @@ bool TelemetryClient::attemptConnect()
     {
         socket.close();
         return false;
+    }
+
+    // Handshake succeeded; send any pending project context sync immediately
+    if (hasPendingSync.load())
+    {
+        std::lock_guard<std::mutex> lock(syncMutex);
+        if (pendingContextSync.isNotEmpty())
+        {
+            sendWebSocketTextFrame(pendingContextSync);
+            hasPendingSync.store(false);
+        }
     }
 
     return true;
@@ -219,6 +259,65 @@ juce::String TelemetryClient::buildJsonPayload(uint64_t seq)
     return json;
 }
 
+void TelemetryClient::parseIncomingMessage(const juce::String& msg)
+{
+    // Extract targetScope, genreProfile, customNotes, targetLufs if present
+    if (msg.contains("set_project_context") || msg.contains("project_context_sync"))
+    {
+        auto parsed = juce::JSON::parse(msg);
+        if (parsed.isObject())
+        {
+            juce::String scope = parsed["targetScope"].toString();
+            juce::String genre = parsed["genreProfile"].toString();
+            juce::String notes = parsed["customNotes"].toString();
+            double lufs = parsed["targetLufs"].isDouble() ? static_cast<double>(parsed["targetLufs"]) : -12.0;
+
+            ContextCallback cb;
+            {
+                std::lock_guard<std::mutex> lock(syncMutex);
+                cb = onContextReceived;
+            }
+
+            if (cb && scope.isNotEmpty() && genre.isNotEmpty())
+            {
+                cb(scope, genre, notes, lufs);
+            }
+        }
+    }
+}
+
+void TelemetryClient::processIncomingWebSocketData()
+{
+    if (!socket.isConnected())
+        return;
+
+    int ready = socket.waitUntilReady(true, 0);
+    if (ready > 0)
+    {
+        char buf[2048] {};
+        int bytes = socket.read(buf, sizeof(buf) - 1, false);
+        if (bytes >= 2)
+        {
+            uint8_t opcode = static_cast<uint8_t>(buf[0]) & 0x0F;
+            if (opcode == 0x01) // text frame from server (unmasked)
+            {
+                size_t offset = 2;
+                size_t len = static_cast<uint8_t>(buf[1]) & 0x7F;
+                if (len == 126 && bytes >= 4)
+                {
+                    len = (static_cast<uint8_t>(buf[2]) << 8) | static_cast<uint8_t>(buf[3]);
+                    offset = 4;
+                }
+                if (bytes >= static_cast<int>(offset + len))
+                {
+                    juce::String text = juce::String::fromUTF8(buf + offset, static_cast<int>(len));
+                    parseIncomingMessage(text);
+                }
+            }
+        }
+    }
+}
+
 void TelemetryClient::run()
 {
 #if JUCE_MAC
@@ -235,7 +334,6 @@ void TelemetryClient::run()
             }
             else
             {
-                // Wait safely in small increments so we can exit immediately if requested
                 for (int i = 0; i < 30 && !threadShouldExit() && !shouldStop.load(); ++i)
                 {
                     wait(50);
@@ -243,6 +341,9 @@ void TelemetryClient::run()
                 continue;
             }
         }
+
+        // Check for incoming control frames from the Desktop HUD / IPC Server
+        processIncomingWebSocketData();
 
         // Stream frame at ~25 Hz (40 ms period)
         sequenceNumber++;

@@ -7,6 +7,8 @@ import type { AIProvider, AIProviderConfig } from './types.js';
 import type { MixAnalysisContext } from './prompts.js';
 
 export * from './types.js';
+export * from './types/targets.js';
+export * from './data/targetProfiles.js';
 export * from './prompts.js';
 export * from './providers/AnthropicProvider.js';
 export * from './providers/GeminiProvider.js';

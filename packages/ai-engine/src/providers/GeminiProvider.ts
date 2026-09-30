@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI, type FunctionDeclaration, SchemaType } from '@google/generative-ai';
 import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from '@mixing-buddy/shared-types';
 import { MIXING_BUDDY_SYSTEM_PROMPT, buildAnalysisUserPrompt, type MixAnalysisContext } from '../prompts.js';
+import { validateMixPlausibility } from '../data/targetProfiles.js';
 import type { AIProvider, AIProviderConfig } from '../types.js';
 
 export interface KeyValidationResult {
@@ -231,6 +232,14 @@ export class GeminiProvider implements AIProvider {
       };
     }
 
+    let plausibilityNote = '';
+    if (telemetry && ctx.targetProfile) {
+      const plausCheck = validateMixPlausibility(telemetry, ctx.targetProfile);
+      if (!plausCheck.isPlausible && plausCheck.advisory) {
+        plausibilityNote = `💡 **Plausibilitäts-Hinweis:** ${plausCheck.advisory}\n\n`;
+      }
+    }
+
     const telemetrySummary = telemetry
       ? JSON.stringify(
           {
@@ -356,6 +365,7 @@ export class GeminiProvider implements AIProvider {
             };
             return {
               assistantText:
+                plausibilityNote +
                 fallbackNote +
                 (textOutput.trim() || input.rationale || `Ich habe die Anweisung analysiert und "${proposal.title}" vorgeschlagen.`),
               proposal
@@ -379,7 +389,7 @@ export class GeminiProvider implements AIProvider {
                   status: 'pending'
                 };
                 return {
-                  assistantText: fallbackNote + (parsed.rationale ?? textOutput),
+                  assistantText: plausibilityNote + fallbackNote + (parsed.rationale ?? textOutput),
                   proposal
                 };
               }
@@ -389,7 +399,7 @@ export class GeminiProvider implements AIProvider {
           }
 
           return {
-            assistantText: fallbackNote + (textOutput.trim() || 'Gemini hat die Anweisung verarbeitet.')
+            assistantText: plausibilityNote + fallbackNote + (textOutput.trim() || 'Gemini hat die Anweisung verarbeitet.')
           };
         } catch (err: unknown) {
           lastError = err instanceof Error ? err : new Error(String(err));

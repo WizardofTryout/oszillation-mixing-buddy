@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Sparkles, AlertCircle, Copy, Check, MessageSquarePlus } from 'lucide-react';
-import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from '@mixing-buddy/shared-types';
+import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor, TargetProfile, TargetScope } from '@mixing-buddy/shared-types';
 import { GeminiProvider } from '@mixing-buddy/ai-engine';
 import { invoke } from '@tauri-apps/api/core';
 import type { ProviderMode } from './ProviderSettings.js';
@@ -21,6 +21,8 @@ interface ChatConsoleProps {
   tracks: TrackDescriptor[];
   onProposalGenerated: (proposal: MixActionProposal) => void;
   externalLogMessage?: string | null;
+  targetScope?: TargetScope;
+  targetProfile?: TargetProfile;
 }
 
 export const ChatConsole: React.FC<ChatConsoleProps> = ({
@@ -31,7 +33,9 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   apiKey,
   tracks,
   onProposalGenerated,
-  externalLogMessage
+  externalLogMessage,
+  targetScope,
+  targetProfile
 }) => {
   const getDawDisplayName = (daw: string) => {
     const d = daw.toLowerCase();
@@ -162,7 +166,9 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
 
           const res = await gemini.generateMixProposal(query, telemetry, tracks, {
             dawName: dawLabel,
-            userPrompt: query
+            userPrompt: query,
+            targetScope,
+            targetProfile
           });
 
           setMessages((prev) => [

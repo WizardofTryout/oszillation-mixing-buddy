@@ -1,5 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from '@mixing-buddy/shared-types';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import type {
+  MetrologyTelemetryFrame,
+  MixActionProposal,
+  TrackDescriptor,
+  TargetProfile,
+  TargetScope,
+  GenreProfileId
+} from '@mixing-buddy/shared-types';
+import { resolveTargetProfile, detectGenreFromTelemetry } from '@mixing-buddy/ai-engine';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { SpectrumRTA } from './components/SpectrumRTA.js';
@@ -7,12 +15,13 @@ import { LoudnessHUD } from './components/LoudnessHUD.js';
 import { ActionCard } from './components/ActionCard.js';
 import { ProviderSettings, type ProviderMode } from './components/ProviderSettings.js';
 import { ChatConsole } from './components/ChatConsole.js';
+import { CrossoverModal } from './components/CrossoverModal.js';
 import {
   PluginVaultModal,
   type LearnedPluginSpec,
   type PluginSummaryItem
 } from './components/PluginVaultModal.js';
-import { Sliders, Headphones, Inbox, Sparkles, Database } from 'lucide-react';
+import { Sliders, Headphones, Inbox, Sparkles, Database, Target } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<MetrologyTelemetryFrame | null>(null);
@@ -31,6 +40,64 @@ export const App: React.FC = () => {
   const [chatLog, setChatLog] = useState<string | null>(null);
   const [mcpClientsCount, setMcpClientsCount] = useState<number>(0);
   const [cardFilter, setCardFilter] = useState<'all' | 'pinned'>('all');
+
+  // Sprint 3: Target Bus & Genre Profile State (DAW Session Persistent)
+  const [targetScope, setTargetScope] = useState<TargetScope>('mix_bus');
+  const [genreProfile, setGenreProfile] = useState<GenreProfileId>('pop_radio');
+  const [customNotes, setCustomNotes] = useState<string>('');
+  const [customProfile, setCustomProfile] = useState<TargetProfile | undefined>(undefined);
+  const [detectedGenre, setDetectedGenre] = useState<GenreProfileId | null>(null);
+  const [isCrossoverModalOpen, setIsCrossoverModalOpen] = useState<boolean>(false);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const effectiveGenre = genreProfile === 'auto_detect' ? (detectedGenre || 'pop_radio') : genreProfile;
+  const activeTargetProfile = useMemo(() => {
+    return resolveTargetProfile(effectiveGenre, targetScope, customProfile);
+  }, [effectiveGenre, targetScope, customProfile]);
+
+  const syncContextToPlugin = (
+    scope: TargetScope,
+    genre: GenreProfileId,
+    notes: string,
+    lufs: number,
+    profile?: TargetProfile
+  ) => {
+    const payload = {
+      type: 'set_project_context',
+      targetScope: scope,
+      genreProfile: genre,
+      customNotes: notes,
+      targetLufs: lufs,
+      targetProfile: profile
+    };
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(payload));
+    }
+  };
+
+  const handleTargetScopeChange = (newScope: TargetScope) => {
+    setTargetScope(newScope);
+    const updated = resolveTargetProfile(effectiveGenre, newScope, customProfile);
+    syncContextToPlugin(newScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+  };
+
+  const handleGenreProfileChange = (newGenre: GenreProfileId) => {
+    setGenreProfile(newGenre);
+    if (newGenre === 'custom_crossover') {
+      setIsCrossoverModalOpen(true);
+    }
+    const eff = newGenre === 'auto_detect' ? (detectedGenre || 'pop_radio') : newGenre;
+    const updated = resolveTargetProfile(eff, targetScope, customProfile);
+    syncContextToPlugin(targetScope, newGenre, customNotes, updated.targetIntegratedLufs, updated);
+  };
+
+  const handleSaveCrossoverProfile = (updatedProfile: TargetProfile) => {
+    setCustomProfile(updatedProfile);
+    setGenreProfile('custom_crossover');
+    setCustomNotes(updatedProfile.customNotes || '');
+    syncContextToPlugin(targetScope, 'custom_crossover', updatedProfile.customNotes || '', updatedProfile.targetIntegratedLufs, updatedProfile);
+    setChatLog(`💾 Crossover-Ziele "${updatedProfile.name}" im DAW-Projekt gesichert.`);
+  };
 
   // Load pinned cards from localStorage on initial mount
   useEffect(() => {
@@ -235,6 +302,7 @@ export const App: React.FC = () => {
     let unlistenStreamingStatus: (() => void) | null = null;
     let unlistenProposal: (() => void) | null = null;
     let unlistenExecute: (() => void) | null = null;
+    let unlistenProjectSync: (() => void) | null = null;
 
     const resetStreamWatchdog = () => {
       clearTimeout(streamWatchdogTimer);
@@ -253,6 +321,11 @@ export const App: React.FC = () => {
           setTelemetry(frame);
           setIsAudioConnected(true);
           resetStreamWatchdog();
+
+          if (genreProfile === 'auto_detect') {
+            const detected = detectGenreFromTelemetry(frame);
+            setDetectedGenre(detected);
+          }
         }
       } catch {
         // Ignore parse errors
@@ -260,6 +333,27 @@ export const App: React.FC = () => {
     })
       .then((cleanup) => {
         unlistenTelemetry = cleanup;
+      })
+      .catch(() => {});
+
+    // A2. Subscribe to DAW project context sync event (from JUCE plugin setStateInformation)
+    listen<string>('project-context-sync', (event) => {
+      try {
+        const raw = event.payload;
+        const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (data.type === 'project_context_sync') {
+          if (data.targetScope) setTargetScope(data.targetScope);
+          if (data.genreProfile) setGenreProfile(data.genreProfile);
+          if (data.customNotes !== undefined) setCustomNotes(data.customNotes);
+          if (data.targetProfile) setCustomProfile(data.targetProfile);
+          setChatLog(`🔄 DAW-Projekt-Persistenz geladen: Scope "${data.targetScope}", Genre "${data.genreProfile}"`);
+        }
+      } catch (err) {
+        console.error('Error handling project-context-sync', err);
+      }
+    })
+      .then((cleanup) => {
+        unlistenProjectSync = cleanup;
       })
       .catch(() => {});
 
@@ -340,10 +434,25 @@ export const App: React.FC = () => {
     const connectWebSocket = () => {
       try {
         ws = new WebSocket('ws://127.0.0.1:48123/meter');
+        wsRef.current = ws;
+
+        ws.onopen = () => {
+          syncContextToPlugin(targetScope, genreProfile, customNotes, activeTargetProfile.targetIntegratedLufs, activeTargetProfile);
+        };
 
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
+
+            // Sprint 3: Handle project context sync from JUCE plugin
+            if (data.type === 'project_context_sync') {
+              if (data.targetScope) setTargetScope(data.targetScope);
+              if (data.genreProfile) setGenreProfile(data.genreProfile);
+              if (data.customNotes !== undefined) setCustomNotes(data.customNotes);
+              if (data.targetProfile) setCustomProfile(data.targetProfile);
+              setChatLog(`🔄 DAW-Projekt-Persistenz geladen: Scope "${data.targetScope}", Genre "${data.genreProfile}"`);
+              return;
+            }
 
             // Handle incoming MCP action proposal
             if (data.type === 'action_proposal' && data.proposal) {
@@ -380,6 +489,11 @@ export const App: React.FC = () => {
               setTelemetry(frame);
               setIsAudioConnected(true);
               resetStreamWatchdog();
+
+              if (genreProfile === 'auto_detect') {
+                const detected = detectGenreFromTelemetry(frame);
+                setDetectedGenre(detected);
+              }
             }
           } catch {
             // Ignore parse errors
@@ -410,6 +524,7 @@ export const App: React.FC = () => {
       if (unlistenStreamingStatus) unlistenStreamingStatus();
       if (unlistenProposal) unlistenProposal();
       if (unlistenExecute) unlistenExecute();
+      if (unlistenProjectSync) unlistenProjectSync();
     };
   }, []);
 
@@ -718,6 +833,55 @@ export const App: React.FC = () => {
           <span className="text-xs text-blue-400 font-mono ml-2">v0.1.0</span>
         </div>
 
+        <div className="flex items-center gap-2">
+          {/* Sprint 3: Target Scope & Genre Selectors */}
+          <div className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs">
+            <Target className="w-3.5 h-3.5 text-cyan-400 mr-1" />
+            <span className="text-gray-400 mr-1.5 font-medium">Bus:</span>
+            <select
+              value={targetScope}
+              onChange={(e) => handleTargetScopeChange(e.target.value as TargetScope)}
+              className="bg-transparent text-cyan-300 font-semibold focus:outline-none cursor-pointer"
+            >
+              <option value="mix_bus" className="bg-[#1a1c23] text-white">Master / Mix Bus</option>
+              <option value="lead_vocal" className="bg-[#1a1c23] text-white">Lead Vocal</option>
+              <option value="drum_bus" className="bg-[#1a1c23] text-white">Drum Bus / Rhythm</option>
+              <option value="sub_bass" className="bg-[#1a1c23] text-white">Sub Bass / 808</option>
+              <option value="keys_synths" className="bg-[#1a1c23] text-white">Keys & Synths</option>
+              <option value="acoustic" className="bg-[#1a1c23] text-white">Acoustic / Guitars</option>
+            </select>
+          </div>
+
+          <div className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs">
+            <span className="text-gray-400 mr-1.5 font-medium">🎵 Genre:</span>
+            <select
+              value={genreProfile}
+              onChange={(e) => handleGenreProfileChange(e.target.value as GenreProfileId)}
+              className="bg-transparent text-amber-300 font-semibold focus:outline-none cursor-pointer"
+            >
+              <option value="auto_detect" className="bg-[#1a1c23] text-white">
+                ✨ Auto-Detect {detectedGenre ? `(${detectedGenre})` : '(KI)'}
+              </option>
+              <option value="pop_radio" className="bg-[#1a1c23] text-white">Pop / Radio</option>
+              <option value="hiphop_trap" className="bg-[#1a1c23] text-white">Hip-Hop / Trap</option>
+              <option value="rock_metal" className="bg-[#1a1c23] text-white">Rock / Metal</option>
+              <option value="edm_club" className="bg-[#1a1c23] text-white">EDM / Club</option>
+              <option value="acoustic_jazz" className="bg-[#1a1c23] text-white">Acoustic / Jazz</option>
+              <option value="custom_crossover" className="bg-[#1a1c23] text-white">⚙️ Individuell / Crossover...</option>
+            </select>
+            {genreProfile === 'custom_crossover' && (
+              <button
+                type="button"
+                onClick={() => setIsCrossoverModalOpen(true)}
+                className="ml-1.5 text-[11px] text-cyan-400 hover:text-cyan-200 underline font-medium"
+                title="Crossover-Details bearbeiten"
+              >
+                Edit
+              </button>
+            )}
+          </div>
+        </div>
+
         <div className="flex items-center gap-2.5">
           <button
             type="button"
@@ -763,6 +927,14 @@ export const App: React.FC = () => {
         onTriggerLearnNew={handleLearnActivePlugin}
       />
 
+      <CrossoverModal
+        isOpen={isCrossoverModalOpen}
+        onClose={() => setIsCrossoverModalOpen(false)}
+        currentProfile={activeTargetProfile}
+        currentScope={targetScope}
+        onSave={handleSaveCrossoverProfile}
+      />
+
       {/* Main Studio Workspace */}
       <main className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
         {/* System Settings & Provider Status */}
@@ -792,13 +964,15 @@ export const App: React.FC = () => {
               tracks={availableTracks}
               onProposalGenerated={handleProposalFromChat}
               externalLogMessage={chatLog}
+              targetScope={targetScope}
+              targetProfile={activeTargetProfile}
             />
           </div>
           <div className="lg:col-span-1">
             <LoudnessHUD
               loudness={telemetry?.loudness}
               dynamics={telemetry?.dynamics}
-              targetLufs={-14.0}
+              targetLufs={activeTargetProfile.targetIntegratedLufs}
             />
           </div>
         </div>
