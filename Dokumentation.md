@@ -1,6 +1,6 @@
 # Oszillation Mixing Buddy — Umfassende System- & Feature-Dokumentation
 
-> **Status:** Version 0.1.0 (Produktiv / Verifiziert)  
+> **Status:** Version 0.2.0 (Produktiv / Verifiziert / Sprint 3 Ready)  
 > **Zielgruppe:** Web-Frontend-Entwickler, UI/UX-Designer, Core-Entwickler & Stakeholder  
 > **Repository:** `Steinberg-Mixing-Buddy` / `Oszillation Mixing Buddy`  
 > **Stand:** Oktober 2026  
@@ -20,7 +20,42 @@ Im Gegensatz zu klassischen AI-Audio-Tools, die Audio extern generieren oder als
 
 ---
 
-## 2. Die 4 System-Säulen (Architektur-Integrität)
+## 2. Entwickler-Quickstart (Lokale Umgebung & Start)
+
+Für Web-Frontend- und UI-Entwickler, die das HUD oder Dashboards im Browser oder in der nativen Shell weiterentwickeln möchten:
+
+### 2.1 Systemvoraussetzungen
+- **Node.js:** $\ge 20.x$ (LTS empfohlen)
+- **Paketmanager:** `pnpm` ($\ge 9.x$)
+- **Rust & Cargo:** (erforderlich für den nativen Tauri v2 Desktop-Core)
+- **macOS Build Tools:** Xcode Command Line Tools (`swiftc`, `clang`) für die native `logic-ax-bridge`
+
+### 2.2 Lokaler Start der Entwicklungsumgebung
+```bash
+# 1. Abhängigkeiten installieren
+pnpm install
+
+# 2. Frontend im schnellen Browser-Entwicklungsmodus starten (Vite HMR)
+pnpm --filter desktop dev
+# -> Web-Interface verfügbar unter: http://localhost:1420
+
+# 3. Vollständiges Desktop-HUD mit nativer macOS-Bridge & Gehörschutz starten
+pnpm --filter desktop tauri dev
+
+# 4. (Optional) Native Swift-Bridge neu kompilieren (nur bei Änderungen an LogicAXBridge.swift)
+pnpm --filter @mixing-buddy/daw-adapters run build:swift
+```
+
+### 2.3 Netzwerk-Topologie & Aktive Ports
+| Port | Protokoll | Komponente | Beschreibung |
+| :--- | :--- | :--- | :--- |
+| **`48123`** | HTTP / WebSocket | **Desktop Companion (Rust/Tauri)** | Zentraler IPC-Hub: REST-Endpoints & 30 fps Audio-Telemetrie-Stream |
+| **`48124`** | HTTP / SSE / Stdio | **MCP Server (Node.js/TS)** | Model Context Protocol Gateway für AI-Tools & Agenten |
+| **`1420`** | HTTP | **Vite Dev Server** | Hot Module Replacement (HMR) für das Musiker-HUD |
+
+---
+
+## 3. Die 4 System-Säulen (Architektur-Integrität)
 
 Das Monorepo ruht auf vier strikt voneinander getrennten Schichten:
 
@@ -95,7 +130,7 @@ Das Monorepo ruht auf vier strikt voneinander getrennten Schichten:
 
 ---
 
-## 3. Kern-Features & Workflows für das Web-Frontend
+## 4. Kern-Features & Workflows für das Web-Frontend
 
 Diese Features müssen im Web-Frontend (Marketing-Page, Cloud-Dashboard oder Web-App) hervorgehoben und visualisiert werden:
 
@@ -145,6 +180,9 @@ Vorschläge der KI werden nicht heimlich im Projekt angewendet, sondern als inte
   - Angepinnte Karten erhalten einen edlen Bernsteinglanz (`border-amber-500/60`), ein Badge `[📌 Gespeichert]` und werden persistent im `localStorage` gesichert.
   - **Intelligente Queue:** Der Button *„Queue leeren“* löscht nur flüchtige Karten — gespeicherte Standard-Karten bleiben dauerhaft erhalten.
   - **Filter-Tabs:** Umschalten zwischen `[ Alle (N) ]` und `[ 📌 Angepinnt (M) ]`.
+- > [!IMPORTANT]
+  > **Architektur-Hinweis (Persistenz-Evolution in Sprint 3):**  
+  > Die Session- und Genre-Targets (Sprint 3) werden künftig projektgebunden über das JUCE-Master-Plugin synchronisiert (`getStateInformation` / `setStateInformation` in der `.logicx`- bzw. `.cpr`-Projektdatei). Der `localStorage` der Webview dient primär als lokaler UI-Cache für temporär oder standardmäßig gepinnte Test-Presets.
 
 ### Feature 8: Acoustic Shock Shield (Eingebauter Gehörschutz)
 - Verhindert laute Feedback-Schleifen oder versehentliche Max-Volume-Sprünge im Kontrollraum.
@@ -152,7 +190,31 @@ Vorschläge der KI werden nicht heimlich im Projekt angewendet, sondern als inte
 
 ---
 
-## 4. Datenmodelle & Schnittstellen (TypeScript Referenz)
+## 5. REST- & WebSocket-Schnittstellen (Routing-Tabelle)
+
+Für externe Web-Clients, alternative Frontends und Desktop-Komponenten stellt der Desktop-Companion (Port `48123`) sowie der MCP-Server (Port `48124`) standardisierte Endpunkte bereit:
+
+### 5.1 Desktop Companion Routing (Port 48123)
+
+| Endpunkt | Methode | Payload / Parameter | Antwort | Beschreibung |
+| :--- | :---: | :--- | :--- | :--- |
+| **`/api/project`** | `GET` | – | `{ daw: string, project: string, sampleRate: number, isPlaying: boolean }` | Liefert die aktuell erkannte DAW, den Projektnamen und den Wiedergabestatus. |
+| **`/api/tracks`** | `GET` | – | `Array<{ id: string, name: string, volumeDb: number, pan: number, inserts: string[] }>` | Liste aller aktiven Kanalzüge samt Fader, Pan und belegten Plugins. |
+| **`/api/proposals`** | `POST` | `MixActionProposal` (JSON) | `{ success: boolean, proposalId: string }` | Liefert eine neu generierte ActionCard in die HUD-Queue ein. |
+| **`/api/execute-action`** | `POST` | `{ proposalId: string, isAudition: boolean, isRestore?: boolean }` | `{ success: boolean, executedDeltas: number }` | Führt `[Anwenden]`, `[A/B Listen]` oder die Wiederherstellung aus. |
+| **`/meter`** | `WS` | WebSocket Connect | 30 fps JSON-Stream (`AudioTelemetryFrame`) | Kontinuierlicher Telemetrie-Stream direkt aus dem JUCE-Master-Plugin. |
+
+### 5.2 MCP AI-Gateway Routing (Port 48124)
+
+| Endpunkt | Methode | Payload / Parameter | Antwort | Beschreibung |
+| :--- | :---: | :--- | :--- | :--- |
+| **`/health`** | `GET` | – | `{ status: "ok", version: "2026.1", pluginsCount: number }` | Health-Check und Status des lokalen AI-Gateways. |
+| **`/sse`** | `GET` | EventSource Connect | Server-Sent Events (MCP Protocol 2026) | Streaming-Schnittstelle für KI-Agenten (Claude, Gemini, Cursor). |
+| **`/api/ax-bridge`** | `POST` | `{ command: string, args: Record<string, any> }` | `{ success: boolean, data: any }` | Direkter Tunnel zur nativen macOS Swift-Bridge. |
+
+---
+
+## 6. Datenmodelle & TypeScript-Definitionen
 
 ### `MixActionProposal` (Die ActionCard)
 ```typescript
@@ -205,11 +267,55 @@ export interface AudioTelemetryFrame {
 
 ---
 
-## 5. Leitfaden für das Web-Frontend & Design-System
+## 7. Sprint 3 Architektur-Vorausschau: Genre- & Crossover-Targets
+
+Im anstehenden **Sprint 3** wird der Oszillation Mixing Buddy um **musikalische Kontext-Sensitivität** und **DAW-Projekt-Persistenz** erweitert. Web-Entwickler sollten folgende Strukturen bei UI-Entwürfen berücksichtigen:
+
+### 7.1 Die Ziel-Selektoren im HUD
+Im Kopfbereich des Musiker-HUDs werden zwei Kontext-Dropdowns integriert:
+1. **Signal-Typ (`targetScope`):**
+   - `mix_bus` (Standard Master-Out)
+   - `lead_vocal` (Fokus auf De-Essing, Präsenz 3–5 kHz)
+   - `drum_bus` (Fokus auf Transienten, Crest-Factor 8–10 dB)
+   - `sub_bass` (Fokus auf Mono-Kompatibilität $<80$ Hz)
+   - `keys_synths` & `acoustic`
+2. **Genre-Profil (`genreProfile`):**
+   - `hiphop_trap`: Hohe Sub-Bass-Toleranz ($+3\text{ bis }+4$ dB bei 35–65 Hz), Ziel: $-9\text{ bis }-7$ LUFS.
+   - `pop_radio`: Ausgewogenes Low-End, hoher Air-Glanz ($>10$ kHz), Ziel: $-14\text{ bis }-10$ LUFS.
+   - `rock_metal`: Dichte Mitten (800–3.500 Hz), gezähmte Sub-Bässe ($<40$ Hz Low Cut).
+   - `edm_club`: Maximale Lautheit, Ziel: $-7\text{ bis }-5$ LUFS.
+   - `acoustic_jazz`: Natürliche Dynamik, Crest Factor $\ge 14$ dB, kein Brickwall-Limiting.
+   - `custom_crossover`: Individuelle Kombination mit Freitext-Notizen (`customNotes`).
+
+### 7.2 Sprint 3 Datenmodell (`TargetProfile`)
+```typescript
+export interface TargetProfile {
+  targetScope: 'mix_bus' | 'lead_vocal' | 'drum_bus' | 'sub_bass' | 'keys_synths' | 'acoustic';
+  genreProfile: 'auto_detect' | 'hiphop_trap' | 'pop_radio' | 'rock_metal' | 'edm_club' | 'acoustic_jazz' | 'custom_crossover';
+  customNotes?: string;             // z. B. "Trap Sub-Bass mit 90er Grunge Mitten"
+  targetLufs: number;               // z. B. -14.0 LUFS
+  targetCrestFactorRange: [number, number]; // [min, max] in dB
+  spectralEnvelopeTarget: {         // 5-Zonen Energiekorridor
+    subBassOffsetDb: number;        // 20 - 60 Hz
+    bassOffsetDb: number;           // 60 - 250 Hz
+    lowMidOffsetDb: number;         // 250 - 1000 Hz
+    highMidOffsetDb: number;        // 1 - 5 kHz
+    airOffsetDb: number;            // 5 - 20 kHz
+  };
+}
+```
+
+### 7.3 Dual-Persistenz-Prinzip
+- **Session-Targets (Projektgebunden):** Werden im JUCE-Plugin via `getStateInformation()` direkt in der Songdatei (`.logicx` / `.cpr`) gespeichert. Beim Wiederöffnen des Songs stehen alle Zielkurven sofort wieder bereit.
+- **Lokale Presets & Pin-Cards:** Verbleiben im `localStorage` des Browsers/Webviews als Arbeits-Pinwand des Musikers.
+
+---
+
+## 8. Leitfaden für das Web-Frontend & Design-System
 
 Für die Darstellung der Features im Web (Landing Page, Musiker-Dashboard oder SaaS-Portal) gelten folgende Richtlinien:
 
-1. **Aesthetik: Dark Studio Aesthetic**
+1. **Ästhetik: Dark Studio Aesthetic**
    - Hintergrund: Tiefes Studio-Dunkel (`#0b0c10`, `#121418`, `#1a1c23`).
    - Akzentfarben mit klarer Signalwirkung:
      - **Cyan / Electric Blue (`#3b82f6` / `#06b6d4`):** Telemetrie, FFT, DAW-Verbindung.
@@ -226,7 +332,7 @@ Für die Darstellung der Features im Web (Landing Page, Musiker-Dashboard oder S
 
 ---
 
-## 6. Aktueller Status Quo & Release-Matrix
+## 9. Aktueller Status Quo & Release-Matrix
 
 | Komponente | Plattform | Status | Besonderheiten |
 | :--- | :--- | :---: | :--- |
@@ -237,6 +343,7 @@ Für die Darstellung der Features im Web (Landing Page, Musiker-Dashboard oder S
 | **ActionCard Pinning (📌)** | Desktop HUD | ✅ Fertig | Persistenz in `localStorage`, gefilterte Queue |
 | **Logic Insert Auto-Opener** | Rust / Swift | ✅ Fertig | Öffnet geschlossene Plugins slot-genau |
 | **MCP Server (7 Tools)** | Node.js / TS | ✅ Fertig | Volle Integration in IDE, Stdio & SSE (Port 48124) |
+| **Genre- & Target-Profiles** | TS / JUCE / Rust | 🟡 Geplant (Sprint 3) | 5-Zonen FFT, Crossover-Notizen, DAW-Persistenz |
 | **Steinberg Nuendo Bridge** | macOS / Windows | 🟡 In Arbeit | MCU-Fallback aktiv, native VST-Bridge in Phase 2 |
 
 ---
