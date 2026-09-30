@@ -739,6 +739,61 @@ fn execute_logic_ax_bridge(bridge_path: &PathBuf, args: &[String]) -> Result<ser
     Ok(parsed)
 }
 
+/// Fuzzy track name matching mirroring the Swift `matchesTrackName` logic.
+/// Supports CamelCase acronyms like "MoReKi" -> "Motown Revisited Kit".
+fn matches_track_fuzzy(strip_name: &str, query: &str) -> bool {
+    let s = strip_name.to_lowercase();
+    let q = query.to_lowercase();
+    if s == q || s.contains(&q) || q.contains(&s) { return true; }
+
+    // Normalized (no spaces/punct)
+    let s_clean: String = s.chars().filter(|c| c.is_alphanumeric()).collect();
+    let q_clean: String = q.chars().filter(|c| c.is_alphanumeric()).collect();
+    if !s_clean.is_empty() && !q_clean.is_empty() && (s_clean == q_clean || s_clean.contains(&q_clean) || q_clean.contains(&s_clean)) {
+        return true;
+    }
+
+    let s_words: Vec<&str> = s.split_whitespace().collect();
+
+    // Initials: "motown revisited kit" -> "mrk"
+    let initials: String = s_words.iter().filter_map(|w| w.chars().next()).collect();
+    if !initials.is_empty() && initials == q_clean { return true; }
+
+    // CamelCase syllables: "MoReKi" -> ["mo", "re", "ki"]
+    let mut camel_parts: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for ch in query.chars() {
+        if ch.is_uppercase() && !cur.is_empty() {
+            camel_parts.push(cur.to_lowercase());
+            cur = ch.to_string();
+        } else {
+            cur.push(ch);
+        }
+    }
+    if !cur.is_empty() { camel_parts.push(cur.to_lowercase()); }
+
+    if camel_parts.len() > 1 && camel_parts.len() <= s_words.len() {
+        if camel_parts.iter().enumerate().all(|(i, cp)| {
+            s_words.get(i).map(|w| w.starts_with(cp.as_str())).unwrap_or(false)
+        }) {
+            return true;
+        }
+    }
+
+    // Word prefix matching
+    let q_words: Vec<&str> = q.split_whitespace().collect();
+    for sw in &s_words {
+        if sw.len() >= 3 {
+            for qw in &q_words {
+                if qw.len() >= 3 && (sw == qw || sw.starts_with(qw) || qw.starts_with(sw)) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn humanize_ax_error(raw_err: &str) -> String {
     let s = raw_err.trim();
     if s.contains("AX_UNTRUSTED") || s.contains("Bedienungshilfe") {
@@ -961,34 +1016,45 @@ async fn apply_daw_action(
                 .get("channelStrips")
                 .and_then(|s| s.as_array())
                 .and_then(|arr| {
+                    // Use fuzzy matching to find the correct track
                     arr.iter().find(|strip| {
                         let name = strip.get("trackName")
                             .and_then(|n| n.as_str())
                             .unwrap_or("");
-                        name.to_lowercase().contains(&track_name.to_lowercase())
+                        matches_track_fuzzy(name, &track_name)
                     })
                 })
                 .and_then(|strip| strip.get("inserts"))
                 .and_then(|ins| ins.as_array())
                 .and_then(|inserts| {
-                    inserts.iter()
-                        .filter_map(|ins| {
+                    let desc_low = desc_arg.to_lowercase();
+                    // 1. Smart plugin-type matching
+                    let exact = inserts.iter().find_map(|ins| {
+                        let name = ins.get("name").and_then(|n| n.as_str()).unwrap_or("").to_lowercase();
+                        let is_eq_param = desc_low.contains("freq") || desc_low.contains("gain")
+                            || desc_low.contains("cut") || desc_low.contains("hz")
+                            || desc_low.contains("shelf") || desc_low.contains("band");
+                        let is_comp_param = desc_low.contains("threshold") || desc_low.contains("ratio")
+                            || desc_low.contains("attack") || desc_low.contains("release") || desc_low.contains("knee");
+                        if (name.contains("eq") || name.contains("equalizer")) && is_eq_param {
+                            ins.get("slot").and_then(|s| s.as_u64())
+                        } else if name.contains("compressor") && is_comp_param {
+                            ins.get("slot").and_then(|s| s.as_u64())
+                        } else if name.contains("limiter") && desc_low.contains("threshold") {
+                            ins.get("slot").and_then(|s| s.as_u64())
+                        } else {
+                            None
+                        }
+                    });
+                    // 2. Fallback: first non-empty slot
+                    exact.or_else(|| {
+                        inserts.iter().find_map(|ins| {
                             let name = ins.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                            // Match plugin by a heuristic substring of the parameter target
-                            let desc_low = desc_arg.to_lowercase();
-                            let name_low = name.to_lowercase();
-                            if name_low.contains("channel eq") && (desc_low.contains("freq") || desc_low.contains("gain") || desc_low.contains("cut"))
-                                || name_low.contains("compressor") && (desc_low.contains("threshold") || desc_low.contains("ratio") || desc_low.contains("attack"))
-                                || !name_low.is_empty()
-                            {
-                                ins.get("slot").and_then(|s| s.as_u64())
-                            } else {
-                                None
-                            }
+                            if !name.is_empty() { ins.get("slot").and_then(|s| s.as_u64()) } else { None }
                         })
-                        .next()
+                    })
                 })
-                .or(Some(1)); // Default to slot 1 if no match
+                .or(Some(1)); // Default to slot 1 if nothing found
 
             if let Some(target_slot) = slot {
                 // 2. Open the insert

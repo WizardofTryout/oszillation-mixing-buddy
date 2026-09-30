@@ -151,12 +151,18 @@ func findTargetWindow(_ appElement: AXUIElement, query: String) -> AXUIElement? 
 func buildWindowError(_ appElement: AXUIElement, query: String) -> String {
     let windows = getLogicWindows(appElement)
     if windows.isEmpty {
+        // NOTE: Do NOT gate on AXIsProcessTrusted() here.
+        // When logic-ax-bridge is spawned as a child process by the Tauri app,
+        // AXIsProcessTrusted() returns false for the child even though the parent
+        // (Oszillation Mixing Buddy) is trusted. AX API calls still work via
+        // the responsible-process mechanism. Returning a "Bedienungshilfe" error
+        // here prevents the auto open-insert fallback from triggering in Rust.
+        // Instead, trigger a silent TCC prompt and return a fallback-compatible error.
         if !AXIsProcessTrusted() {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(options)
-            return "Bedienungshilfen-Zugriff erforderlich: Bitte aktiviere 'Oszillation Mixing Buddy' in den macOS Systemeinstellungen unter Datenschutz & Sicherheit > Bedienungshilfen."
         }
-        return "Keine Fenster in Logic Pro erreichbar. Bitte öffne das Mischpult in Logic Pro kurz mit Taste 'X'."
+        return "Plugin-Fenster nicht geöffnet: Logic Pro Mixer nicht erreichbar. Bitte öffne den Mixer (Taste X) und versuche es erneut."
     }
     let names = windows.compactMap { w -> String? in
         let t = getAXString(w, kAXTitleAttribute as String) ?? ""
