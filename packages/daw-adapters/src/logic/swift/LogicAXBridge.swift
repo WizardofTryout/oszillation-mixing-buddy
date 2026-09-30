@@ -315,12 +315,61 @@ func matchesTrackName(_ stripName: String, query: String) -> Bool {
     if s == q { return true }
     if s.contains(q) || q.contains(s) { return true }
     
-    // Check word tokens (e.g. "Motown Revisited" vs "Motown Revisited Kit")
-    let sWords = s.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count >= 3 }
-    let qWords = q.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count >= 3 }
-    for sw in sWords {
-        for qw in qWords {
-            if sw == qw || sw.contains(qw) || qw.contains(sw) {
+    // 1. Normalized alphanumeric without spaces/punctuation
+    let sClean = s.replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+    let qClean = q.replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
+    if !sClean.isEmpty && !qClean.isEmpty {
+        if sClean == qClean || sClean.contains(qClean) || qClean.contains(sClean) {
+            return true
+        }
+    }
+    
+    // 2. Word tokens
+    let sWords = s.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+    let qWords = q.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+    
+    // 3. Initials / Acronym match (e.g. "mrk" -> "motown revisited kit")
+    let initials = sWords.compactMap { $0.first }.map { String($0) }.joined()
+    if !initials.isEmpty && (initials == qClean || qClean == initials) {
+        return true
+    }
+    
+    // 4. CamelCase / Syllable parts matching (e.g. "MoReKi" -> ["mo", "re", "ki"])
+    let camelParts: [String] = {
+        var parts: [String] = []
+        var cur = ""
+        for ch in query.trimmingCharacters(in: .whitespacesAndNewlines) {
+            if ch.isUppercase && !cur.isEmpty {
+                parts.append(cur.lowercased())
+                cur = String(ch)
+            } else {
+                cur.append(ch)
+            }
+        }
+        if !cur.isEmpty { parts.append(cur.lowercased()) }
+        return parts
+    }()
+    
+    if camelParts.count > 1 && camelParts.count <= sWords.count {
+        var allMatch = true
+        for (idx, cp) in camelParts.enumerated() {
+            if idx < sWords.count {
+                if !sWords[idx].hasPrefix(cp) {
+                    allMatch = false
+                    break
+                }
+            } else {
+                allMatch = false
+                break
+            }
+        }
+        if allMatch { return true }
+    }
+    
+    // 5. Individual word prefix/contains matching
+    for sw in sWords where sw.count >= 3 {
+        for qw in qWords where qw.count >= 3 {
+            if sw == qw || sw.hasPrefix(qw) || qw.hasPrefix(sw) {
                 return true
             }
         }
@@ -1107,6 +1156,12 @@ case "set-fader":
             break
         }
     }
+    if targetStrip == nil {
+        let digits = trackQuery.filter { $0.isNumber }
+        if let idx = Int(digits), idx >= 1 && idx <= stripElements.count {
+            targetStrip = parseChannelStripElement(stripElements[idx - 1])
+        }
+    }
     
     guard let strip = targetStrip else {
         if stripElements.isEmpty && !AXIsProcessTrusted() {
@@ -1156,6 +1211,12 @@ case "set-pan":
         if matchesTrackName(parsed.trackName, query: trackQuery) {
             targetStrip = parsed
             break
+        }
+    }
+    if targetStrip == nil {
+        let digits = trackQuery.filter { $0.isNumber }
+        if let idx = Int(digits), idx >= 1 && idx <= stripElements.count {
+            targetStrip = parseChannelStripElement(stripElements[idx - 1])
         }
     }
     
@@ -1229,6 +1290,12 @@ case "open-insert":
         if matchesTrackName(parsed.trackName, query: trackQuery) {
             targetStrip = parsed
             break
+        }
+    }
+    if targetStrip == nil {
+        let digits = trackQuery.filter { $0.isNumber }
+        if let idx = Int(digits), idx >= 1 && idx <= stripElements.count {
+            targetStrip = parseChannelStripElement(stripElements[idx - 1])
         }
     }
     
