@@ -160,6 +160,60 @@ impl DAWDetector {
         #[cfg(target_os = "macos")]
         {
             let bridge = crate::resolve_bridge_path();
+
+            // 1. Try list-channel-strips: reads all tracks, faders, pan, and real insert slots directly from Logic Pro
+            if let Ok(output) = std::process::Command::new(&bridge)
+                .arg("list-channel-strips")
+                .output()
+            {
+                if output.status.success() {
+                    if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                        if let Some(strips) = val.get("channelStrips").and_then(|cs| cs.as_array()) {
+                            if !strips.is_empty() {
+                                let mut tracks: Vec<serde_json::Value> = Vec::new();
+                                for (idx, s) in strips.iter().enumerate() {
+                                    let track_name = s.get("trackName").and_then(|v| v.as_str()).unwrap_or("Track");
+                                    let lower = track_name.to_lowercase();
+                                    let is_master = lower.contains("stereo out") || lower == "master";
+
+                                    let inserts = s.get("inserts").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                                    let insert_slots: Vec<serde_json::Value> = inserts
+                                        .iter()
+                                        .map(|ins| {
+                                            let slot = ins.get("slot").and_then(|v| v.as_i64()).unwrap_or(1);
+                                            let name = ins.get("name").and_then(|v| v.as_str()).unwrap_or("Plugin");
+                                            serde_json::json!({
+                                                "slotIndex": slot,
+                                                "pluginName": name,
+                                                "isEnabled": true,
+                                                "parameters": []
+                                            })
+                                        })
+                                        .collect();
+
+                                    tracks.push(serde_json::json!({
+                                        "id": if is_master { "track_master".to_string() } else { format!("track_{}", idx + 1) },
+                                        "index": idx,
+                                        "name": track_name,
+                                        "type": if is_master { "master" } else { "audio" },
+                                        "volumeDb": s.get("faderDb").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                        "pan": s.get("pan").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                        "isMuted": s.get("mute").and_then(|v| v.as_bool()).unwrap_or(false),
+                                        "isSoloed": s.get("solo").and_then(|v| v.as_bool()).unwrap_or(false),
+                                        "isSelected": idx == 0,
+                                        "insertSlots": insert_slots
+                                    }));
+                                }
+                                if !tracks.is_empty() {
+                                    return tracks;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Fallback: scan-tracks if mixer channel strips are not accessible
             let mut candidate_track_names: Vec<String> = Vec::new();
 
             if let Ok(output) = std::process::Command::new(&bridge)
@@ -208,7 +262,7 @@ impl DAWDetector {
                 "insertSlots": []
             }));
 
-            // 2. Dynamically discovered tracks (no static mock plugins or parameters)
+            // 2. Dynamically discovered tracks
             for (idx, name) in candidate_track_names.iter().enumerate() {
                 tracks.push(serde_json::json!({
                     "id": format!("track_{}", idx + 1),

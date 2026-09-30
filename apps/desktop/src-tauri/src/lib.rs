@@ -739,6 +739,19 @@ fn execute_logic_ax_bridge(bridge_path: &PathBuf, args: &[String]) -> Result<ser
     Ok(parsed)
 }
 
+fn humanize_ax_error(raw_err: &str) -> String {
+    let s = raw_err.trim();
+    if s.contains("AX_UNTRUSTED") || s.contains("Bedienungshilfe") {
+        "Bedienungshilfen-Zugriff erforderlich: Bitte prüfe in den macOS 'Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen', dass 'Oszillation Mixing Buddy' aktiviert ist.".to_string()
+    } else if s.contains("nicht geöffnet") || s.contains("AX_NO_WINDOWS") {
+        "Plugin-Fenster nicht geöffnet: Bitte öffne das Plugin im Mixer von Logic Pro kurz per Doppelklick, damit die Regler erreichbar sind.".to_string()
+    } else if s.contains("Element not found") {
+        "Regler nicht gefunden: Der Parameter konnte im Plugin-Fenster nicht lokalisiert werden. Bitte Standard-Ansicht prüfen.".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
 #[tauri::command]
 async fn apply_daw_action(
     track_name: String,
@@ -802,7 +815,7 @@ async fn apply_daw_action(
                 ));
             } else {
                 let err_msg = res.get("error").and_then(|v| v.as_str()).unwrap_or("Unbekannter AX-Fehler");
-                return Err(format!("Fader für '{}' konnte nicht gesetzt werden: {}", track_name, err_msg));
+                return Err(format!("Fader für '{}' konnte nicht gesetzt werden: {}", track_name, humanize_ax_error(err_msg)));
             }
         }
 
@@ -846,7 +859,7 @@ async fn apply_daw_action(
                 ));
             } else {
                 let err_msg = res.get("error").and_then(|v| v.as_str()).unwrap_or("Unbekannter AX-Fehler");
-                return Err(format!("Pan für '{}' konnte nicht gesetzt werden: {}", track_name, err_msg));
+                return Err(format!("Pan für '{}' konnte nicht gesetzt werden: {}", track_name, humanize_ax_error(err_msg)));
             }
         }
 
@@ -1035,7 +1048,7 @@ async fn apply_daw_action(
         if parsed_result.get("success").and_then(|v| v.as_bool()) != Some(true) {
             return Err(format!(
                 "Konnte '{}' auf Spur '{}' nicht setzen: {}",
-                parameter, track_name, err_msg_str
+                parameter, track_name, humanize_ax_error(&err_msg_str)
             ));
         }
 

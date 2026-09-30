@@ -154,16 +154,16 @@ func buildWindowError(_ appElement: AXUIElement, query: String) -> String {
         if !AXIsProcessTrusted() {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(options)
-            return "AX_UNTRUSTED: Fehlende macOS Bedienungshilfen-Berechtigung für den aufrufenden Prozess"
+            return "Bedienungshilfen-Zugriff erforderlich: Bitte aktiviere 'Oszillation Mixing Buddy' in den macOS Systemeinstellungen unter Datenschutz & Sicherheit > Bedienungshilfen."
         }
-        return "AX_NO_WINDOWS: Keine zugänglichen Fenster in Logic Pro gefunden"
+        return "Keine Fenster in Logic Pro erreichbar. Bitte öffne das Mischpult in Logic Pro kurz mit Taste 'X'."
     }
     let names = windows.compactMap { w -> String? in
         let t = getAXString(w, kAXTitleAttribute as String) ?? ""
         let p = detectPluginName(in: w, windowTitle: t)
         return t.isEmpty ? nil : (p != t ? "\(t) (\(p))" : t)
     }
-    return "Plugin-Fenster für '\(query)' ist in Logic Pro nicht geöffnet (offene Fenster: \(names.joined(separator: ", ")))"
+    return "Plugin-Fenster für '\(query)' ist in Logic Pro derzeit nicht geöffnet (geöffnet sind: \(names.joined(separator: ", ")))"
 }
 
 // MARK: - Recursive DFS Element Search
@@ -1112,7 +1112,7 @@ case "set-fader":
         if stripElements.isEmpty && !AXIsProcessTrusted() {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(options)
-            printJSON(["success": false, "error": "AX_UNTRUSTED: Fehlende macOS Bedienungshilfen-Berechtigung"])
+            printJSON(["success": false, "error": "Bedienungshilfen-Zugriff erforderlich: Bitte aktiviere 'Oszillation Mixing Buddy' in den macOS Systemeinstellungen unter Datenschutz & Sicherheit > Bedienungshilfen."])
             exit(0)
         }
         let known = stripElements.map { parseChannelStripElement($0).trackName }.joined(separator: ", ")
@@ -1163,7 +1163,7 @@ case "set-pan":
         if stripElements.isEmpty && !AXIsProcessTrusted() {
             let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             _ = AXIsProcessTrustedWithOptions(options)
-            printJSON(["success": false, "error": "AX_UNTRUSTED: Fehlende macOS Bedienungshilfen-Berechtigung"])
+            printJSON(["success": false, "error": "Bedienungshilfen-Zugriff erforderlich: Bitte aktiviere 'Oszillation Mixing Buddy' in den macOS Systemeinstellungen unter Datenschutz & Sicherheit > Bedienungshilfen."])
             exit(0)
         }
         let known = stripElements.map { parseChannelStripElement($0).trackName }.joined(separator: ", ")
