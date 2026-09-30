@@ -29,6 +29,8 @@ export interface ProfiledPluginSpec {
   pluginName: string;
   windowTitle?: string;
   category: string;
+  /** Auto-generated or user-edited tag array, e.g. ["SATURATION", "COLOR"] */
+  tags?: string[];
   parameters: ProfiledParameterItem[];
 }
 
@@ -36,9 +38,25 @@ export interface PluginSummary {
   slug: string;
   pluginName: string;
   category: string;
+  /** Resolved tags (always present; falls back to [category.toUpperCase()] if absent in JSON) */
+  tags: string[];
   parameterCount: number;
   isBuiltIn: boolean;
   filePath?: string;
+}
+
+/**
+ * Derives a sensible default tag list from a category string when no explicit tags are stored.
+ */
+export function inferTagsFromCategory(category: string): string[] {
+  const c = category.toLowerCase();
+  if (c === 'eq') return ['EQ'];
+  if (c === 'dynamics') return ['DYNAMICS'];
+  if (c === 'saturation') return ['SATURATION'];
+  if (c === 'reverb') return ['REVERB'];
+  if (c === 'delay') return ['DELAY'];
+  if (c === 'modulation') return ['MODULATION'];
+  return [category.toUpperCase()];
 }
 
 /**
@@ -107,15 +125,37 @@ export function saveLearnedPluginToVault(spec: ProfiledPluginSpec): {
   const vaultDir = getPluginVaultDir();
   const slug = toPluginSlug(spec.pluginName);
   const filePath = join(vaultDir, `${slug}.json`);
+  const resolvedTags =
+    Array.isArray(spec.tags) && spec.tags.length > 0
+      ? spec.tags
+      : inferTagsFromCategory(spec.category || 'utility');
   const payload: ProfiledPluginSpec = {
     schemaVersion: spec.schemaVersion || '1.0',
     pluginName: spec.pluginName,
     windowTitle: spec.windowTitle,
     category: spec.category || 'utility',
+    tags: resolvedTags,
     parameters: spec.parameters || []
   };
   writeFileSync(filePath, JSON.stringify(payload, null, 2) + '\n', 'utf8');
   return { slug, filePath, spec: payload };
+}
+
+/**
+ * Overwrites the `tags` field on an existing vault JSON and returns the updated spec.
+ * Throws if the file does not exist.
+ */
+export function updatePluginTags(slug: string, tags: string[]): ProfiledPluginSpec {
+  const vaultDir = getPluginVaultDir();
+  const filePath = join(vaultDir, `${slug}.json`);
+  if (!existsSync(filePath)) {
+    throw new Error(`Plugin-Datei '${filePath}' nicht gefunden.`);
+  }
+  const raw = readFileSync(filePath, 'utf8');
+  const parsed = JSON.parse(raw) as ProfiledPluginSpec;
+  parsed.tags = tags.map((t) => t.trim().toUpperCase()).filter(Boolean);
+  writeFileSync(filePath, JSON.stringify(parsed, null, 2) + '\n', 'utf8');
+  return parsed;
 }
 
 /**
@@ -173,6 +213,7 @@ export function listAllRegisteredPlugins(): PluginSummary[] {
       slug: 'channel_eq',
       pluginName: CHANNEL_EQ_SPEC.name,
       category: 'eq',
+      tags: ['EQ', 'STOCK'],
       parameterCount: CHANNEL_EQ_SPEC.parameters.filter((p) => !p.hidden).length,
       isBuiltIn: true
     },
@@ -180,6 +221,7 @@ export function listAllRegisteredPlugins(): PluginSummary[] {
       slug: 'compressor',
       pluginName: COMPRESSOR_SPEC.name,
       category: 'dynamics',
+      tags: ['DYNAMICS', 'COMPRESSOR', 'STOCK'],
       parameterCount: COMPRESSOR_SPEC.parameters.filter((p) => !p.hidden).length,
       isBuiltIn: true
     }
@@ -187,10 +229,14 @@ export function listAllRegisteredPlugins(): PluginSummary[] {
 
   const vaultItems = loadVaultPluginSpecs();
   for (const item of vaultItems) {
+    const rawTags = Array.isArray(item.profiled.tags) && item.profiled.tags.length > 0
+      ? item.profiled.tags
+      : inferTagsFromCategory(item.profiled.category || 'utility');
     summaries.push({
       slug: item.slug,
       pluginName: item.profiled.pluginName,
       category: item.profiled.category || 'utility',
+      tags: rawTags,
       parameterCount: item.profiled.parameters.length,
       isBuiltIn: false,
       filePath: item.filePath

@@ -678,14 +678,99 @@ case "profile-plugin":
         parameters.append(paramObj)
     }
 
-    var category = "utility"
+    // --- Extended category + tag inference ---
+    // Collect all param label text for keyword matching
+    let allParamText = parameters
+        .compactMap { $0["name"] as? String }
+        .joined(separator: " ")
+        .lowercased()
+
     let lowerPlugin = pluginName.lowercased()
+
+    // Score helpers (extending existing eqScore / compScore / satScore)
+    var delayScore  = 0
+    var reverbScore = 0
+    var modScore    = 0
+    var limiterScore = 0
+
+    for (_, ctrl) in rawControls.enumerated() {
+        let desc  = (ctrl["description"] as? String ?? "").lowercased()
+        let title = (ctrl["title"]       as? String ?? "").lowercased()
+        let label = desc.isEmpty ? title : desc
+
+        if label.contains("delay") || label.contains("echo") || label.contains("feedback") ||
+           label.contains("ping pong") || label.contains("bpm") || label.contains("time sync") { delayScore += 1 }
+
+        if label.contains("reverb") || label.contains("decay") || label.contains("predelay") ||
+           label.contains("room") || label.contains("hall") || label.contains("plate") ||
+           label.contains("damping") || label.contains("early reflections") { reverbScore += 1 }
+
+        if label.contains("chorus") || label.contains("flanger") || label.contains("phaser") ||
+           label.contains("tremolo") || label.contains("vibrato") || label.contains("lfo") { modScore += 1 }
+
+        if label.contains("limit") || label.contains("ceiling") || label.contains("lookahead") ||
+           label.contains("out ceiling") || label.contains("true peak") { limiterScore += 1 }
+    }
+
+    // Primary category
+    var category = "utility"
+    var tags: [String] = []
+
+    // EQ
     if lowerPlugin.contains("eq") || lowerPlugin.contains("pro-q") || eqScore >= 3 {
         category = "eq"
-    } else if lowerPlugin.contains("comp") || lowerPlugin.contains("1176") || lowerPlugin.contains("la-2a") || compScore >= 2 {
-        category = "dynamics"
-    } else if lowerPlugin.contains("decapitator") || lowerPlugin.contains("sat") || lowerPlugin.contains("tube") || satScore >= 2 {
+        tags.append("EQ")
+    }
+    // Saturation / Color (before dynamics to catch e.g. "ChromaGlow" correctly)
+    else if lowerPlugin.contains("glow") || lowerPlugin.contains("chroma") ||
+            lowerPlugin.contains("sat") || lowerPlugin.contains("tube") ||
+            lowerPlugin.contains("tape") || lowerPlugin.contains("distort") ||
+            lowerPlugin.contains("warmth") || lowerPlugin.contains("overdrive") ||
+            lowerPlugin.contains("preamp") || lowerPlugin.contains("decapitator") ||
+            lowerPlugin.contains("color") || lowerPlugin.contains("harmonics") ||
+            satScore >= 2 ||
+            allParamText.contains("drive") || allParamText.contains("glow") ||
+            allParamText.contains("saturat") || allParamText.contains("warmth") {
         category = "saturation"
+        tags.append("SATURATION")
+        if lowerPlugin.contains("glow") || lowerPlugin.contains("chroma") || allParamText.contains("glow") {
+            tags.append("COLOR")
+        }
+    }
+    // Limiter (before generic dynamics)
+    else if lowerPlugin.contains("limit") || limiterScore >= 2 ||
+            allParamText.contains("ceiling") || allParamText.contains("lookahead") {
+        category = "dynamics"
+        tags.append("DYNAMICS")
+        tags.append("LIMITER")
+    }
+    // Generic Dynamics / Compressor
+    else if lowerPlugin.contains("comp") || lowerPlugin.contains("1176") ||
+            lowerPlugin.contains("la-2a") || compScore >= 2 {
+        category = "dynamics"
+        tags.append("DYNAMICS")
+        tags.append("COMPRESSOR")
+    }
+    // Reverb
+    else if lowerPlugin.contains("reverb") || lowerPlugin.contains("room") ||
+            lowerPlugin.contains("hall") || lowerPlugin.contains("verb") || reverbScore >= 2 {
+        category = "reverb"
+        tags.append("REVERB")
+    }
+    // Delay / Echo
+    else if lowerPlugin.contains("delay") || lowerPlugin.contains("echo") || delayScore >= 2 {
+        category = "delay"
+        tags.append("DELAY")
+    }
+    // Modulation
+    else if lowerPlugin.contains("chorus") || lowerPlugin.contains("flanger") ||
+            lowerPlugin.contains("phaser") || lowerPlugin.contains("tremolo") ||
+            lowerPlugin.contains("modulation") || modScore >= 2 {
+        category = "modulation"
+        tags.append("MODULATION")
+    }
+    else {
+        tags.append("UTILITY")
     }
 
     printJSON([
@@ -694,6 +779,7 @@ case "profile-plugin":
         "pluginName": pluginName,
         "windowTitle": windowTitle,
         "category": category,
+        "tags": tags,
         "parameters": parameters
     ])
 

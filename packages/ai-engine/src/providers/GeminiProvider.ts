@@ -329,7 +329,12 @@ export class GeminiProvider implements AIProvider {
           const result = await model.generateContent(fullPrompt);
           const response = await result.response;
           const call = response.functionCalls()?.[0];
-          const textOutput = response.text ? response.text() : '';
+          // Safely extract text: calling response.text() when the response only contains
+          // a function-call part (no text parts) throws the SDK error
+          // "model output must contain either output text or tool calls".
+          // We guard against this by checking parts directly.
+          const textParts = response.candidates?.[0]?.content?.parts?.filter((p: { text?: string }) => typeof p.text === 'string' && p.text.trim().length > 0) ?? [];
+          const textOutput = textParts.length > 0 ? textParts.map((p: { text?: string }) => p.text ?? '').join('') : '';
           usedModel = candidateModel;
 
           let fallbackNote = '';

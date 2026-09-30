@@ -1072,6 +1072,8 @@ pub struct PluginSummary {
     pub slug: String,
     pub plugin_name: String,
     pub category: String,
+    /// Resolved tags (always present; auto-derived from category when JSON has none)
+    pub tags: Vec<String>,
     pub parameter_count: usize,
     pub is_built_in: bool,
     pub file_path: Option<String>,
@@ -1160,6 +1162,7 @@ pub fn list_learned_plugins_sync() -> Result<Vec<PluginSummary>, String> {
             slug: "channel_eq".to_string(),
             plugin_name: "Channel EQ".to_string(),
             category: "eq".to_string(),
+            tags: vec!["EQ".to_string(), "STOCK".to_string()],
             parameter_count: 32,
             is_built_in: true,
             file_path: None,
@@ -1168,6 +1171,7 @@ pub fn list_learned_plugins_sync() -> Result<Vec<PluginSummary>, String> {
             slug: "compressor".to_string(),
             plugin_name: "Compressor".to_string(),
             category: "dynamics".to_string(),
+            tags: vec!["DYNAMICS".to_string(), "COMPRESSOR".to_string(), "STOCK".to_string()],
             parameter_count: 14,
             is_built_in: true,
             file_path: None,
@@ -1198,6 +1202,12 @@ pub fn list_learned_plugins_sync() -> Result<Vec<PluginSummary>, String> {
                         .and_then(|v| v.as_array())
                         .map(|a| a.len())
                         .unwrap_or(0);
+                    let tags: Vec<String> = val
+                        .get("tags")
+                        .and_then(|t| t.as_array())
+                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                        .filter(|t: &Vec<String>| !t.is_empty())
+                        .unwrap_or_else(|| infer_tags_from_category(&category));
                     let slug = path
                         .file_stem()
                         .and_then(|s| s.to_str())
@@ -1208,6 +1218,7 @@ pub fn list_learned_plugins_sync() -> Result<Vec<PluginSummary>, String> {
                         slug,
                         plugin_name,
                         category,
+                        tags,
                         parameter_count,
                         is_built_in: false,
                         file_path: Some(path.to_string_lossy().to_string()),
@@ -1218,6 +1229,52 @@ pub fn list_learned_plugins_sync() -> Result<Vec<PluginSummary>, String> {
     }
 
     Ok(list)
+}
+
+/// Derives default tags from category when no explicit tags exist in the JSON
+fn infer_tags_from_category(category: &str) -> Vec<String> {
+    match category.to_lowercase().as_str() {
+        "eq" => vec!["EQ".to_string()],
+        "dynamics" => vec!["DYNAMICS".to_string()],
+        "saturation" => vec!["SATURATION".to_string()],
+        "reverb" => vec!["REVERB".to_string()],
+        "delay" => vec!["DELAY".to_string()],
+        "modulation" => vec!["MODULATION".to_string()],
+        other => vec![other.to_uppercase()],
+    }
+}
+
+/// Overwrites the `tags` field in a vault JSON file and reloads it.
+pub fn update_plugin_tags_sync(slug: String, tags: Vec<String>) -> Result<serde_json::Value, String> {
+    let clean_slug = to_plugin_slug(&slug);
+    let vault_dir = get_plugin_vault_dir()?;
+    let target = vault_dir.join(format!("{}.json", clean_slug));
+    if !target.exists() {
+        return Err(format!("Plugin-Datei '{}' nicht gefunden.", target.display()));
+    }
+    let raw = std::fs::read_to_string(&target)
+        .map_err(|e| format!("Fehler beim Lesen von '{}': {}", target.display(), e))?;
+    let mut val = serde_json::from_str::<serde_json::Value>(&raw)
+        .map_err(|e| format!("Ungültiges JSON in '{}': {}", target.display(), e))?;
+    let normalized: Vec<String> = tags
+        .iter()
+        .map(|t| t.trim().to_uppercase())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if let Some(obj) = val.as_object_mut() {
+        obj.insert(
+            "tags".to_string(),
+            serde_json::Value::Array(
+                normalized.iter().map(|t| serde_json::Value::String(t.clone())).collect(),
+            ),
+        );
+    }
+    let formatted = serde_json::to_string_pretty(&val)
+        .map_err(|e| format!("JSON-Serialisierung fehlgeschlagen: {}", e))?;
+    std::fs::write(&target, format!("{}
+", formatted))
+        .map_err(|e| format!("Fehler beim Schreiben in '{}': {}", target.display(), e))?;
+    Ok(val)
 }
 
 #[tauri::command]
@@ -1236,6 +1293,17 @@ pub fn delete_learned_plugin_sync(slug: String) -> Result<String, String> {
     } else {
         Err(format!("Plugin-Datei '{}' nicht gefunden.", target.display()))
     }
+}
+
+#[tauri::command]
+async fn update_plugin_tags(
+    slug: String,
+    tags: Vec<String>,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    let result = update_plugin_tags_sync(slug.clone(), tags)?;
+    let _ = app.emit("plugin-vault-updated", &slug);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1292,7 +1360,8 @@ pub fn run() {
             install_mcp_client_config,
             learn_active_plugin,
             list_learned_plugins,
-            delete_learned_plugin
+            delete_learned_plugin,
+            update_plugin_tags
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

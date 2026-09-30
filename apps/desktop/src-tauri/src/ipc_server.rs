@@ -373,6 +373,34 @@ async fn handle_connection(
                 let _ = stream.write_all(resp.as_bytes()).await;
                 let _ = stream.flush().await;
                 return;
+            } else if path.contains("/api/vault/tags") {
+                // Update tags for a vault plugin: { "slug": "chromaglow", "tags": ["SATURATION","COLOR"] }
+                let slug = serde_json::from_str::<serde_json::Value>(&body_str)
+                    .ok()
+                    .and_then(|v| v.get("slug").and_then(|w| w.as_str()).map(|s| s.to_string()))
+                    .unwrap_or_default();
+                let tags: Vec<String> = serde_json::from_str::<serde_json::Value>(&body_str)
+                    .ok()
+                    .and_then(|v| v.get("tags").and_then(|t| t.as_array()).map(|arr| {
+                        arr.iter().filter_map(|t| t.as_str().map(|s| s.to_string())).collect()
+                    }))
+                    .unwrap_or_default();
+                let (status_line, body) = match crate::update_plugin_tags_sync(slug, tags) {
+                    Ok(updated) => ("HTTP/1.1 200 OK", updated.to_string()),
+                    Err(err) => (
+                        "HTTP/1.1 400 Bad Request",
+                        serde_json::json!({ "error": err }).to_string(),
+                    ),
+                };
+                let resp = format!(
+                    "{}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
             } else {
                 // Action proposal sync (e.g. /api/proposals)
                 if !body_str.trim().is_empty() {
