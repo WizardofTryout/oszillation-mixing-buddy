@@ -286,7 +286,9 @@ export const App: React.FC = () => {
             parameter: cmd.parameterName,
             value: typeof cmd.value === 'number' ? cmd.value : 0.0,
             unit: cmd.unit || 'dB',
-            isMaster: cmd.isMaster ?? false
+            isMaster: cmd.isMaster ?? false,
+            pluginName: cmd.pluginName || null,
+            slotIndex: typeof cmd.slotIndex === 'number' && cmd.slotIndex > 0 ? cmd.slotIndex : null
           });
           setChatLog(`⚡ Externer MCP-Befehl ausgeführt: ${cmd.parameterName} auf ${cmd.value}`);
         }
@@ -437,7 +439,9 @@ export const App: React.FC = () => {
           currentValue: delta.currentValue ?? 0.0,
           isRestore: false,
           unit: delta.unit ?? 'dB',
-          isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo')
+          isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo'),
+          pluginName: delta.pluginName || null,
+          slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
         });
       }
 
@@ -490,7 +494,9 @@ export const App: React.FC = () => {
           currentValue: delta?.currentValue ?? 0.0,
           isRestore: false,
           unit: delta?.unit ?? 'dB',
-          isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo')
+          isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo'),
+          pluginName: delta?.pluginName || null,
+          slotIndex: typeof delta?.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
         });
       }
     } catch (err: unknown) {
@@ -517,7 +523,9 @@ export const App: React.FC = () => {
             currentValue: delta?.currentValue ?? 0.0,
             isRestore: true,
             unit: delta?.unit ?? 'dB',
-            isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo')
+            isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo'),
+            pluginName: delta?.pluginName || null,
+            slotIndex: typeof delta?.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
           });
         }
         setChatLog(`🎧 A/B Audition beendet. Vorheriger Zustand in ${dawLabel} wiederhergestellt.`);

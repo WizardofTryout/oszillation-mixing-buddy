@@ -158,10 +158,11 @@ func buildWindowError(_ appElement: AXUIElement, query: String) -> String {
         // the responsible-process mechanism. Returning a "Bedienungshilfe" error
         // here prevents the auto open-insert fallback from triggering in Rust.
         // Instead, trigger a silent TCC prompt and return a fallback-compatible error.
-        if !AXIsProcessTrusted() {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-        }
+        // NOTE: Do NOT check AXIsProcessTrusted() here or trigger a TCC prompt.
+        // When logic-ax-bridge runs as a child of the Tauri app, AXIsProcessTrusted()
+        // returns false even though the parent is trusted. Calling AXIsProcessTrustedWithOptions
+        // here would pop up a system dialog on every EQ parameter call. The parent app
+        // (Oszillation Mixing Buddy) already has TCC permission — no additional prompt needed.
         return "Plugin-Fenster nicht geöffnet: Logic Pro Mixer nicht erreichbar. Bitte öffne den Mixer (Taste X) und versuche es erneut."
     }
     let names = windows.compactMap { w -> String? in
@@ -1170,10 +1171,8 @@ case "set-fader":
     }
     
     guard let strip = targetStrip else {
-        if stripElements.isEmpty && !AXIsProcessTrusted() {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-            printJSON(["success": false, "error": "Bedienungshilfen-Zugriff erforderlich: Bitte aktiviere 'Oszillation Mixing Buddy' in den macOS Systemeinstellungen unter Datenschutz & Sicherheit > Bedienungshilfen."])
+        if stripElements.isEmpty {
+            printJSON(["success": false, "error": "Logic Pro Mixer ist nicht geöffnet oder enthält keine sichtbaren Kanalzüge. Bitte öffne den Mixer in Logic Pro (Taste X) und versuche es erneut."])
             exit(0)
         }
         let known = stripElements.map { parseChannelStripElement($0).trackName }.joined(separator: ", ")
@@ -1227,10 +1226,8 @@ case "set-pan":
     }
     
     guard let strip = targetStrip else {
-        if stripElements.isEmpty && !AXIsProcessTrusted() {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-            printJSON(["success": false, "error": "Bedienungshilfen-Zugriff erforderlich: Bitte aktiviere 'Oszillation Mixing Buddy' in den macOS Systemeinstellungen unter Datenschutz & Sicherheit > Bedienungshilfen."])
+        if stripElements.isEmpty {
+            printJSON(["success": false, "error": "Logic Pro Mixer ist nicht geöffnet oder enthält keine sichtbaren Kanalzüge. Bitte öffne den Mixer in Logic Pro (Taste X) und versuche es erneut."])
             exit(0)
         }
         let known = stripElements.map { parseChannelStripElement($0).trackName }.joined(separator: ", ")

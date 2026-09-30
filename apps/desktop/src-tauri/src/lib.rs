@@ -796,8 +796,10 @@ fn matches_track_fuzzy(strip_name: &str, query: &str) -> bool {
 
 fn humanize_ax_error(raw_err: &str) -> String {
     let s = raw_err.trim();
-    if s.contains("AX_UNTRUSTED") || s.contains("Bedienungshilfe") {
+    if s.contains("AX_UNTRUSTED") {
         "Bedienungshilfen-Zugriff erforderlich: Bitte prüfe in den macOS 'Systemeinstellungen > Datenschutz & Sicherheit > Bedienungshilfen', dass 'Oszillation Mixing Buddy' aktiviert ist.".to_string()
+    } else if s.contains("Mixer ist nicht geöffnet") || s.contains("Kanalzüge") {
+        "Logic Pro Mixer nicht sichtbar: Bitte öffne den Mixer in Logic Pro (Taste X) oder wähle die Spur an.".to_string()
     } else if s.contains("nicht geöffnet") || s.contains("AX_NO_WINDOWS") {
         "Plugin-Fenster nicht geöffnet: Bitte öffne das Plugin im Mixer von Logic Pro kurz per Doppelklick, damit die Regler erreichbar sind.".to_string()
     } else if s.contains("Element not found") {
@@ -816,6 +818,8 @@ async fn apply_daw_action(
     is_master: bool,
     current_value: Option<f32>,
     is_restore: Option<bool>,
+    plugin_name: Option<String>,
+    slot_index: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let active_daw = {
@@ -1012,49 +1016,93 @@ async fn apply_daw_action(
             let strips_result = execute_logic_ax_bridge(&bridge_path, &strips_args)
                 .unwrap_or_else(|_| serde_json::json!({}));
 
-            let slot: Option<u64> = strips_result
-                .get("channelStrips")
-                .and_then(|s| s.as_array())
-                .and_then(|arr| {
-                    // Use fuzzy matching to find the correct track
-                    arr.iter().find(|strip| {
-                        let name = strip.get("trackName")
-                            .and_then(|n| n.as_str())
-                            .unwrap_or("");
-                        matches_track_fuzzy(name, &track_name)
-                    })
-                })
-                .and_then(|strip| strip.get("inserts"))
-                .and_then(|ins| ins.as_array())
-                .and_then(|inserts| {
-                    let desc_low = desc_arg.to_lowercase();
-                    // 1. Smart plugin-type matching
-                    let exact = inserts.iter().find_map(|ins| {
-                        let name = ins.get("name").and_then(|n| n.as_str()).unwrap_or("").to_lowercase();
-                        let is_eq_param = desc_low.contains("freq") || desc_low.contains("gain")
-                            || desc_low.contains("cut") || desc_low.contains("hz")
-                            || desc_low.contains("shelf") || desc_low.contains("band");
-                        let is_comp_param = desc_low.contains("threshold") || desc_low.contains("ratio")
-                            || desc_low.contains("attack") || desc_low.contains("release") || desc_low.contains("knee");
-                        if (name.contains("eq") || name.contains("equalizer")) && is_eq_param {
-                            ins.get("slot").and_then(|s| s.as_u64())
-                        } else if name.contains("compressor") && is_comp_param {
-                            ins.get("slot").and_then(|s| s.as_u64())
-                        } else if name.contains("limiter") && desc_low.contains("threshold") {
-                            ins.get("slot").and_then(|s| s.as_u64())
-                        } else {
-                            None
-                        }
-                    });
-                    // 2. Fallback: first non-empty slot
-                    exact.or_else(|| {
-                        inserts.iter().find_map(|ins| {
-                            let name = ins.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                            if !name.is_empty() { ins.get("slot").and_then(|s| s.as_u64()) } else { None }
+            let slot: Option<u64> = slot_index
+                .filter(|&s| s >= 1)
+                .or_else(|| {
+                    strips_result
+                        .get("channelStrips")
+                        .and_then(|s| s.as_array())
+                        .and_then(|arr| {
+                            // Use fuzzy matching to find the correct track
+                            arr.iter().find(|strip| {
+                                let name = strip.get("trackName")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("");
+                                matches_track_fuzzy(name, &track_name)
+                            })
                         })
-                    })
-                })
-                .or(Some(1)); // Default to slot 1 if nothing found
+                        .and_then(|strip| strip.get("inserts"))
+                        .and_then(|ins| ins.as_array())
+                        .and_then(|inserts| {
+                            // 1. If explicit plugin_name was provided, find that plugin's slot
+                            if let Some(target_pname) = &plugin_name {
+                                let tp_low = target_pname.to_lowercase();
+                                if let Some(matched_slot) = inserts.iter().find_map(|ins| {
+                                    let n = ins.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                                    if n.contains(&tp_low) || tp_low.contains(&n) {
+                                        ins.get("slot").and_then(|s| s.as_u64())
+                                    } else {
+                                        None
+                                    }
+                                }) {
+                                    return Some(matched_slot);
+                                }
+                            }
+
+                            let desc_low = desc_arg.to_lowercase();
+                            let is_eq_param = desc_low.contains("freq") || desc_low.contains("gain")
+                                || desc_low.contains("cut") || desc_low.contains("hz")
+                                || desc_low.contains("shelf") || desc_low.contains("band")
+                                || desc_low.contains("peak") || desc_low.contains("bell")
+                                || desc_low.contains("q") || desc_low.contains("order")
+                                || desc_low.contains("slope") || desc_low.contains("filter");
+                            let is_comp_param = desc_low.contains("threshold") || desc_low.contains("ratio")
+                                || desc_low.contains("attack") || desc_low.contains("release") || desc_low.contains("knee");
+                            let is_limiter_param = desc_low.contains("ceiling") || (desc_low.contains("threshold") && desc_low.contains("limiter"));
+
+                            // 2. Smart plugin-type matching
+                            let exact = inserts.iter().find_map(|ins| {
+                                let name = ins.get("name").and_then(|n| n.as_str()).unwrap_or("").to_lowercase();
+                                if (name.contains("eq") || name.contains("equalizer")) && is_eq_param {
+                                    ins.get("slot").and_then(|s| s.as_u64())
+                                } else if name.contains("compressor") && is_comp_param {
+                                    ins.get("slot").and_then(|s| s.as_u64())
+                                } else if name.contains("limiter") && is_limiter_param {
+                                    ins.get("slot").and_then(|s| s.as_u64())
+                                } else {
+                                    None
+                                }
+                            });
+
+                            // 3. Fallback: EQ -> first EQ insert; Compressor -> first Compressor insert
+                            exact.or_else(|| {
+                                if is_eq_param {
+                                    inserts.iter().find_map(|ins| {
+                                        let name = ins.get("name").and_then(|n| n.as_str()).unwrap_or("").to_lowercase();
+                                        if name.contains("eq") || name.contains("equalizer") {
+                                            ins.get("slot").and_then(|s| s.as_u64())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                } else if is_comp_param {
+                                    inserts.iter().find_map(|ins| {
+                                        let name = ins.get("name").and_then(|n| n.as_str()).unwrap_or("").to_lowercase();
+                                        if name.contains("compressor") {
+                                            ins.get("slot").and_then(|s| s.as_u64())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                } else {
+                                    inserts.iter().find_map(|ins| {
+                                        let name = ins.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                        if !name.is_empty() { ins.get("slot").and_then(|s| s.as_u64()) } else { None }
+                                    })
+                                }
+                            })
+                        })
+                });
 
             if let Some(target_slot) = slot {
                 // 2. Open the insert
