@@ -62,6 +62,7 @@ private:
     // Integrated loudness gating blocks (100ms blocks according to BS.1770)
     int samplesPer100ms { 0 };
     int integratedAccumulatorSamples { 0 };
+    int silentBlockCount { 0 };
     double integratedBlockPowerSum { 0.0 };
     std::vector<double> integratedGatingBlocks;
 

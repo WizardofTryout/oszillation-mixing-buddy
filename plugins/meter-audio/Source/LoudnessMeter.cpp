@@ -59,6 +59,7 @@ void LoudnessMeter::reset()
     shortTermSum = 0.0;
 
     integratedAccumulatorSamples = 0;
+    silentBlockCount = 0;
     integratedBlockPowerSum = 0.0;
     integratedGatingBlocks.clear();
 
@@ -170,14 +171,35 @@ void LoudnessMeter::processBlock(const juce::AudioBuffer<float>& buffer)
             shortTermRingIndex = (shortTermRingIndex + 1) % shortTermWindowLengthSamples;
         }
 
-        // 100ms gating block accumulation for integrated loudness
+        // 100ms gating block accumulation for integrated loudness (5s rolling gated window)
         integratedBlockPowerSum += sampleSquareSum;
         integratedAccumulatorSamples++;
 
         if (integratedAccumulatorSamples >= samplesPer100ms && samplesPer100ms > 0)
         {
             double blockMeanPower = integratedBlockPowerSum / static_cast<double>(samplesPer100ms);
-            integratedGatingBlocks.push_back(blockMeanPower);
+            const double absoluteThresholdPower = std::pow(10.0, (-70.0 + 0.691) / 10.0);
+
+            if (blockMeanPower <= absoluteThresholdPower)
+            {
+                silentBlockCount++;
+                // Auto-clear after 1.5s of silence so next playback pass starts fresh
+                if (silentBlockCount >= 15)
+                {
+                    integratedGatingBlocks.clear();
+                }
+            }
+            else
+            {
+                silentBlockCount = 0;
+                integratedGatingBlocks.push_back(blockMeanPower);
+                // Rolling window of 50 blocks (5.0s) so real-time mix adjustments are reflected
+                if (integratedGatingBlocks.size() > 50)
+                {
+                    integratedGatingBlocks.erase(integratedGatingBlocks.begin());
+                }
+            }
+
             integratedBlockPowerSum = 0.0;
             integratedAccumulatorSamples = 0;
         }

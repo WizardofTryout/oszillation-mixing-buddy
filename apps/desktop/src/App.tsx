@@ -118,13 +118,58 @@ export const App: React.FC = () => {
 
   // 1. Dynamic DAW detection from Rust backend (updates immediately when DAW opens or closes)
   useEffect(() => {
-    invoke<string>('get_active_daw')
-      .then((daw) => {
-        setActiveDaw(daw || 'none');
-      })
-      .catch(() => {
-        setActiveDaw('none');
-      });
+    let dawPollTimer: NodeJS.Timeout;
+
+    const checkActiveDaw = async () => {
+      let resolvedDaw: string | null = null;
+      try {
+        const daw = await invoke<string>('get_active_daw');
+        if (daw) {
+          resolvedDaw = daw;
+        }
+      } catch {
+        // Fallback to HTTP endpoint on IPC server (127.0.0.1:48123)
+      }
+
+      if (!resolvedDaw) {
+        try {
+          const res = await fetch('http://127.0.0.1:48123/api/project');
+          if (res.ok) {
+            const data = await res.json();
+            if (typeof data.dawId === 'string') {
+              resolvedDaw = data.dawId;
+            } else if (typeof data.daw === 'string') {
+              const lower = data.daw.toLowerCase();
+              resolvedDaw = lower.includes('logic')
+                ? 'logic_pro'
+                : lower.includes('nuendo')
+                ? 'nuendo'
+                : lower.includes('cubase')
+                ? 'cubase'
+                : 'none';
+            }
+          }
+        } catch {
+          // Ignore HTTP error
+        }
+      }
+
+      const nextDaw = resolvedDaw || 'none';
+      setActiveDaw(nextDaw);
+      if (nextDaw.toLowerCase().includes('none')) {
+        setLiveTracks([]);
+      }
+
+      dawPollTimer = setTimeout(checkActiveDaw, 2000);
+    };
+
+    checkActiveDaw();
+
+    const onWindowFocus = () => {
+      clearTimeout(dawPollTimer);
+      checkActiveDaw();
+    };
+    window.addEventListener('focus', onWindowFocus);
 
     let unlistenDaw: (() => void) | null = null;
     listen<string>('daw-status-changed', (event) => {
@@ -140,6 +185,8 @@ export const App: React.FC = () => {
       .catch(() => {});
 
     return () => {
+      clearTimeout(dawPollTimer);
+      window.removeEventListener('focus', onWindowFocus);
       if (unlistenDaw) unlistenDaw();
     };
   }, []);
@@ -489,9 +536,22 @@ export const App: React.FC = () => {
       const list = await invoke<PluginSummaryItem[]>('list_learned_plugins');
       if (Array.isArray(list)) {
         setVaultPlugins(list);
+        return;
       }
     } catch {
-      // Fallback
+      // Fallback to HTTP endpoint on 127.0.0.1:48123
+    }
+
+    try {
+      const res = await fetch('http://127.0.0.1:48123/api/vault/plugins');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.plugins)) {
+          setVaultPlugins(data.plugins);
+        }
+      }
+    } catch {
+      // Ignore
     }
   };
 
@@ -507,14 +567,31 @@ export const App: React.FC = () => {
     setLearnedSpec(null);
 
     try {
-      const spec = await invoke<LearnedPluginSpec>('learn_active_plugin', {
-        windowTitle: null
-      });
-      setLearnedSpec(spec);
-      await refreshVaultPlugins();
-      setChatLog(
-        `✨ Plugin "${spec.pluginName}" (${spec.parameters?.length ?? 0} Parameter, Kategorie: ${spec.category}) erfolgreich gescannt und im Plugin Vault gespeichert.`
-      );
+      let spec: LearnedPluginSpec | null = null;
+      try {
+        spec = await invoke<LearnedPluginSpec>('learn_active_plugin', {
+          windowTitle: null
+        });
+      } catch {
+        const res = await fetch('http://127.0.0.1:48123/api/vault/learn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ windowTitle: null })
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        spec = data as LearnedPluginSpec;
+      }
+
+      if (spec) {
+        setLearnedSpec(spec);
+        await refreshVaultPlugins();
+        setChatLog(
+          `✨ Plugin "${spec.pluginName}" (${spec.parameters?.length ?? 0} Parameter, Kategorie: ${spec.category}) erfolgreich gescannt und im Plugin Vault gespeichert.`
+        );
+      }
     } catch (err: unknown) {
       setLearnError(String(err));
       setChatLog(`❌ Fehler beim Plugin-Scan: ${String(err)}`);
@@ -531,7 +608,19 @@ export const App: React.FC = () => {
 
   const handleDeleteVaultPlugin = async (slug: string) => {
     try {
-      await invoke<string>('delete_learned_plugin', { slug });
+      try {
+        await invoke<string>('delete_learned_plugin', { slug });
+      } catch {
+        const res = await fetch('http://127.0.0.1:48123/api/vault/delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slug })
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+      }
       await refreshVaultPlugins();
       setChatLog(`🗑️ Plugin "${slug}" aus dem Plugin Vault entfernt.`);
     } catch (err: unknown) {

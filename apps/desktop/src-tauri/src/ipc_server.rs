@@ -168,10 +168,28 @@ async fn handle_connection(
             let is_connected = daw != crate::daw_detector::DetectedDAW::None;
             let body = serde_json::json!({
                 "daw": daw.display_name(),
+                "dawId": daw,
                 "projectName": project_name,
                 "sampleRate": 48000,
                 "isPlaying": is_connected,
                 "connected": is_connected
+            }).to_string();
+
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.flush().await;
+            return;
+        }
+
+        // 1b. GET /api/vault/plugins
+        if peek_str.starts_with("GET /api/vault/plugins") {
+            let plugins = crate::list_learned_plugins_sync().unwrap_or_default();
+            let body = serde_json::json!({
+                "plugins": plugins
             }).to_string();
 
             let resp = format!(
@@ -308,6 +326,50 @@ async fn handle_connection(
                     }
                 }
                 let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 30\r\nConnection: close\r\n\r\n{\"status\":\"ok\",\"executed\":true}";
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
+            } else if path.contains("/api/vault/learn") {
+                let win_title = serde_json::from_str::<serde_json::Value>(&body_str)
+                    .ok()
+                    .and_then(|v| v.get("windowTitle").and_then(|w| w.as_str()).map(|s| s.to_string()));
+                let (status_line, body) = match crate::learn_active_plugin_sync(win_title) {
+                    Ok(spec) => ("HTTP/1.1 200 OK", spec.to_string()),
+                    Err(err) => (
+                        "HTTP/1.1 400 Bad Request",
+                        serde_json::json!({ "error": err }).to_string(),
+                    ),
+                };
+                let resp = format!(
+                    "{}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
+            } else if path.contains("/api/vault/delete") {
+                let slug = serde_json::from_str::<serde_json::Value>(&body_str)
+                    .ok()
+                    .and_then(|v| v.get("slug").and_then(|w| w.as_str()).map(|s| s.to_string()))
+                    .unwrap_or_default();
+                let (status_line, body) = match crate::delete_learned_plugin_sync(slug) {
+                    Ok(msg) => (
+                        "HTTP/1.1 200 OK",
+                        serde_json::json!({ "status": "ok", "message": msg }).to_string(),
+                    ),
+                    Err(err) => (
+                        "HTTP/1.1 400 Bad Request",
+                        serde_json::json!({ "error": err }).to_string(),
+                    ),
+                };
+                let resp = format!(
+                    "{}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body
+                );
                 let _ = stream.write_all(resp.as_bytes()).await;
                 let _ = stream.flush().await;
                 return;

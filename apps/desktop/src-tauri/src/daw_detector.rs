@@ -40,12 +40,18 @@ impl DAWDetector {
         Self::default()
     }
 
-    /// Scans running processes for active DAW instances (strictly main DAW binary, no AUHosting helpers)
+    /// Scans running processes for active DAW instances (strictly main DAW binary, no AUHosting or appex helpers)
     pub fn detect_active_daw(&mut self) -> DetectedDAW {
         #[cfg(target_os = "macos")]
         {
-            // 1. Exact process name match: pgrep -x "Logic Pro"
-            if let Ok(output) = std::process::Command::new("pgrep")
+            let pgrep_bin = if std::path::Path::new("/usr/bin/pgrep").exists() {
+                "/usr/bin/pgrep"
+            } else {
+                "pgrep"
+            };
+
+            // 1a. Exact process name match: pgrep -x "Logic Pro"
+            if let Ok(output) = std::process::Command::new(pgrep_bin)
                 .arg("-x")
                 .arg("Logic Pro")
                 .output()
@@ -55,8 +61,19 @@ impl DAWDetector {
                 }
             }
 
+            // 1b. Exact main binary path match (excludes PlugIns/*.appex and AUHostingService)
+            if let Ok(output) = std::process::Command::new(pgrep_bin)
+                .arg("-f")
+                .arg("/Logic Pro.app/Contents/MacOS/Logic Pro")
+                .output()
+            {
+                if output.status.success() && !output.stdout.is_empty() {
+                    return DetectedDAW::LogicPro;
+                }
+            }
+
             // 2. Exact Nuendo process match
-            if let Ok(output) = std::process::Command::new("pgrep")
+            if let Ok(output) = std::process::Command::new(pgrep_bin)
                 .arg("-x")
                 .arg("Nuendo")
                 .output()
@@ -67,7 +84,7 @@ impl DAWDetector {
             }
 
             // 3. Exact Cubase process match
-            if let Ok(output) = std::process::Command::new("pgrep")
+            if let Ok(output) = std::process::Command::new(pgrep_bin)
                 .arg("-x")
                 .arg("Cubase")
                 .output()
@@ -79,7 +96,11 @@ impl DAWDetector {
         }
 
         // Fallback sysinfo scan with strict executable/process name matching (no AUHosting or generic substrings)
-        self.system.refresh_processes(ProcessesToUpdate::All, true);
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            sysinfo::ProcessRefreshKind::everything(),
+        );
 
         for (_pid, process) in self.system.processes() {
             let name = process.name().to_string_lossy();
@@ -91,10 +112,10 @@ impl DAWDetector {
             if name == "Logic Pro" || exe.ends_with("/Logic Pro.app/Contents/MacOS/Logic Pro") {
                 return DetectedDAW::LogicPro;
             }
-            if name.starts_with("Nuendo") || exe.contains("/Nuendo") && exe.contains(".app/Contents/MacOS/") {
+            if name.starts_with("Nuendo") || (exe.contains("/Nuendo") && exe.contains(".app/Contents/MacOS/")) {
                 return DetectedDAW::Nuendo;
             }
-            if name.starts_with("Cubase") || exe.contains("/Cubase") && exe.contains(".app/Contents/MacOS/") {
+            if name.starts_with("Cubase") || (exe.contains("/Cubase") && exe.contains(".app/Contents/MacOS/")) {
                 return DetectedDAW::Cubase;
             }
         }

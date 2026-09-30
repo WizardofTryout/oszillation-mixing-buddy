@@ -1077,11 +1077,7 @@ pub struct PluginSummary {
     pub file_path: Option<String>,
 }
 
-#[tauri::command]
-async fn learn_active_plugin(
-    window_title: Option<String>,
-    app: tauri::AppHandle,
-) -> Result<serde_json::Value, String> {
+pub fn learn_active_plugin_sync(window_title: Option<String>) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
     {
         let bridge_path = resolve_bridge_path();
@@ -1138,20 +1134,27 @@ async fn learn_active_plugin(
             )
         })?;
 
-        let _ = app.emit("plugin-vault-updated", &clean_spec);
         return Ok(clean_spec);
     }
 
     #[cfg(not(target_os = "macos"))]
     {
         let _ = window_title;
-        let _ = app;
         Err("Plugin-Profiler wird aktuell unter macOS via AXUIElement unterstützt.".to_string())
     }
 }
 
 #[tauri::command]
-async fn list_learned_plugins() -> Result<Vec<PluginSummary>, String> {
+async fn learn_active_plugin(
+    window_title: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    let spec = learn_active_plugin_sync(window_title)?;
+    let _ = app.emit("plugin-vault-updated", &spec);
+    Ok(spec)
+}
+
+pub fn list_learned_plugins_sync() -> Result<Vec<PluginSummary>, String> {
     let mut list = vec![
         PluginSummary {
             slug: "channel_eq".to_string(),
@@ -1218,18 +1221,28 @@ async fn list_learned_plugins() -> Result<Vec<PluginSummary>, String> {
 }
 
 #[tauri::command]
-async fn delete_learned_plugin(slug: String, app: tauri::AppHandle) -> Result<String, String> {
+async fn list_learned_plugins() -> Result<Vec<PluginSummary>, String> {
+    list_learned_plugins_sync()
+}
+
+pub fn delete_learned_plugin_sync(slug: String) -> Result<String, String> {
     let clean_slug = to_plugin_slug(&slug);
     let vault_dir = get_plugin_vault_dir()?;
     let target = vault_dir.join(format!("{}.json", clean_slug));
     if target.exists() {
         std::fs::remove_file(&target)
             .map_err(|e| format!("Konnte '{}' nicht löschen: {}", target.display(), e))?;
-        let _ = app.emit("plugin-vault-updated", &clean_slug);
         Ok(format!("Plugin '{}' aus der Bibliothek entfernt.", clean_slug))
     } else {
         Err(format!("Plugin-Datei '{}' nicht gefunden.", target.display()))
     }
+}
+
+#[tauri::command]
+async fn delete_learned_plugin(slug: String, app: tauri::AppHandle) -> Result<String, String> {
+    let msg = delete_learned_plugin_sync(slug.clone())?;
+    let _ = app.emit("plugin-vault-updated", &slug);
+    Ok(msg)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
