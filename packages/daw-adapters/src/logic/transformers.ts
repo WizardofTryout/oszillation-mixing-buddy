@@ -294,11 +294,27 @@ function normalizeKey(value: string): string {
 }
 
 /**
- * Looks up a PluginSpecification by plugin name or window title
+ * Returns all built-in + user-learned plugin specifications from `~/.mixing-buddy/plugins/`
+ */
+export function getAllPluginSpecifications(): PluginSpecification[] {
+  try {
+    // Dynamic import check or synchronous fs read via PluginRegistry
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { loadVaultPluginSpecs } = require('./PluginRegistry.js') as typeof import('./PluginRegistry.js');
+    const customSpecs = loadVaultPluginSpecs().map((item) => item.runtime);
+    return [...LOGIC_PLUGIN_SPECS, ...customSpecs];
+  } catch {
+    return LOGIC_PLUGIN_SPECS;
+  }
+}
+
+/**
+ * Looks up a PluginSpecification by plugin name or window title (searches both built-in and ~/.mixing-buddy/plugins/)
  */
 export function findPluginSpecification(pluginNameOrWindowTitle: string): PluginSpecification | null {
   const target = normalizeKey(pluginNameOrWindowTitle);
-  for (const spec of LOGIC_PLUGIN_SPECS) {
+  const allSpecs = getAllPluginSpecifications();
+  for (const spec of allSpecs) {
     if (normalizeKey(spec.name) === target || target.includes(normalizeKey(spec.name))) {
       return spec;
     }
@@ -318,7 +334,7 @@ export function findParameterSpecification(
   pluginSpec?: PluginSpecification | null
 ): PluginParameterSpec | null {
   const targetNorm = normalizeKey(paramNameOrId);
-  const specsToSearch = pluginSpec ? [pluginSpec] : LOGIC_PLUGIN_SPECS;
+  const specsToSearch = pluginSpec ? [pluginSpec] : getAllPluginSpecifications();
 
   for (const spec of specsToSearch) {
     for (const param of spec.parameters) {

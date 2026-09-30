@@ -689,4 +689,29 @@ export class MacOSAccessibilityClient {
         (w.pluginName ?? '').toLowerCase().includes('channel eq')
     );
   }
+
+  /**
+   * Profiles the currently open floating plugin window in Logic Pro via `logic-ax-bridge profile-plugin`
+   */
+  public async profileActivePlugin(
+    windowTitle?: string
+  ): Promise<import('./PluginRegistry.js').ProfiledPluginSpec | null> {
+    const args = ['profile-plugin'];
+    if (windowTitle && windowTitle.trim()) {
+      args.push('--window', windowTitle.trim());
+    }
+    const res = await this.runBridge<
+      import('./PluginRegistry.js').ProfiledPluginSpec & { success?: boolean; error?: string }
+    >(args);
+    if (!res || res.success === false || !res.pluginName) {
+      return null;
+    }
+    return {
+      schemaVersion: res.schemaVersion || '1.0',
+      pluginName: res.pluginName,
+      windowTitle: res.windowTitle,
+      category: res.category || 'utility',
+      parameters: Array.isArray(res.parameters) ? res.parameters : []
+    };
+  }
 }

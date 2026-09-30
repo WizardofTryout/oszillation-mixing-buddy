@@ -56,6 +56,13 @@ export const AuditionRegionSchema = z.object({
 
 export const GetProjectInfoSchema = z.object({});
 
+export const LearnPluginSchema = z.object({
+  windowTitle: z
+    .string()
+    .optional()
+    .describe('Optional window title or track name of the open plugin window to profile (defaults to frontmost floating plugin window)')
+});
+
 export type GetMixTelemetryInput = z.infer<typeof GetMixTelemetrySchema>;
 export type ListTracksInput = z.infer<typeof ListTracksSchema>;
 export type ParameterDeltaInput = z.infer<typeof ParameterDeltaSchema>;
@@ -63,3 +70,4 @@ export type ProposeMixAdjustmentInput = z.infer<typeof ProposeMixAdjustmentSchem
 export type ExecuteMixAdjustmentInput = z.infer<typeof ExecuteMixAdjustmentSchema>;
 export type AuditionRegionInput = z.infer<typeof AuditionRegionSchema>;
 export type GetProjectInfoInput = z.infer<typeof GetProjectInfoSchema>;
+export type LearnPluginInput = z.infer<typeof LearnPluginSchema>;

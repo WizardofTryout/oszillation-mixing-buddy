@@ -358,6 +358,36 @@ export class MixingToolHandlers {
     };
   }
 
+  public async learnPlugin(args: import('./tools.js').LearnPluginInput): Promise<{
+    success: boolean;
+    pluginName: string;
+    category: string;
+    parameterCount: number;
+    filePath: string;
+    spec: import('@mixing-buddy/daw-adapters').ProfiledPluginSpec;
+  }> {
+    const { MacOSAccessibilityClient, saveLearnedPluginToVault } = await import(
+      '@mixing-buddy/daw-adapters'
+    );
+    const axClient = new MacOSAccessibilityClient();
+    const profiled = await axClient.profileActivePlugin(args.windowTitle);
+    if (!profiled) {
+      throw new Error(
+        'Kein geöffnetes Plugin-Fenster in Logic Pro gefunden. Bitte öffne das gewünschte Plugin-Fenster in der DAW.'
+      );
+    }
+
+    const saved = saveLearnedPluginToVault(profiled);
+    return {
+      success: true,
+      pluginName: saved.spec.pluginName,
+      category: saved.spec.category,
+      parameterCount: saved.spec.parameters.length,
+      filePath: saved.filePath,
+      spec: saved.spec
+    };
+  }
+
   public getPendingProposals(): MixActionProposal[] {
     return Array.from(this.proposals.values()).filter((p) => p.status === 'pending');
   }

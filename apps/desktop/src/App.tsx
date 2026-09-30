@@ -7,7 +7,12 @@ import { LoudnessHUD } from './components/LoudnessHUD.js';
 import { ActionCard } from './components/ActionCard.js';
 import { ProviderSettings, type ProviderMode } from './components/ProviderSettings.js';
 import { ChatConsole } from './components/ChatConsole.js';
-import { Sliders, Headphones, Inbox } from 'lucide-react';
+import {
+  PluginVaultModal,
+  type LearnedPluginSpec,
+  type PluginSummaryItem
+} from './components/PluginVaultModal.js';
+import { Sliders, Headphones, Inbox, Sparkles, Database } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<MetrologyTelemetryFrame | null>(null);
@@ -25,6 +30,14 @@ export const App: React.FC = () => {
   const [proposals, setProposals] = useState<MixActionProposal[]>([]);
   const [chatLog, setChatLog] = useState<string | null>(null);
   const [mcpClientsCount, setMcpClientsCount] = useState<number>(0);
+
+  // Plugin Vault & 1-Click Auto-Profiler state
+  const [isVaultOpen, setIsVaultOpen] = useState<boolean>(false);
+  const [vaultMode, setVaultMode] = useState<'confirm_learn' | 'vault_drawer'>('vault_drawer');
+  const [learnedSpec, setLearnedSpec] = useState<LearnedPluginSpec | null>(null);
+  const [vaultPlugins, setVaultPlugins] = useState<PluginSummaryItem[]>([]);
+  const [isLearningPlugin, setIsLearningPlugin] = useState<boolean>(false);
+  const [learnError, setLearnError] = useState<string | null>(null);
 
   const handleApiKeyChange = (key: string) => {
     setApiKey(key);
@@ -471,6 +484,61 @@ export const App: React.FC = () => {
     setProposals((prev) => [newProposal, ...prev]);
   };
 
+  const refreshVaultPlugins = async () => {
+    try {
+      const list = await invoke<PluginSummaryItem[]>('list_learned_plugins');
+      if (Array.isArray(list)) {
+        setVaultPlugins(list);
+      }
+    } catch {
+      // Fallback
+    }
+  };
+
+  useEffect(() => {
+    refreshVaultPlugins();
+  }, []);
+
+  const handleLearnActivePlugin = async () => {
+    setVaultMode('confirm_learn');
+    setIsVaultOpen(true);
+    setIsLearningPlugin(true);
+    setLearnError(null);
+    setLearnedSpec(null);
+
+    try {
+      const spec = await invoke<LearnedPluginSpec>('learn_active_plugin', {
+        windowTitle: null
+      });
+      setLearnedSpec(spec);
+      await refreshVaultPlugins();
+      setChatLog(
+        `✨ Plugin "${spec.pluginName}" (${spec.parameters?.length ?? 0} Parameter, Kategorie: ${spec.category}) erfolgreich gescannt und im Plugin Vault gespeichert.`
+      );
+    } catch (err: unknown) {
+      setLearnError(String(err));
+      setChatLog(`❌ Fehler beim Plugin-Scan: ${String(err)}`);
+    } finally {
+      setIsLearningPlugin(false);
+    }
+  };
+
+  const handleOpenVaultDrawer = async () => {
+    await refreshVaultPlugins();
+    setVaultMode('vault_drawer');
+    setIsVaultOpen(true);
+  };
+
+  const handleDeleteVaultPlugin = async (slug: string) => {
+    try {
+      await invoke<string>('delete_learned_plugin', { slug });
+      await refreshVaultPlugins();
+      setChatLog(`🗑️ Plugin "${slug}" aus dem Plugin Vault entfernt.`);
+    } catch (err: unknown) {
+      setChatLog(`❌ Fehler beim Löschen aus dem Plugin Vault: ${String(err)}`);
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-darkBg text-slate-100">
       {/* Top Navbar */}
@@ -483,7 +551,27 @@ export const App: React.FC = () => {
           <span className="text-xs text-blue-400 font-mono ml-2">v0.1.0</span>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={handleLearnActivePlugin}
+            className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300 hover:text-white bg-emerald-950/60 hover:bg-emerald-800/70 border border-emerald-500/40 px-2.5 py-1 rounded transition-all shadow-sm"
+            title="Scannt das aktuell in der DAW geöffnete Plugin-Fenster und speichert dessen Regler im Plugin Vault"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+            <span>✨ Plugin anlernen</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleOpenVaultDrawer}
+            className="flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border border-darkBorder px-2.5 py-1 rounded transition-all"
+            title="Plugin Vault (Bibliothek der angelernten Plugins öffnen)"
+          >
+            <Database className="w-3.5 h-3.5 text-blue-400" />
+            <span>Plugin Vault ({vaultPlugins.length})</span>
+          </button>
+
           <div className="flex items-center gap-1.5 text-xs text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded">
             <Headphones className={`w-3.5 h-3.5 ${telemetry ? 'text-emerald-400' : isAudioConnected ? 'text-yellow-400' : 'text-slate-500'}`} />
             <span className={telemetry ? 'text-emerald-400 font-medium' : ''}>
@@ -492,6 +580,21 @@ export const App: React.FC = () => {
           </div>
         </div>
       </header>
+
+      <PluginVaultModal
+        isOpen={isVaultOpen}
+        mode={vaultMode}
+        learnedSpec={learnedSpec}
+        vaultPlugins={vaultPlugins}
+        isLearning={isLearningPlugin}
+        learnError={learnError}
+        onClose={() => setIsVaultOpen(false)}
+        onConfirmSave={() => {
+          setVaultMode('vault_drawer');
+        }}
+        onDeletePlugin={handleDeleteVaultPlugin}
+        onTriggerLearnNew={handleLearnActivePlugin}
+      />
 
       {/* Main Studio Workspace */}
       <main className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">

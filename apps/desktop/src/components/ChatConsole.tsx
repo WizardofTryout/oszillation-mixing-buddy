@@ -140,6 +140,47 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
         }
       }
 
+      // Check for plugin learning intent ("lerne bitte das gerade geöffnete plugin an", "plugin scannen", etc.)
+      const isPluginLearn =
+        lower.includes('plugin') &&
+        (lower.includes('lern') || lower.includes('scan') || lower.includes('profil') || lower.includes('speicher'));
+
+      if (isPluginLearn) {
+        try {
+          const spec = await invoke<{
+            pluginName: string;
+            category: string;
+            filePath?: string;
+            parameters?: Array<unknown>;
+          }>('learn_active_plugin', { windowTitle: null });
+          const count = Array.isArray(spec.parameters) ? spec.parameters.length : 0;
+          const learnMsg = `✨ Plugin "${spec.pluginName}" (${count} Parameter, Kategorie: ${spec.category.toUpperCase()}) wurde erfolgreich gescannt und dauerhaft im Plugin Vault (${spec.filePath ?? '~/.mixing-buddy/plugins/'}) gespeichert!`;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `msg_ai_${Date.now()}`,
+              sender: 'assistant',
+              text: learnMsg,
+              timestamp: Date.now()
+            }
+          ]);
+          setIsAnalyzing(false);
+          return;
+        } catch (err: unknown) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `msg_err_${Date.now()}`,
+              sender: 'system',
+              text: `❌ Plugin-Scan fehlgeschlagen: ${String(err)}`,
+              timestamp: Date.now()
+            }
+          ]);
+          setIsAnalyzing(false);
+          return;
+        }
+      }
+
       // 1. If BYOK Gemini is selected and API key is present: Call real Gemini API!
       if (providerMode === 'byok_gemini' && apiKey.trim().length > 5) {
         const gemini = new GeminiProvider({

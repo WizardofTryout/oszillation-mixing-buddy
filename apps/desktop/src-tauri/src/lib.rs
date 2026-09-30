@@ -513,8 +513,11 @@ fn resolve_ax_param_target(parameter: &str, value: f32) -> AXParamTarget {
             }
         }
 
-        // Generic fallback: treat as linear EQ Gain (-24..+24 dB -> 0..480)
+        // Generic fallback: first check user-learned plugins in ~/.mixing-buddy/plugins/
         _ => {
+            if let Some(learned) = find_learned_param_target(parameter, value) {
+                return learned;
+            }
             let (clamped, raw) = display_to_raw_linear(value, -24.0, 24.0, 0.0, 480.0);
             AXParamTarget {
                 description: "Peak 3 Gain",
@@ -526,6 +529,110 @@ fn resolve_ax_param_target(parameter: &str, value: f32) -> AXParamTarget {
             }
         }
     }
+}
+
+fn get_plugin_vault_dir() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME").map_err(|_| "HOME-Verzeichnis konnte nicht ermittelt werden".to_string())?;
+    let vault_dir = PathBuf::from(home).join(".mixing-buddy").join("plugins");
+    if !vault_dir.exists() {
+        std::fs::create_dir_all(&vault_dir)
+            .map_err(|e| format!("Fehler beim Anlegen von '{}': {}", vault_dir.display(), e))?;
+    }
+    Ok(vault_dir)
+}
+
+fn to_plugin_slug(name: &str) -> String {
+    let mut slug = String::new();
+    let mut last_underscore = false;
+    for ch in name.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            last_underscore = false;
+        } else if !last_underscore && !slug.is_empty() {
+            slug.push('_');
+            last_underscore = true;
+        }
+    }
+    let cleaned = slug.trim_matches('_').to_string();
+    if cleaned.is_empty() {
+        "custom_plugin".to_string()
+    } else {
+        cleaned
+    }
+}
+
+fn find_learned_param_target(parameter: &str, value: f32) -> Option<AXParamTarget> {
+    let vault_dir = get_plugin_vault_dir().ok()?;
+    let entries = std::fs::read_dir(&vault_dir).ok()?;
+    let target_key = parameter.trim().to_lowercase();
+    let target_slug = to_plugin_slug(parameter);
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(spec) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+        let Some(params) = spec.get("parameters").and_then(|p| p.as_array()) else {
+            continue;
+        };
+
+        for p in params {
+            let id = p.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let desc = p.get("description").and_then(|v| v.as_str()).unwrap_or(name);
+            let ident = p.get("identifier").and_then(|v| v.as_str()).unwrap_or("");
+
+            if id.eq_ignore_ascii_case(&target_key)
+                || id == target_slug
+                || name.eq_ignore_ascii_case(&target_key)
+                || desc.eq_ignore_ascii_case(&target_key)
+                || (!ident.is_empty() && ident.eq_ignore_ascii_case(&target_key))
+            {
+                let raw_min = p.get("rawMin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let raw_max = p.get("rawMax").and_then(|v| v.as_f64()).unwrap_or(100.0);
+                let disp_min = p.get("displayMin").and_then(|v| v.as_f64()).unwrap_or(raw_min) as f32;
+                let disp_max = p.get("displayMax").and_then(|v| v.as_f64()).unwrap_or(raw_max) as f32;
+                let unit = p.get("unit").and_then(|v| v.as_str()).unwrap_or("");
+                let role_str = p.get("role").and_then(|v| v.as_str()).unwrap_or("AXSlider");
+
+                let is_log = matches!(unit, "Hz" | "Q" | ":1") && disp_min > 0.0 && disp_max > disp_min;
+                let (clamped, raw) = if is_log {
+                    display_to_raw_log(value, disp_min, disp_max, raw_min, raw_max)
+                } else {
+                    display_to_raw_linear(value, disp_min, disp_max, raw_min, raw_max)
+                };
+
+                let leaked_desc: &'static str = Box::leak(desc.to_string().into_boxed_str());
+                let leaked_id: Option<&'static str> = if ident.is_empty() {
+                    None
+                } else {
+                    Some(Box::leak(ident.to_string().into_boxed_str()))
+                };
+                let leaked_role: &'static str = match role_str {
+                    "AXCheckBox" => "AXCheckBox",
+                    "AXButton" => "AXButton",
+                    "AXPopUpButton" => "AXPopUpButton",
+                    _ => "AXSlider",
+                };
+
+                return Some(AXParamTarget {
+                    description: leaked_desc,
+                    identifier: leaked_id,
+                    role: leaked_role,
+                    enable_band: None,
+                    clamped_display: clamped,
+                    raw_value: raw,
+                });
+            }
+        }
+    }
+    None
 }
 
 #[tauri::command]
@@ -959,6 +1066,172 @@ async fn install_mcp_client_config(
     ))
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSummary {
+    pub slug: String,
+    pub plugin_name: String,
+    pub category: String,
+    pub parameter_count: usize,
+    pub is_built_in: bool,
+    pub file_path: Option<String>,
+}
+
+#[tauri::command]
+async fn learn_active_plugin(
+    window_title: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if !bridge_path.exists() {
+            return Err(format!(
+                "Native Swift-Bridge nicht gefunden unter: {}",
+                bridge_path.display()
+            ));
+        }
+
+        let mut args = vec!["profile-plugin".to_string()];
+        if let Some(title) = window_title.filter(|s| !s.trim().is_empty()) {
+            args.push("--window".to_string());
+            args.push(title);
+        }
+
+        let parsed = execute_logic_ax_bridge(&bridge_path, &args)?;
+        if parsed.get("success").and_then(|v| v.as_bool()) != Some(true) {
+            let err_msg = parsed
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Kein geöffnetes Plugin-Fenster in Logic Pro gefunden");
+            return Err(format!("Plugin-Scan fehlgeschlagen: {}", err_msg));
+        }
+
+        let plugin_name = parsed
+            .get("pluginName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unbekanntes Plugin")
+            .to_string();
+
+        let slug = to_plugin_slug(&plugin_name);
+        let vault_dir = get_plugin_vault_dir()?;
+        let file_path = vault_dir.join(format!("{}.json", slug));
+
+        let mut clean_spec = parsed.clone();
+        if let Some(obj) = clean_spec.as_object_mut() {
+            obj.remove("success");
+            obj.insert(
+                "filePath".to_string(),
+                serde_json::Value::String(file_path.to_string_lossy().to_string()),
+            );
+            obj.insert("slug".to_string(), serde_json::Value::String(slug));
+        }
+
+        let formatted = serde_json::to_string_pretty(&clean_spec)
+            .map_err(|e| format!("JSON-Serialisierung fehlgeschlagen: {}", e))?;
+
+        std::fs::write(&file_path, format!("{}\n", formatted)).map_err(|e| {
+            format!(
+                "Fehler beim Speichern im Plugin Vault '{}': {}",
+                file_path.display(),
+                e
+            )
+        })?;
+
+        let _ = app.emit("plugin-vault-updated", &clean_spec);
+        return Ok(clean_spec);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window_title;
+        let _ = app;
+        Err("Plugin-Profiler wird aktuell unter macOS via AXUIElement unterstützt.".to_string())
+    }
+}
+
+#[tauri::command]
+async fn list_learned_plugins() -> Result<Vec<PluginSummary>, String> {
+    let mut list = vec![
+        PluginSummary {
+            slug: "channel_eq".to_string(),
+            plugin_name: "Channel EQ".to_string(),
+            category: "eq".to_string(),
+            parameter_count: 32,
+            is_built_in: true,
+            file_path: None,
+        },
+        PluginSummary {
+            slug: "compressor".to_string(),
+            plugin_name: "Compressor".to_string(),
+            category: "dynamics".to_string(),
+            parameter_count: 14,
+            is_built_in: true,
+            file_path: None,
+        },
+    ];
+
+    let vault_dir = get_plugin_vault_dir()?;
+    if let Ok(entries) = std::fs::read_dir(&vault_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&raw) {
+                    let plugin_name = val
+                        .get("pluginName")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Custom Plugin")
+                        .to_string();
+                    let category = val
+                        .get("category")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("utility")
+                        .to_string();
+                    let parameter_count = val
+                        .get("parameters")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    let slug = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("custom_plugin")
+                        .to_string();
+
+                    list.push(PluginSummary {
+                        slug,
+                        plugin_name,
+                        category,
+                        parameter_count,
+                        is_built_in: false,
+                        file_path: Some(path.to_string_lossy().to_string()),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(list)
+}
+
+#[tauri::command]
+async fn delete_learned_plugin(slug: String, app: tauri::AppHandle) -> Result<String, String> {
+    let clean_slug = to_plugin_slug(&slug);
+    let vault_dir = get_plugin_vault_dir()?;
+    let target = vault_dir.join(format!("{}.json", clean_slug));
+    if target.exists() {
+        std::fs::remove_file(&target)
+            .map_err(|e| format!("Konnte '{}' nicht löschen: {}", target.display(), e))?;
+        let _ = app.emit("plugin-vault-updated", &clean_slug);
+        Ok(format!("Plugin '{}' aus der Bibliothek entfernt.", clean_slug))
+    } else {
+        Err(format!("Plugin-Datei '{}' nicht gefunden.", target.display()))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -1003,7 +1276,10 @@ pub fn run() {
             apply_daw_action,
             create_daw_track,
             toggle_plugin_bypass,
-            install_mcp_client_config
+            install_mcp_client_config,
+            learn_active_plugin,
+            list_learned_plugins,
+            delete_learned_plugin
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

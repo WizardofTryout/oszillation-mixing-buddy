@@ -11,6 +11,7 @@ import type { DAWDriver } from './types.js';
 
 export * from './types.js';
 export * from './logic/transformers.js';
+export * from './logic/PluginRegistry.js';
 export { NuendoDriver, type NuendoDriverOptions } from './nuendo/NuendoDriver.js';
 export { LogicProDriver, type LogicProDriverOptions } from './logic/LogicProDriver.js';
 export {

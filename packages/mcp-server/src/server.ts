@@ -8,6 +8,7 @@ import {
   ExecuteMixAdjustmentSchema,
   GetMixTelemetrySchema,
   GetProjectInfoSchema,
+  LearnPluginSchema,
   ListTracksSchema,
   ProposeMixAdjustmentSchema
 } from './tools.js';
@@ -182,6 +183,31 @@ export class MixingBuddyMCPServer {
           return {
             isError: true,
             content: [{ type: 'text', text: `Audition failed: ${String(err)}` }]
+          };
+        }
+      }
+    );
+
+    // 6. Learn Plugin (Auto-Profiler & Plugin Vault)
+    this.server.tool(
+      'mcp__learn_plugin',
+      "Scans the currently open plugin UI window in the active DAW, learns all its knobs/sliders, and saves it permanently to the user's plugin vault.",
+      LearnPluginSchema.shape,
+      async (args) => {
+        try {
+          const result = await this.handlers.learnPlugin(args);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        } catch (err: unknown) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Plugin learning failed: ${String(err)}` }]
           };
         }
       }

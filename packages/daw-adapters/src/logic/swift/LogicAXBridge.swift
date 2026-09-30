@@ -547,6 +547,156 @@ case "scan-tracks":
     }
     printJSON(trackNames)
 
+case "profile-plugin":
+    let winQuery = getArg("--window") ?? ""
+    var targetWindow: AXUIElement? = nil
+
+    if !winQuery.isEmpty {
+        targetWindow = findTargetWindow(appElement, query: winQuery)
+    } else {
+        // Find frontmost floating plugin window (AXDialog / AXFloatingWindow, excluding main window)
+        let windows = getLogicWindows(appElement)
+        for w in windows {
+            let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
+            let title = (getAXString(w, kAXTitleAttribute as String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if (subrole == "AXDialog" || subrole == "AXFloatingWindow") && !title.isEmpty {
+                targetWindow = w
+                break
+            }
+        }
+    }
+
+    guard let pluginWindow = targetWindow else {
+        printJSON(["success": false, "error": buildWindowError(appElement, query: winQuery.isEmpty ? "Aktives Plugin-Fenster" : winQuery)])
+        exit(0)
+    }
+
+    let windowTitle = getAXString(pluginWindow, kAXTitleAttribute as String) ?? winQuery
+    let pluginName = detectPluginName(in: pluginWindow, windowTitle: windowTitle)
+
+    var rawControls: [[String: Any]] = []
+    collectInteractiveControls(root: pluginWindow, maxDepth: 10, into: &rawControls)
+
+    func makeSlug(_ input: String) -> String {
+        let lower = input.lowercased()
+        let allowed = lower.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character($0) : Character("_") }
+        let joined = String(allowed)
+        let collapsed = joined.replacingOccurrences(of: "_+", with: "_", options: .regularExpression)
+        return collapsed.trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+    }
+
+    func inferUnitAndRange(label: String, valueDesc: String, rawMin: Double, rawMax: Double) -> (String, Double, Double) {
+        let l = (label + " " + valueDesc).lowercased()
+        if l.contains("hz") || l.contains("freq") || l.contains("cut") {
+            return ("Hz", 20.0, 20000.0)
+        }
+        if l.contains("db") || l.contains("gain") || l.contains("threshold") || l.contains("output") || l.contains("drive") || l.contains("make up") {
+            return ("dB", -24.0, 24.0)
+        }
+        if l.contains("ms") || l.contains("attack") || l.contains("release") || l.contains("delay") {
+            return ("ms", 0.1, 2000.0)
+        }
+        if l.contains("ratio") || l.contains(":1") {
+            return (":1", 1.0, 30.0)
+        }
+        if l.contains("%") || l.contains("mix") || l.contains("wet") || l.contains("dry") {
+            return ("%", 0.0, 100.0)
+        }
+        if l.contains(" q") || l.hasSuffix("_q") || l.contains("resonance") {
+            return ("Q", 0.1, 10.0)
+        }
+        return ("", rawMin, rawMax > rawMin ? rawMax : 1.0)
+    }
+
+    var parameters: [[String: Any]] = []
+    var seenIds: Set<String> = []
+    var eqScore = 0
+    var compScore = 0
+    var satScore = 0
+
+    for (idx, ctrl) in rawControls.enumerated() {
+        let role = ctrl["role"] as? String ?? "AXSlider"
+        guard role == "AXSlider" || role == "AXCheckBox" || role == "AXButton" || role == "AXPopUpButton" else {
+            continue
+        }
+
+        let identifier = ctrl["identifier"] as? String ?? ""
+        let desc = ctrl["description"] as? String ?? ""
+        let title = ctrl["title"] as? String ?? ""
+        let help = ctrl["help"] as? String ?? ""
+        let valDesc = ctrl["valueDescription"] as? String ?? ""
+
+        let displayName = !desc.isEmpty ? desc : (!title.isEmpty ? title : (!help.isEmpty ? help : (!identifier.isEmpty ? identifier : "Param \(idx + 1)")))
+
+        // Skip generic window chrome buttons (Compare, Undo, Redo, Copy, Paste, Bypass header)
+        let lowerName = displayName.lowercased()
+        if role == "AXButton" && (lowerName == "compare" || lowerName == "vergleichen" || lowerName == "copy" || lowerName == "kopieren" || lowerName == "paste" || lowerName == "einfügen" || lowerName == "undo" || lowerName == "widerrufen" || lowerName == "redo" || lowerName == "wiederholen") {
+            continue
+        }
+
+        if lowerName.contains("freq") || lowerName.contains("shelf") || lowerName.contains("peak") || lowerName.contains("cut") || lowerName.contains("hz") || lowerName.contains("q") {
+            eqScore += 1
+        }
+        if lowerName.contains("threshold") || lowerName.contains("ratio") || lowerName.contains("attack") || lowerName.contains("release") || lowerName.contains("knee") {
+            compScore += 1
+        }
+        if lowerName.contains("drive") || lowerName.contains("punish") || lowerName.contains("tone") || lowerName.contains("saturat") || lowerName.contains("mix") {
+            satScore += 1
+        }
+
+        var slug = makeSlug(!desc.isEmpty ? desc : (!title.isEmpty ? title : identifier))
+        if slug.isEmpty {
+            slug = "param_\(idx + 1)"
+        }
+        if seenIds.contains(slug) {
+            slug = "\(slug)_\(idx + 1)"
+        }
+        seenIds.insert(slug)
+
+        let rawMin = ctrl["minValue"] as? Double ?? 0.0
+        let rawMax = ctrl["maxValue"] as? Double ?? (role == "AXSlider" ? 100.0 : 1.0)
+        let currentVal = ctrl["value"] as? Double ?? 0.0
+        let (unit, dispMin, dispMax) = inferUnitAndRange(label: displayName, valueDesc: valDesc, rawMin: rawMin, rawMax: rawMax)
+
+        var paramObj: [String: Any] = [
+            "id": slug,
+            "name": displayName,
+            "role": role,
+            "identifier": identifier,
+            "description": !desc.isEmpty ? desc : displayName,
+            "rawMin": rawMin,
+            "rawMax": rawMax,
+            "displayMin": dispMin,
+            "displayMax": dispMax,
+            "currentRawValue": currentVal,
+            "valueDescription": valDesc,
+            "unit": unit
+        ]
+        if !help.isEmpty {
+            paramObj["help"] = help
+        }
+        parameters.append(paramObj)
+    }
+
+    var category = "utility"
+    let lowerPlugin = pluginName.lowercased()
+    if lowerPlugin.contains("eq") || lowerPlugin.contains("pro-q") || eqScore >= 3 {
+        category = "eq"
+    } else if lowerPlugin.contains("comp") || lowerPlugin.contains("1176") || lowerPlugin.contains("la-2a") || compScore >= 2 {
+        category = "dynamics"
+    } else if lowerPlugin.contains("decapitator") || lowerPlugin.contains("sat") || lowerPlugin.contains("tube") || satScore >= 2 {
+        category = "saturation"
+    }
+
+    printJSON([
+        "success": true,
+        "schemaVersion": "1.0",
+        "pluginName": pluginName,
+        "windowTitle": windowTitle,
+        "category": category,
+        "parameters": parameters
+    ])
+
 default:
     printJSON(["success": false, "error": "Unknown command: \(command)"])
 }
