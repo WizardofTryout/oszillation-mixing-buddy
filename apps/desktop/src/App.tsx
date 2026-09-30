@@ -434,6 +434,8 @@ export const App: React.FC = () => {
           trackName: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
           parameter: delta.parameterName || 'EQ',
           value: delta.proposedValue ?? 0.0,
+          currentValue: delta.currentValue ?? 0.0,
+          isRestore: false,
           unit: delta.unit ?? 'dB',
           isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo')
         });
@@ -485,6 +487,8 @@ export const App: React.FC = () => {
           trackName: targetTrack,
           parameter: delta?.parameterName ?? 'EQ',
           value: delta?.proposedValue ?? 0.0,
+          currentValue: delta?.currentValue ?? 0.0,
+          isRestore: false,
           unit: delta?.unit ?? 'dB',
           isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo')
         });
@@ -510,6 +514,8 @@ export const App: React.FC = () => {
             trackName: targetTrack,
             parameter: delta?.parameterName ?? 'EQ',
             value: delta?.currentValue ?? 0.0,
+            currentValue: delta?.currentValue ?? 0.0,
+            isRestore: true,
             unit: delta?.unit ?? 'dB',
             isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo')
           });

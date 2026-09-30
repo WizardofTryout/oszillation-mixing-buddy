@@ -38,11 +38,12 @@ impl SafetyGuard {
 
     /// Validates and clamps a proposed volume change.
     /// Returns Ok(clamped_db) or Err(reason) if rejected by the acoustic safety shield.
-    pub fn sanitize_volume(
+    pub fn sanitize_volume_with_restore(
         &mut self,
         track_id: &str,
         is_master: bool,
         proposed_db: f32,
+        is_restore: bool,
     ) -> Result<f32, String> {
         let max_ceiling = if is_master {
             self.master_max_db
@@ -59,12 +60,15 @@ impl SafetyGuard {
 
             // Jede Pegelreduktion (Delta <= 0.0 dB) ist IMMER zulässig
             if delta > 0.0 {
-                // Ausnahme A/B Restore: Die Rückkehr auf den exakten 'original_value' vor dem Testlauf darf NIEMALS blockiert werden.
-                let is_restore = self.original_volumes.get(track_id)
-                    .map(|&orig| (clamped - orig).abs() < 0.15 || (clamped <= orig && previous_db < orig))
-                    .unwrap_or(false);
+                // Ausnahme A/B Restore: Entweder explizit als Restore geflaggt,
+                // oder Rückkehr auf registrierten Ausgangswert oder sicheres Studio-Level (<= 0.0 dB)
+                let is_safe_restore = is_restore
+                    || (clamped <= 0.0 && previous_db < clamped)
+                    || self.original_volumes.get(track_id)
+                        .map(|&orig| (clamped - orig).abs() < 0.25 || (clamped <= orig && previous_db < orig))
+                        .unwrap_or(false);
 
-                if !is_restore && delta > self.max_step_jump_db {
+                if !is_safe_restore && delta > self.max_step_jump_db {
                     return Err(format!(
                         "Acoustic Shield: Blocked dangerous volume jump of +{:.1} dB on '{}' (max allowed: +{:.1} dB)",
                         delta, track_id, self.max_step_jump_db
@@ -72,8 +76,10 @@ impl SafetyGuard {
                 }
             }
         } else {
-            // First time this track is encountered: record current level as baseline
-            self.original_volumes.insert(track_id.to_string(), clamped);
+            // First time this track is encountered: record current level as baseline (unless restoring)
+            if !is_restore {
+                self.original_volumes.insert(track_id.to_string(), clamped);
+            }
         }
 
         // 3. Rate-limiting parameter bursts (min 5ms between modifications per track)
@@ -91,6 +97,15 @@ impl SafetyGuard {
         self.last_action_times.insert(track_id.to_string(), now);
 
         Ok(clamped)
+    }
+
+    pub fn sanitize_volume(
+        &mut self,
+        track_id: &str,
+        is_master: bool,
+        proposed_db: f32,
+    ) -> Result<f32, String> {
+        self.sanitize_volume_with_restore(track_id, is_master, proposed_db, false)
     }
 
     /// Reset tracked track state
@@ -154,6 +169,27 @@ mod tests {
         // Sichere Anhebung <= +3.0 dB ist erlaubt
         let safe_boost = guard.sanitize_volume("track_1", false, 2.5);
         assert!(safe_boost.is_ok());
+    }
+
+    #[test]
+    fn test_ab_audition_drop_and_restore_flow() {
+        let mut guard = SafetyGuard::new();
+        // Track starts at 0.0 dB (nominal)
+        guard.register_baseline("Simple Foundation", 0.0);
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Audition start: Fader drop to -8.0 dB
+        let dropped = guard.sanitize_volume_with_restore("Simple Foundation", false, -8.0, false);
+        assert!(dropped.is_ok());
+        assert_eq!(dropped.unwrap(), -8.0);
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Audition restore: Fader returns to 0.0 dB (+8.0 dB jump) with is_restore = true
+        let restored = guard.sanitize_volume_with_restore("Simple Foundation", false, 0.0, true);
+        assert!(restored.is_ok());
+        assert_eq!(restored.unwrap(), 0.0);
     }
 
     #[test]

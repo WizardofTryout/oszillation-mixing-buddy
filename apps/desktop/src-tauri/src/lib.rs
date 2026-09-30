@@ -746,6 +746,8 @@ async fn apply_daw_action(
     value: f32,
     unit: String,
     is_master: bool,
+    current_value: Option<f32>,
+    is_restore: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let active_daw = {
@@ -766,9 +768,13 @@ async fn apply_daw_action(
 
     // ── Direct Fader: no window needed ──────────────────────────────────────────
     if is_fader_param {
+        let is_restore_flag = is_restore.unwrap_or(false);
         let sanitized_volume = {
             let mut guard = state.safety_guard.lock().unwrap();
-            guard.sanitize_volume(&track_name, is_master, value)?
+            if let Some(base) = current_value {
+                guard.register_baseline(&track_name, base);
+            }
+            guard.sanitize_volume_with_restore(&track_name, is_master, value, is_restore_flag)?
         };
 
         // 1. Native AX fader
