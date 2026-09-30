@@ -630,9 +630,122 @@ export class MacOSAccessibilityClient {
   }
 
   /**
-   * Scan Logic Pro track names via native Swift `logic-ax-bridge scan-tracks`.
+   * Query full channel strips (faderDb, pan, mute, solo, inserts) via `logic-ax-bridge list-channel-strips`.
+   */
+  public async listChannelStrips(): Promise<TrackDescriptor[]> {
+    const res = await this.runBridge<{
+      success?: boolean;
+      channelStrips?: Array<{
+        trackName: string;
+        faderDb: number;
+        pan: number;
+        mute: boolean;
+        solo: boolean;
+        inserts?: Array<{ slot: number; name: string }>;
+      }>;
+    }>(['list-channel-strips']);
+
+    if (!res?.success || !Array.isArray(res.channelStrips) || res.channelStrips.length === 0) {
+      return [];
+    }
+
+    return res.channelStrips
+      .filter((s) => s.trackName && !isSystemDialog(s.trackName))
+      .map((s, i) => {
+        const lower = s.trackName.toLowerCase();
+        const isMaster = lower.includes('stereo out') || lower.includes('master');
+        const isBus = lower.includes('bus') || lower.includes('aux');
+        return {
+          id: isMaster ? 'track_master' : `logic_track_${i + 1}`,
+          index: isMaster ? 0 : i + 1,
+          name: s.trackName,
+          type: isMaster ? ('master' as const) : isBus ? ('bus' as const) : ('audio' as const),
+          volumeDb: typeof s.faderDb === 'number' ? s.faderDb : 0.0,
+          pan: typeof s.pan === 'number' ? s.pan : 0.0,
+          isMuted: Boolean(s.mute),
+          isSoloed: Boolean(s.solo),
+          isSelected: !isMaster && i === 0,
+          insertSlots: (s.inserts ?? []).map((ins) => ({
+            slotIndex: ins.slot,
+            pluginName: ins.name,
+            format: 'au' as const,
+            isBypassed: false,
+            parameters: []
+          }))
+        };
+      });
+  }
+
+  /**
+   * Set a track's channel strip fader in dB without opening any plugin window.
+   */
+  public async setChannelFader(trackName: string, dbValue: number): Promise<boolean> {
+    const res = await this.runBridge<{ success?: boolean }>([
+      'set-fader',
+      '--track',
+      trackName,
+      '--db',
+      dbValue.toFixed(2)
+    ]);
+    return Boolean(res?.success);
+  }
+
+  /**
+   * Set a track's channel strip pan (-63..+63 or normalized -1..+1) without opening any window.
+   */
+  public async setChannelPan(trackName: string, panValue: number): Promise<boolean> {
+    const panInt = Math.abs(panValue) <= 1.0 ? Math.round(panValue * 63) : Math.round(panValue);
+    const res = await this.runBridge<{ success?: boolean }>([
+      'set-pan',
+      '--track',
+      trackName,
+      '--pan',
+      String(panInt)
+    ]);
+    return Boolean(res?.success);
+  }
+
+  /**
+   * Open an Audio FX insert slot (1-based) on a track's channel strip.
+   */
+  public async openInsertSlot(
+    trackName: string,
+    slotOneBased: number
+  ): Promise<{ success: boolean; openedWindow?: string }> {
+    const res = await this.runBridge<{ success?: boolean; openedWindow?: string }>([
+      'open-insert',
+      '--track',
+      trackName,
+      '--slot',
+      String(slotOneBased)
+    ]);
+    return {
+      success: Boolean(res?.success),
+      openedWindow: res?.openedWindow
+    };
+  }
+
+  /**
+   * Close an open floating plugin window by title.
+   */
+  public async closePluginWindow(windowTitle: string): Promise<boolean> {
+    const res = await this.runBridge<{ success?: boolean }>([
+      'close-plugin-window',
+      '--window',
+      windowTitle
+    ]);
+    return Boolean(res?.success);
+  }
+
+  /**
+   * Scan Logic Pro track names via native Swift `logic-ax-bridge list-channel-strips` (with fallback to `scan-tracks`).
    */
   public async scanLogicTracks(): Promise<TrackDescriptor[]> {
+    const strips = await this.listChannelStrips();
+    if (strips.length > 0) {
+      return strips;
+    }
+
     const names = await this.runBridge<string[]>(['scan-tracks']);
     if (!Array.isArray(names) || names.length === 0) {
       return [];

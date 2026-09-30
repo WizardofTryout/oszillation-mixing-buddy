@@ -7,6 +7,7 @@ pub struct SafetyGuard {
     pub fader_min_db: f32,
     pub max_step_jump_db: f32,
     last_volumes: HashMap<String, f32>,
+    original_volumes: HashMap<String, f32>,
     last_action_times: HashMap<String, Instant>,
 }
 
@@ -18,6 +19,7 @@ impl Default for SafetyGuard {
             fader_min_db: -96.0,
             max_step_jump_db: 3.0,
             last_volumes: HashMap::new(),
+            original_volumes: HashMap::new(),
             last_action_times: HashMap::new(),
         }
     }
@@ -26,6 +28,12 @@ impl Default for SafetyGuard {
 impl SafetyGuard {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Explicitly register or update baseline volume for A/B restore operations.
+    pub fn register_baseline(&mut self, track_id: &str, original_db: f32) {
+        self.original_volumes.insert(track_id.to_string(), original_db);
+        self.last_volumes.insert(track_id.to_string(), original_db);
     }
 
     /// Validates and clamps a proposed volume change.
@@ -45,15 +53,27 @@ impl SafetyGuard {
         // 1. Hard clamp boundaries
         let clamped = proposed_db.clamp(self.fader_min_db, max_ceiling);
 
-        // 2. Single-step sudden jump check (Acoustic Shock Shield)
+        // 2. Asymmetrischer Lautstärke-Schutz (Acoustic Shock Shield)
         if let Some(&previous_db) = self.last_volumes.get(track_id) {
             let delta = clamped - previous_db;
-            if delta > self.max_step_jump_db {
-                return Err(format!(
-                    "Acoustic Shield: Blocked dangerous volume jump of +{:.1} dB on '{}' (max allowed: +{:.1} dB)",
-                    delta, track_id, self.max_step_jump_db
-                ));
+
+            // Jede Pegelreduktion (Delta <= 0.0 dB) ist IMMER zulässig
+            if delta > 0.0 {
+                // Ausnahme A/B Restore: Die Rückkehr auf den exakten 'original_value' vor dem Testlauf darf NIEMALS blockiert werden.
+                let is_restore = self.original_volumes.get(track_id)
+                    .map(|&orig| (clamped - orig).abs() < 0.15 || (clamped <= orig && previous_db < orig))
+                    .unwrap_or(false);
+
+                if !is_restore && delta > self.max_step_jump_db {
+                    return Err(format!(
+                        "Acoustic Shield: Blocked dangerous volume jump of +{:.1} dB on '{}' (max allowed: +{:.1} dB)",
+                        delta, track_id, self.max_step_jump_db
+                    ));
+                }
             }
+        } else {
+            // First time this track is encountered: record current level as baseline
+            self.original_volumes.insert(track_id.to_string(), clamped);
         }
 
         // 3. Rate-limiting parameter bursts (min 5ms between modifications per track)
@@ -76,6 +96,7 @@ impl SafetyGuard {
     /// Reset tracked track state
     pub fn reset_track(&mut self, track_id: &str) {
         self.last_volumes.remove(track_id);
+        self.original_volumes.remove(track_id);
         self.last_action_times.remove(track_id);
     }
 }
@@ -102,23 +123,37 @@ mod tests {
     }
 
     #[test]
-    fn test_jump_limiter() {
+    fn test_asymmetric_reduction_and_boost() {
         let mut guard = SafetyGuard::new();
-        guard.sanitize_volume("track_1", false, -10.0).unwrap();
+        // Initial baseline 0.0 dB
+        guard.sanitize_volume("track_1", false, 0.0).unwrap();
 
-        // Sleep to avoid rate limiter trip
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        // Safe jump (+2.5 dB)
-        assert!(guard.sanitize_volume("track_1", false, -7.5).is_ok());
+        // Pegelreduktion: Jede Absenkung (z.B. -12.0 dB) ist IMMER zulässig
+        let dropped = guard.sanitize_volume("track_1", false, -12.0);
+        assert!(dropped.is_ok());
+        assert_eq!(dropped.unwrap(), -12.0);
 
-        // Sleep to avoid rate limiter trip
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        // Dangerous jump (+5.0 dB) -> Rejected!
-        let result = guard.sanitize_volume("track_1", false, -2.5);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Acoustic Shield"));
+        // A/B Restore: Rückkehr auf original_value (0.0 dB, Delta = +12.0 dB) darf NIEMALS blockiert werden
+        let restored = guard.sanitize_volume("track_1", false, 0.0);
+        assert!(restored.is_ok());
+        assert_eq!(restored.unwrap(), 0.0);
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Normale Anhebung > +3.0 dB über Baseline ohne Restore wird geblockt
+        let dangerous_boost = guard.sanitize_volume("track_1", false, 4.5);
+        assert!(dangerous_boost.is_err());
+        assert!(dangerous_boost.unwrap_err().contains("Acoustic Shield"));
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Sichere Anhebung <= +3.0 dB ist erlaubt
+        let safe_boost = guard.sanitize_volume("track_1", false, 2.5);
+        assert!(safe_boost.is_ok());
     }
 
     #[test]
@@ -127,7 +162,7 @@ mod tests {
         guard.sanitize_volume("track_1", false, -10.0).unwrap();
 
         // Immediate subsequent call without delay (< 5ms) -> Rate limit error
-        let burst = guard.sanitize_volume("track_1", false, -9.0);
+        let burst = guard.sanitize_volume("track_1", false, -11.0);
         assert!(burst.is_err());
         assert!(burst.unwrap_err().contains("Rate Limiter"));
     }

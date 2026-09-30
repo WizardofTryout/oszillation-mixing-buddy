@@ -31,9 +31,18 @@ export const ActionCard: React.FC<ActionCardProps> = ({
           </div>
         </div>
 
-        <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
-          {proposal.status}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+            {proposal.status}
+          </span>
+          <button
+            onClick={() => onReject(proposal.id)}
+            className="p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800/80 transition-colors"
+            title="Karte verwerfen & entfernen"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Rationale */}

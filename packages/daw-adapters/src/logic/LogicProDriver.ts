@@ -160,6 +160,7 @@ export class LogicProDriver implements DAWDriver {
     const ch = track.index % 8;
 
     this.sendMIDI([0xe0 + ch, lsb, msb]);
+    await this.axClient.setChannelFader(track.name, clampedDb).catch(() => false);
     this.notifyTrackListChanged();
   }
 
@@ -174,6 +175,7 @@ export class LogicProDriver implements DAWDriver {
     const ch = track.index % 8;
 
     this.sendMIDI([0xb0, 16 + ch, midiValue]);
+    await this.axClient.setChannelPan(track.name, clampedPan).catch(() => false);
     this.notifyTrackListChanged();
   }
 
@@ -325,7 +327,7 @@ export class LogicProDriver implements DAWDriver {
     // Dispatch via native Swift AXUIElement writer + mathematical curve transformer
     if (paramSpec) {
       const windowTitle = track.name || pluginSpec?.name || slot.pluginName || 'Channel EQ';
-      const writeResult = await this.axClient.writePluginParameter(
+      let writeResult = await this.axClient.writePluginParameter(
         windowTitle,
         paramSpec,
         effectiveValue,
@@ -333,16 +335,46 @@ export class LogicProDriver implements DAWDriver {
       );
       const fallbackTitle = pluginSpec?.name ?? slot.pluginName;
       if (!writeResult.success && fallbackTitle && fallbackTitle !== windowTitle) {
-        await this.axClient.writePluginParameter(fallbackTitle, paramSpec, effectiveValue, pluginSpec);
+        writeResult = await this.axClient.writePluginParameter(
+          fallbackTitle,
+          paramSpec,
+          effectiveValue,
+          pluginSpec
+        );
+      }
+      if (!writeResult.success) {
+        const opened = await this.axClient.openInsertSlot(track.name, Math.max(1, slotIndex + 1));
+        if (opened.success) {
+          const targetWin = opened.openedWindow || windowTitle;
+          await this.axClient.writePluginParameter(targetWin, paramSpec, effectiveValue, pluginSpec);
+          if (opened.openedWindow) {
+            await this.axClient.closePluginWindow(opened.openedWindow);
+          }
+        }
       }
     } else {
-      await this.axClient.setPluginParameter(
+      const ok = await this.axClient.setPluginParameter(
         track.name,
         slotIndex,
         paramName,
         effectiveValue,
         slot.pluginName
       );
+      if (!ok) {
+        const opened = await this.axClient.openInsertSlot(track.name, Math.max(1, slotIndex + 1));
+        if (opened.success) {
+          await this.axClient.setPluginParameter(
+            opened.openedWindow || track.name,
+            slotIndex,
+            paramName,
+            effectiveValue,
+            slot.pluginName
+          );
+          if (opened.openedWindow) {
+            await this.axClient.closePluginWindow(opened.openedWindow);
+          }
+        }
+      }
     }
   }
 

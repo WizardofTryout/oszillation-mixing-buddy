@@ -121,7 +121,98 @@ export class MixingToolHandlers {
     connected: boolean;
     error?: string;
   }> {
-    // 1. Query dawDriver directly for live AX track & open plugin parameter inspection
+    // 1. Query live channel strips from Desktop Companion (calls list-channel-strips bridge)
+    try {
+      const res = await fetch('http://127.0.0.1:48123/api/channel-strips', {
+        signal: AbortSignal.timeout(3000)
+      });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          success?: boolean;
+          channelStrips?: Array<{
+            trackName: string;
+            faderDb: number;
+            pan: number;
+            mute: boolean;
+            solo: boolean;
+            inserts: Array<{ slot: number; name: string }>;
+          }>;
+        };
+        if (data.success && Array.isArray(data.channelStrips) && data.channelStrips.length > 0) {
+          const tracks: TrackDescriptor[] = data.channelStrips.map((strip, idx) => ({
+            id: `track_${idx + 1}`,
+            index: idx,
+            name: strip.trackName || `Track ${idx + 1}`,
+            type: (strip.trackName?.toLowerCase().includes('master') ? 'master'
+              : strip.trackName?.toLowerCase().includes('bus') ? 'bus' : 'audio') as TrackDescriptor['type'],
+            volumeDb: strip.faderDb ?? 0,
+            pan: strip.pan ?? 0,
+            isMuted: strip.mute ?? false,
+            isSoloed: strip.solo ?? false,
+            isSelected: false,
+            insertSlots: (strip.inserts ?? []).map((ins) => ({
+              slotIndex: ins.slot,
+              pluginName: ins.name,
+              format: 'au' as const,
+              isBypassed: false,
+              parameters: []
+            }))
+          }));
+          return { tracks, connected: true };
+        }
+      }
+    } catch {
+      // Fall through to 48124 / dawDriver
+    }
+
+    // 1b. Fallback: Query MCP SSE bridge endpoint on 127.0.0.1:48124
+    try {
+      const res48124 = await fetch('http://127.0.0.1:48124/api/ax-bridge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ args: ['list-channel-strips'] }),
+        signal: AbortSignal.timeout(3000)
+      });
+      if (res48124.ok) {
+        const data = (await res48124.json()) as {
+          success?: boolean;
+          channelStrips?: Array<{
+            trackName: string;
+            faderDb: number;
+            pan: number;
+            mute: boolean;
+            solo: boolean;
+            inserts: Array<{ slot: number; name: string }>;
+          }>;
+        };
+        if (data.success && Array.isArray(data.channelStrips) && data.channelStrips.length > 0) {
+          const tracks: TrackDescriptor[] = data.channelStrips.map((strip, idx) => ({
+            id: `track_${idx + 1}`,
+            index: idx,
+            name: strip.trackName || `Track ${idx + 1}`,
+            type: (strip.trackName?.toLowerCase().includes('master') ? 'master'
+              : strip.trackName?.toLowerCase().includes('bus') ? 'bus' : 'audio') as TrackDescriptor['type'],
+            volumeDb: strip.faderDb ?? 0,
+            pan: strip.pan ?? 0,
+            isMuted: strip.mute ?? false,
+            isSoloed: strip.solo ?? false,
+            isSelected: false,
+            insertSlots: (strip.inserts ?? []).map((ins) => ({
+              slotIndex: ins.slot,
+              pluginName: ins.name,
+              format: 'au' as const,
+              isBypassed: false,
+              parameters: []
+            }))
+          }));
+          return { tracks, connected: true };
+        }
+      }
+    } catch {
+      // Fall through to dawDriver
+    }
+
+    // 2. Query dawDriver directly for live AX track & open plugin parameter inspection
     if (this.dawDriver) {
       try {
         const liveTracks = await this.dawDriver.getTrackList();
@@ -132,11 +223,11 @@ export class MixingToolHandlers {
           };
         }
       } catch {
-        // Fallback to HTTP API below
+        // Fallback to HTTP legacy API below
       }
     }
 
-    // 2. Live query to Desktop Companion HTTP API on 127.0.0.1:48123/api/tracks
+    // 3. Legacy HTTP API fallback
     try {
       const res = await fetch('http://127.0.0.1:48123/api/tracks', {
         signal: AbortSignal.timeout(2000)
@@ -144,17 +235,14 @@ export class MixingToolHandlers {
       if (res.ok) {
         const data = (await res.json()) as { tracks?: TrackDescriptor[] };
         if (Array.isArray(data.tracks) && data.tracks.length > 0) {
-          return {
-            tracks: data.tracks,
-            connected: true
-          };
+          return { tracks: data.tracks, connected: true };
         }
       }
     } catch {
-      // Desktop companion not reachable or starting up
+      // Desktop companion not reachable
     }
 
-    // 3. STRICT RULE: NO MOCK ARRAYS! Never simulate tracks!
+    // 4. STRICT RULE: NO MOCK ARRAYS!
     return {
       tracks: [],
       connected: false,

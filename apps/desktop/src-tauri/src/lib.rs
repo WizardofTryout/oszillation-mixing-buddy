@@ -21,6 +21,21 @@ pub struct AppState {
 
 /// Resolves the path to the compiled native Swift AXUIElement sidecar (`logic-ax-bridge`)
 pub fn resolve_bridge_path() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            // macOS bundle layout: Contents/MacOS/binary -> Contents/Resources/
+            for rel in [
+                "../Resources/logic-ax-bridge",
+                "../Resources/_up_/_up_/_up_/packages/daw-adapters/bin/logic-ax-bridge",
+            ] {
+                let candidate = parent.join(rel);
+                if candidate.exists() {
+                    return candidate;
+                }
+            }
+        }
+    }
+
     let workspace_abs = PathBuf::from(
         "/Volumes/Spacestation/MCP/Antigravity-MCP-tools/Steinberg-Mixing-Buddy/packages/daw-adapters/bin/logic-ax-bridge",
     );
@@ -694,32 +709,28 @@ fn execute_logic_ax_bridge(bridge_path: &PathBuf, args: &[String]) -> Result<ser
         return Ok(parsed);
     }
 
-    // If direct invocation failed due to macOS TCC invalidation after app rebuild (AX_UNTRUSTED / AX_NO_WINDOWS),
-    // automatically delegate execution to the MCP server on 127.0.0.1:48124 which inherits IDE TCC permissions.
-    let err_str = parsed.get("error").and_then(|v| v.as_str()).unwrap_or("");
-    if err_str.contains("AX_UNTRUSTED") || err_str.contains("AX_NO_WINDOWS") || err_str.contains("Window not found") {
-        let payload = serde_json::json!({ "args": args }).to_string();
-        if let Ok(curl_out) = std::process::Command::new("/usr/bin/curl")
-            .args([
-                "-s",
-                "--max-time",
-                "3",
-                "-X",
-                "POST",
-                "http://127.0.0.1:48124/api/ax-bridge",
-                "-H",
-                "Content-Type: application/json",
-                "-d",
-                &payload,
-            ])
-            .output()
-        {
-            if curl_out.status.success() {
-                let curl_stdout = String::from_utf8_lossy(&curl_out.stdout).trim().to_string();
-                if let Ok(proxy_parsed) = serde_json::from_str::<serde_json::Value>(&curl_stdout) {
-                    if proxy_parsed.get("success").is_some() {
-                        return Ok(proxy_parsed);
-                    }
+    // If direct invocation failed, attempt delegation via MCP proxy on 127.0.0.1:48124
+    let payload = serde_json::json!({ "args": args }).to_string();
+    if let Ok(curl_out) = std::process::Command::new("/usr/bin/curl")
+        .args([
+            "-s",
+            "--max-time",
+            "3",
+            "-X",
+            "POST",
+            "http://127.0.0.1:48124/api/ax-bridge",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &payload,
+        ])
+        .output()
+    {
+        if curl_out.status.success() {
+            let curl_stdout = String::from_utf8_lossy(&curl_out.stdout).trim().to_string();
+            if let Ok(proxy_parsed) = serde_json::from_str::<serde_json::Value>(&curl_stdout) {
+                if proxy_parsed.get("success").and_then(|v| v.as_bool()) == Some(true) {
+                    return Ok(proxy_parsed);
                 }
             }
         }
@@ -748,26 +759,98 @@ async fn apply_daw_action(
         "volume" | "fader_db" | "track_volume" | "master_volume" | "fader"
     );
 
-    // AUFGABE 1: Apply SafetyGuard ONLY to track/master volume fader parameters
+    let is_pan_param = matches!(
+        param_lower.as_str(),
+        "pan" | "stereo_pan" | "balance"
+    );
+
+    // ── Direct Fader: no window needed ──────────────────────────────────────────
     if is_fader_param {
         let sanitized_volume = {
             let mut guard = state.safety_guard.lock().unwrap();
             guard.sanitize_volume(&track_name, is_master, value)?
         };
 
-        let _ = state
-            .ipc_server
-            .mcu_bridge
-            .apply_fader_delta_with_automation(0, sanitized_volume);
+        // 1. Native AX fader
+        #[cfg(target_os = "macos")]
+        {
+            let bridge_path = resolve_bridge_path();
+            if !bridge_path.exists() {
+                return Err(format!(
+                    "logic-ax-bridge nicht gefunden unter {}",
+                    bridge_path.display()
+                ));
+            }
+            let fader_args = vec![
+                "set-fader".to_string(),
+                "--track".to_string(),
+                track_name.clone(),
+                "--db".to_string(),
+                format!("{:.2}", sanitized_volume),
+            ];
+            let res = execute_logic_ax_bridge(&bridge_path, &fader_args)?;
+            if res.get("success").and_then(|v| v.as_bool()) == Some(true) {
+                return Ok(format!(
+                    "Fader '{}' → {:.1} dB via AX-Mixer ({})",
+                    track_name, sanitized_volume, active_daw.display_name()
+                ));
+            } else {
+                let err_msg = res.get("error").and_then(|v| v.as_str()).unwrap_or("Unbekannter AX-Fehler");
+                return Err(format!("Fader für '{}' konnte nicht gesetzt werden: {}", track_name, err_msg));
+            }
+        }
 
-        return Ok(format!(
-            "Fader '{}' auf '{}' auf {:.1} {} gesetzt ({})",
-            parameter,
-            track_name,
-            sanitized_volume,
-            unit,
-            active_daw.display_name()
-        ));
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = state
+                .ipc_server
+                .mcu_bridge
+                .apply_fader_delta_with_automation(0, sanitized_volume);
+
+            return Ok(format!(
+                "Fader '{}' auf {:.1} {} gesetzt ({})",
+                track_name, sanitized_volume, unit, active_daw.display_name()
+            ));
+        }
+    }
+
+    // ── Direct Pan: no window needed ─────────────────────────────────────────────
+    if is_pan_param {
+        #[cfg(target_os = "macos")]
+        {
+            let bridge_path = resolve_bridge_path();
+            if !bridge_path.exists() {
+                return Err(format!(
+                    "logic-ax-bridge nicht gefunden unter {}",
+                    bridge_path.display()
+                ));
+            }
+            let pan_args = vec![
+                "set-pan".to_string(),
+                "--track".to_string(),
+                track_name.clone(),
+                "--pan".to_string(),
+                format!("{:.1}", value),
+            ];
+            let res = execute_logic_ax_bridge(&bridge_path, &pan_args)?;
+            if res.get("success").and_then(|v| v.as_bool()) == Some(true) {
+                return Ok(format!(
+                    "Pan '{}' → {:.0} via AX-Mixer ({})",
+                    track_name, value, active_daw.display_name()
+                ));
+            } else {
+                let err_msg = res.get("error").and_then(|v| v.as_str()).unwrap_or("Unbekannter AX-Fehler");
+                return Err(format!("Pan für '{}' konnte nicht gesetzt werden: {}", track_name, err_msg));
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            return Ok(format!(
+                "Pan '{}' auf {:.0} gesetzt ({})",
+                track_name, value, active_daw.display_name()
+            ));
+        }
     }
 
     // AUFGABE 2: Execute plugin parameter change in Logic Pro via native `logic-ax-bridge`
@@ -832,20 +915,125 @@ async fn apply_daw_action(
             cmd_args.push(band_name.to_string());
         }
 
-        let parsed = execute_logic_ax_bridge(&bridge_path, &cmd_args)?;
+        let parsed_result = execute_logic_ax_bridge(&bridge_path, &cmd_args)?;
 
-        if parsed.get("success").and_then(|v| v.as_bool()) != Some(true) {
-            let err_msg = parsed
-                .get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Regler oder Plugin-Fenster in Logic Pro nicht gefunden");
+        // ── Auto open-insert fallback if plugin window is closed ─────────────────
+        let success = parsed_result.get("success").and_then(|v| v.as_bool()) == Some(true);
+        let err_msg_str = parsed_result
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let window_not_found = !success && (
+            err_msg_str.contains("nicht gefunden") ||
+            err_msg_str.contains("nicht geöffnet") ||
+            err_msg_str.contains("not found") ||
+            err_msg_str.contains("AX_NO_WINDOWS")
+        );
+
+        if window_not_found {
+            // 1. Find which slot contains the target plugin via list-channel-strips
+            let strips_args = vec!["list-channel-strips".to_string()];
+            let strips_result = execute_logic_ax_bridge(&bridge_path, &strips_args)
+                .unwrap_or_else(|_| serde_json::json!({}));
+
+            let slot: Option<u64> = strips_result
+                .get("channelStrips")
+                .and_then(|s| s.as_array())
+                .and_then(|arr| {
+                    arr.iter().find(|strip| {
+                        let name = strip.get("trackName")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("");
+                        name.to_lowercase().contains(&track_name.to_lowercase())
+                    })
+                })
+                .and_then(|strip| strip.get("inserts"))
+                .and_then(|ins| ins.as_array())
+                .and_then(|inserts| {
+                    inserts.iter()
+                        .filter_map(|ins| {
+                            let name = ins.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                            // Match plugin by a heuristic substring of the parameter target
+                            let desc_low = desc_arg.to_lowercase();
+                            let name_low = name.to_lowercase();
+                            if name_low.contains("channel eq") && (desc_low.contains("freq") || desc_low.contains("gain") || desc_low.contains("cut"))
+                                || name_low.contains("compressor") && (desc_low.contains("threshold") || desc_low.contains("ratio") || desc_low.contains("attack"))
+                                || !name_low.is_empty()
+                            {
+                                ins.get("slot").and_then(|s| s.as_u64())
+                            } else {
+                                None
+                            }
+                        })
+                        .next()
+                })
+                .or(Some(1)); // Default to slot 1 if no match
+
+            if let Some(target_slot) = slot {
+                // 2. Open the insert
+                let open_args = vec![
+                    "open-insert".to_string(),
+                    "--track".to_string(),
+                    track_name.clone(),
+                    "--slot".to_string(),
+                    target_slot.to_string(),
+                ];
+                let open_result = execute_logic_ax_bridge(&bridge_path, &open_args)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let opened_window = open_result
+                    .get("openedWindow")
+                    .and_then(|w| w.as_str())
+                    .unwrap_or(&track_name)
+                    .to_string();
+
+                if open_result.get("success").and_then(|v| v.as_bool()) == Some(true) {
+                    // 3. Retry set-param with the now-open window
+                    let mut retry_args = cmd_args.clone();
+                    // Update --window to the newly opened window title (if known)
+                    if !opened_window.is_empty() {
+                        if let Some(pos) = retry_args.iter().position(|a| a == "--window") {
+                            if pos + 1 < retry_args.len() {
+                                retry_args[pos + 1] = opened_window.clone();
+                            }
+                        }
+                    }
+                    let retry_result = execute_logic_ax_bridge(&bridge_path, &retry_args)
+                        .unwrap_or_else(|_| serde_json::json!({}));
+
+                    // 4. Close the window again (cleanup)
+                    let close_args = vec![
+                        "close-plugin-window".to_string(),
+                        "--window".to_string(),
+                        opened_window.clone(),
+                    ];
+                    let _ = execute_logic_ax_bridge(&bridge_path, &close_args);
+
+                    if retry_result.get("success").and_then(|v| v.as_bool()) == Some(true) {
+                        let val_desc = retry_result
+                            .get("valueDescription")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| format!("{:.1} {}", target.clamped_display, unit));
+                        return Ok(format!(
+                            "Parameter '{}' auf '{}' auf {} gesetzt (Auto-Insert Slot {}) ({})",
+                            parameter, track_name, val_desc, target_slot, active_daw.display_name()
+                        ));
+                    }
+                }
+            }
+        }
+
+        if parsed_result.get("success").and_then(|v| v.as_bool()) != Some(true) {
             return Err(format!(
                 "Konnte '{}' auf Spur '{}' nicht setzen: {}",
-                parameter, track_name, err_msg
+                parameter, track_name, err_msg_str
             ));
         }
 
-        let val_desc = parsed
+        let val_desc = parsed_result
             .get("valueDescription")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
@@ -854,10 +1042,7 @@ async fn apply_daw_action(
 
         return Ok(format!(
             "Parameter '{}' auf '{}' auf {} gesetzt ({})",
-            parameter,
-            track_name,
-            val_desc,
-            active_daw.display_name()
+            parameter, track_name, val_desc, active_daw.display_name()
         ));
     }
 
@@ -1313,6 +1498,27 @@ async fn delete_learned_plugin(slug: String, app: tauri::AppHandle) -> Result<St
     Ok(msg)
 }
 
+#[tauri::command]
+async fn list_channel_strips() -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if !bridge_path.exists() {
+            return Err(format!(
+                "Native Swift-Bridge nicht gefunden unter: {}",
+                bridge_path.display()
+            ));
+        }
+        let args = vec!["list-channel-strips".to_string()];
+        execute_logic_ax_bridge(&bridge_path, &args)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(serde_json::json!({ "success": true, "channelStrips": [] }))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -1361,7 +1567,8 @@ pub fn run() {
             learn_active_plugin,
             list_learned_plugins,
             delete_learned_plugin,
-            update_plugin_tags
+            update_plugin_tags,
+            list_channel_strips
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

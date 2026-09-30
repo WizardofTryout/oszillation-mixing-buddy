@@ -451,11 +451,9 @@ export const App: React.FC = () => {
 
   const handleRejectAction = (id: string) => {
     const prop = proposals.find((p) => p.id === id);
-    setProposals((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, status: 'rejected' } : p))
-    );
+    setProposals((prev) => prev.filter((p) => p.id !== id));
     if (prop) {
-      setChatLog(`❌ Vorschlag verworfen: "${prop.title}".`);
+      setChatLog(`❌ Vorschlag entfernt: "${prop.title}".`);
     }
   };
 
@@ -732,9 +730,20 @@ export const App: React.FC = () => {
               <Sliders className="w-4 h-4 text-blue-400" />
               AI Mix Recommendations & Proposals
             </h3>
-            <span className="text-xs text-slate-400">
-              {proposals.filter((p) => p.status === 'pending').length} pending approval
-            </span>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-slate-400">
+                {proposals.filter((p) => p.status === 'pending').length} pending approval
+              </span>
+              {proposals.length > 0 && (
+                <button
+                  onClick={() => setProposals([])}
+                  className="px-2 py-0.5 text-[11px] rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors"
+                  title="Alle Karten aus der Ansicht entfernen"
+                >
+                  Queue leeren
+                </button>
+              )}
+            </div>
           </div>
 
           {proposals.length === 0 ? (

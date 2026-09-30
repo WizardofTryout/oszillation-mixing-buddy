@@ -304,11 +304,295 @@ func printJSON(_ object: Any) {
     }
 }
 
+// ─── CHANNEL STRIP HELPERS & TYPES ───────────────────────────────────────────
+
+func matchesTrackName(_ stripName: String, query: String) -> Bool {
+    let s = stripName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if s.isEmpty || q.isEmpty { return false }
+    if s == q { return true }
+    if s.contains(q) || q.contains(s) { return true }
+    
+    // Check word tokens (e.g. "Motown Revisited" vs "Motown Revisited Kit")
+    let sWords = s.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count >= 3 }
+    let qWords = q.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { $0.count >= 3 }
+    for sw in sWords {
+        for qw in qWords {
+            if sw == qw || sw.contains(qw) || qw.contains(sw) {
+                return true
+            }
+        }
+    }
+    return false
+}
+
+func parseDbString(_ raw: String) -> Double {
+    let pattern = "[-+]?[0-9]+([.,][0-9]+)?"
+    if let regex = try? NSRegularExpression(pattern: pattern),
+       let match = regex.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)),
+       let range = Range(match.range, in: raw) {
+        let numStr = raw[range].replacingOccurrences(of: ",", with: ".")
+        return Double(numStr) ?? 0.0
+    }
+    return 0.0
+}
+
+/// Logics Fader-Kennlinie (0..233):
+/// +6 dB = 233.0 (1.00)
+///  0 dB = 173.0 (~0.75)
+/// -6 dB = 140.0 (~0.60)
+/// -12 dB = 106.0 (~0.45)
+/// -18 dB = 90.0 (~0.38)
+/// -30 dB = 50.0 (~0.21)
+/// -50 dB = 15.0 (~0.06)
+/// -96 dB = 0.0 (0.00)
+func dbToLogicSliderValue(_ db: Double) -> Double {
+    if db >= 6.0 { return 233.0 }
+    if db >= 0.0 { return 173.0 + (db / 6.0) * (233.0 - 173.0) }
+    if db >= -6.0 { return 140.0 + ((db + 6.0) / 6.0) * (173.0 - 140.0) }
+    if db >= -12.0 { return 106.0 + ((db + 12.0) / 6.0) * (140.0 - 106.0) }
+    if db >= -18.0 { return 90.0 + ((db + 18.0) / 6.0) * (106.0 - 90.0) }
+    if db >= -30.0 { return 50.0 + ((db + 30.0) / 12.0) * (90.0 - 50.0) }
+    if db >= -50.0 { return 15.0 + ((db + 50.0) / 20.0) * (50.0 - 15.0) }
+    if db <= -96.0 { return 0.0 }
+    return max(0.0, ((db + 96.0) / 46.0) * 15.0)
+}
+
+func stepFaderToTargetDb(slider: AXUIElement, targetDb: Double) -> (success: Bool, finalDb: Double) {
+    for _ in 0..<70 {
+        let curDesc = getAXString(slider, kAXValueDescriptionAttribute as String) ?? ""
+        let curDb = parseDbString(curDesc)
+        let diff = targetDb - curDb
+        
+        if abs(diff) <= 0.15 {
+            return (true, curDb)
+        }
+        
+        if diff <= -1.2 {
+            // Coarse step down (~1.0 dB to 1.5 dB per step)
+            AXUIElementPerformAction(slider, "AXDecrement" as CFString)
+        } else if diff >= 1.2 {
+            // Coarse step up
+            AXUIElementPerformAction(slider, "AXIncrement" as CFString)
+        } else if diff < 0 {
+            // Fine step down (-0.1 dB per micro-step)
+            var low = -100.0
+            if let cf = CFNumberCreate(kCFAllocatorDefault, .doubleType, &low) {
+                AXUIElementSetAttributeValue(slider, kAXValueAttribute as CFString, cf)
+            }
+        } else {
+            // Fine step up (+0.1 dB per micro-step)
+            var high = 300.0
+            if let cf = CFNumberCreate(kCFAllocatorDefault, .doubleType, &high) {
+                AXUIElementSetAttributeValue(slider, kAXValueAttribute as CFString, cf)
+            }
+        }
+    }
+    let finalDesc = getAXString(slider, kAXValueDescriptionAttribute as String) ?? ""
+    let finalDb = parseDbString(finalDesc)
+    return (abs(finalDb - targetDb) <= 0.5, finalDb)
+}
+
+func stepPanToTarget(knob: AXUIElement, targetPan: Double) -> (success: Bool, finalPan: Double) {
+    let clampedTarget = max(-64.0, min(63.0, targetPan))
+    
+    for _ in 0..<50 {
+        let cur = getAXDouble(knob, kAXValueAttribute as String) ?? 0.0
+        let diff = clampedTarget - cur
+        
+        if abs(diff) < 1.0 {
+            return (true, cur)
+        }
+        
+        if diff >= 10.0 {
+            AXUIElementPerformAction(knob, "AXIncrement" as CFString)
+        } else if diff <= -10.0 {
+            AXUIElementPerformAction(knob, "AXDecrement" as CFString)
+        } else if diff > 0 {
+            var high = 100.0
+            if let cf = CFNumberCreate(kCFAllocatorDefault, .doubleType, &high) {
+                AXUIElementSetAttributeValue(knob, kAXValueAttribute as CFString, cf)
+            }
+        } else {
+            var low = -100.0
+            if let cf = CFNumberCreate(kCFAllocatorDefault, .doubleType, &low) {
+                AXUIElementSetAttributeValue(knob, kAXValueAttribute as CFString, cf)
+            }
+        }
+    }
+    
+    let finalVal = getAXDouble(knob, kAXValueAttribute as String) ?? 0.0
+    return (abs(finalVal - clampedTarget) <= 2.0, finalVal)
+}
+
+func findAllChannelStripElements(_ windows: [AXUIElement]) -> [AXUIElement] {
+    func searchInRoot(_ root: AXUIElement, depth: Int = 0) -> [AXUIElement] {
+        if depth > 10 { return [] }
+        let role = getAXString(root, kAXRoleAttribute as String) ?? ""
+        let desc = (getAXString(root, kAXDescriptionAttribute as String) ?? "").lowercased()
+        
+        // Logic Pro: AXLayoutArea desc="Mixer" contains AXLayoutItem for each track
+        if role == "AXLayoutArea" && desc.contains("mixer") {
+            let items = getAXChildren(root).filter {
+                (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXLayoutItem"
+            }
+            if !items.isEmpty { return items }
+        }
+        
+        var best: [AXUIElement] = []
+        for c in getAXChildren(root) {
+            let res = searchInRoot(c, depth: depth + 1)
+            if res.count > best.count {
+                best = res
+            }
+        }
+        if !best.isEmpty { return best }
+        
+        // Fallback: any AXLayoutArea that contains items with volume fader sliders
+        if role == "AXLayoutArea" {
+            let items = getAXChildren(root).filter { item in
+                let ch = getAXChildren(item)
+                return ch.contains {
+                    let r = getAXString($0, kAXRoleAttribute as String) ?? ""
+                    let d = (getAXString($0, kAXDescriptionAttribute as String) ?? "").lowercased()
+                    return r == "AXSlider" && (d.contains("lautstärke") || d.contains("volume"))
+                }
+            }
+            if !items.isEmpty { return items }
+        }
+        
+        return []
+    }
+    
+    // Check main window first (AXStandardWindow)
+    for w in windows {
+        let sr = getAXString(w, kAXSubroleAttribute as String) ?? ""
+        let t = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
+        if sr == "AXStandardWindow" || t.contains("spuren") || t.contains("tracks") || t.contains("mixer") {
+            let strips = searchInRoot(w)
+            if !strips.isEmpty { return strips }
+        }
+    }
+    
+    for w in windows {
+        let strips = searchInRoot(w)
+        if !strips.isEmpty { return strips }
+    }
+    return []
+}
+
+struct ParsedChannelStrip {
+    let element: AXUIElement
+    let trackName: String
+    let faderDb: Double
+    let pan: Double
+    let mute: Bool
+    let solo: Bool
+    let inserts: [[String: Any]]
+    let faderSlider: AXUIElement?
+    let faderTextField: AXUIElement?
+    let balanceSlider: AXUIElement?
+    let pluginGroups: [(name: String, group: AXUIElement)]
+}
+
+func parseChannelStripElement(_ strip: AXUIElement) -> ParsedChannelStrip {
+    var trackName = getAXString(strip, kAXDescriptionAttribute as String) ?? ""
+    var faderDb: Double = 0.0
+    var pan: Double = 0.0
+    var muted = false
+    var soloed = false
+    var inserts: [[String: Any]] = []
+    var faderSlider: AXUIElement? = nil
+    var faderTextField: AXUIElement? = nil
+    var balanceSlider: AXUIElement? = nil
+    var pluginGroups: [(name: String, group: AXUIElement)] = []
+    
+    let children = getAXChildren(strip)
+    for c in children {
+        let role = getAXString(c, kAXRoleAttribute as String) ?? ""
+        let desc = getAXString(c, kAXDescriptionAttribute as String) ?? ""
+        let title = getAXString(c, kAXTitleAttribute as String) ?? ""
+        let descLower = desc.lowercased()
+        let titleLower = title.lowercased()
+        
+        if role == "AXTextField" && descLower == "name" {
+            let val = getAXString(c, kAXValueAttribute as String) ?? ""
+            if !val.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                trackName = val.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        
+        if role == "AXSlider" {
+            if descLower.contains("lautstärke") || descLower.contains("volume") || descLower.contains("fader") {
+                faderSlider = c
+                let valDesc = getAXString(c, kAXValueDescriptionAttribute as String) ?? ""
+                if !valDesc.isEmpty {
+                    faderDb = parseDbString(valDesc)
+                }
+            } else if descLower.contains("balance") || descLower.contains("pan") {
+                balanceSlider = c
+                pan = getAXDouble(c, kAXValueAttribute as String) ?? 0.0
+            }
+        }
+        
+        if role == "AXTextField" && descLower.contains("pegel des lautstärkereglers") {
+            faderTextField = c
+            let t = title.isEmpty ? desc : title
+            if let commaRange = t.range(of: ",") {
+                // e.g. "Pegel des Lautstärkereglers, -6,7 dB" -> "-6,7 dB"
+                let part = String(t[commaRange.upperBound...])
+                faderDb = parseDbString(part)
+            }
+        }
+        
+        if role == "AXButton" {
+            if descLower.contains("ton aus") || descLower.contains("mute") || descLower.contains("stumm") {
+                let v = (getAXString(c, kAXValueAttribute as String) ?? "").lowercased()
+                muted = (v == "ein" || v == "1" || v == "true")
+            }
+            if descLower.contains("solo") {
+                let v = (getAXString(c, kAXValueAttribute as String) ?? "").lowercased()
+                soloed = (v == "ein" || v == "1" || v == "true")
+            }
+        }
+        
+        if role == "AXGroup" {
+            let ignored = ["automation", "read", "gruppe", "stereo-ausgabe", "pegelreduktionsmesser"]
+            let isIgnored = ignored.contains(where: { descLower.contains($0) })
+            if !desc.isEmpty && !isIgnored {
+                pluginGroups.append((name: desc, group: c))
+            }
+        }
+    }
+    
+    // Convert pluginGroups to 1-indexed inserts
+    for (i, pg) in pluginGroups.enumerated() {
+        inserts.append([
+            "slot": i + 1,
+            "name": pg.name
+        ])
+    }
+    
+    return ParsedChannelStrip(
+        element: strip,
+        trackName: trackName,
+        faderDb: faderDb,
+        pan: pan,
+        mute: muted,
+        solo: soloed,
+        inserts: inserts,
+        faderSlider: faderSlider,
+        faderTextField: faderTextField,
+        balanceSlider: balanceSlider,
+        pluginGroups: pluginGroups
+    )
+}
+
 // MARK: - CLI Argument Parser
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-    printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks"])
+    printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks | list-channel-strips | set-fader | set-pan | open-insert | close-plugin-window"])
     exit(1)
 }
 
@@ -323,6 +607,11 @@ guard let appElement = findLogicApplicationElement() else {
         exit(0)
     }
     printJSON(["success": false, "error": "Logic Pro is not running"])
+    exit(0)
+}
+
+if !AXIsProcessTrusted() {
+    printJSON(["success": false, "error": "AX_UNTRUSTED: Fehlende macOS Bedienungshilfen-Berechtigung"])
     exit(0)
 }
 
@@ -782,6 +1071,233 @@ case "profile-plugin":
         "tags": tags,
         "parameters": parameters
     ])
+
+// ─── NEW COMMANDS ──────────────────────────────────────────────────────────────
+
+
+case "list-channel-strips":
+    let allWindows = getLogicWindows(appElement)
+    let stripElements = findAllChannelStripElements(allWindows)
+    
+    var channelStrips: [[String: Any]] = []
+    for el in stripElements {
+        let parsed = parseChannelStripElement(el)
+        channelStrips.append([
+            "trackName": parsed.trackName,
+            "faderDb": parsed.faderDb,
+            "pan": parsed.pan,
+            "mute": parsed.mute,
+            "solo": parsed.solo,
+            "inserts": parsed.inserts
+        ])
+    }
+    printJSON(["success": true, "channelStrips": channelStrips])
+
+case "set-fader":
+    let trackQuery = getArg("--track") ?? ""
+    guard let dbStr = getArg("--db"), let targetDb = Double(dbStr.replacingOccurrences(of: ",", with: ".")) else {
+        printJSON(["success": false, "error": "Missing or invalid --db value"])
+        exit(0)
+    }
+    let allWins = getLogicWindows(appElement)
+    let stripElements = findAllChannelStripElements(allWins)
+    
+    var targetStrip: ParsedChannelStrip? = nil
+    for el in stripElements {
+        let parsed = parseChannelStripElement(el)
+        if matchesTrackName(parsed.trackName, query: trackQuery) {
+            targetStrip = parsed
+            break
+        }
+    }
+    
+    guard let strip = targetStrip else {
+        let known = stripElements.map { parseChannelStripElement($0).trackName }.joined(separator: ", ")
+        printJSON(["success": false, "error": "Kanal für Spur '\(trackQuery)' nicht gefunden. Verfügbar: [\(known)]"])
+        exit(0)
+    }
+    
+    // 1. Schreibe den Fader-Wert in dB direkt in das AXTextField unter dem Fader
+    if let tf = strip.faderTextField {
+        let formattedComma = String(format: "%.1f", targetDb).replacingOccurrences(of: ".", with: ",")
+        let formattedDot = String(format: "%.1f", targetDb)
+        
+        _ = AXUIElementSetAttributeValue(tf, kAXValueAttribute as CFString, formattedComma as CFString)
+        _ = AXUIElementPerformAction(tf, kAXConfirmAction as CFString)
+        _ = AXUIElementSetAttributeValue(tf, kAXValueAttribute as CFString, formattedDot as CFString)
+        _ = AXUIElementPerformAction(tf, kAXConfirmAction as CFString)
+    }
+    
+    // 2. Fader-Slider mit Kennlinie und Stepping auf exakten dB-Wert fahren
+    if let slider = strip.faderSlider {
+        let res = stepFaderToTargetDb(slider: slider, targetDb: targetDb)
+        let newDesc = getAXString(slider, kAXValueDescriptionAttribute as String) ?? "\(res.finalDb) dB"
+        let sliderValActual = getAXDouble(slider, kAXValueAttribute as String) ?? 0.0
+        printJSON(["success": res.success, "track": strip.trackName, "newDb": parseDbString(newDesc), "sliderValue": sliderValActual])
+    } else {
+        printJSON(["success": true, "track": strip.trackName, "newDb": targetDb])
+    }
+
+case "set-pan":
+    let trackQuery = getArg("--track") ?? ""
+    guard let panStr = getArg("--pan"), let panVal = Double(panStr.replacingOccurrences(of: ",", with: ".")) else {
+        printJSON(["success": false, "error": "Missing or invalid --pan value"])
+        exit(0)
+    }
+    let allWins = getLogicWindows(appElement)
+    let stripElements = findAllChannelStripElements(allWins)
+    
+    var targetStrip: ParsedChannelStrip? = nil
+    for el in stripElements {
+        let parsed = parseChannelStripElement(el)
+        if matchesTrackName(parsed.trackName, query: trackQuery) {
+            targetStrip = parsed
+            break
+        }
+    }
+    
+    guard let strip = targetStrip else {
+        let known = stripElements.map { parseChannelStripElement($0).trackName }.joined(separator: ", ")
+        printJSON(["success": false, "error": "Kanal für Spur '\(trackQuery)' nicht gefunden. Verfügbar: [\(known)]"])
+        exit(0)
+    }
+    
+    guard let knob = strip.balanceSlider else {
+        printJSON(["success": false, "error": "Pan/Balance-Regler für Spur '\(strip.trackName)' nicht gefunden"])
+        exit(0)
+    }
+    
+    // 1. Berechne:
+    let currentPan = getAXDouble(knob, kAXValueAttribute as String) ?? 0.0
+    let targetPan = max(-64.0, min(63.0, panVal))
+    let delta = targetPan - currentPan
+    
+    // 2. Ausführung 2-Stufen-Logik:
+    if abs(delta) >= 0.5 {
+        let action = delta > 0 ? "AXIncrement" : "AXDecrement"
+        // Grobschritte (10er)
+        let coarse = Int(abs(delta)) / 10
+        for _ in 0..<coarse {
+            AXUIElementPerformAction(knob, action as CFString)
+        }
+        
+        // Feinschritte (1er)
+        let fine = Int(round(abs(delta))) % 10
+        var fineVal: Double = delta > 0 ? 100.0 : -100.0
+        if let cfFine = CFNumberCreate(kCFAllocatorDefault, .doubleType, &fineVal) {
+            for _ in 0..<fine {
+                AXUIElementSetAttributeValue(knob, kAXValueAttribute as CFString, cfFine)
+            }
+        }
+        
+        // Nachjustierung bei minimaler Abweichung
+        let after = getAXDouble(knob, kAXValueAttribute as String) ?? currentPan
+        let remaining = Int(round(targetPan - after))
+        if remaining != 0 {
+            var nudgeVal: Double = remaining > 0 ? 100.0 : -100.0
+            if let cfNudge = CFNumberCreate(kCFAllocatorDefault, .doubleType, &nudgeVal) {
+                for _ in 0..<abs(remaining) {
+                    AXUIElementSetAttributeValue(knob, kAXValueAttribute as CFString, cfNudge)
+                }
+            }
+        }
+    }
+    
+    let readBack = getAXDouble(knob, kAXValueAttribute as String) ?? targetPan
+    let readDesc = getAXString(knob, kAXValueDescriptionAttribute as String) ?? "\(Int(readBack))"
+    printJSON(["success": true, "track": strip.trackName, "newPan": readBack, "panDescription": readDesc])
+
+case "open-insert":
+    let trackQuery = getArg("--track") ?? ""
+    let slotStr = getArg("--slot") ?? "1"
+    let slotNum = Int(slotStr) ?? 1
+    let allWins = getLogicWindows(appElement)
+    let stripElements = findAllChannelStripElements(allWins)
+    
+    var targetStrip: ParsedChannelStrip? = nil
+    for el in stripElements {
+        let parsed = parseChannelStripElement(el)
+        if matchesTrackName(parsed.trackName, query: trackQuery) {
+            targetStrip = parsed
+            break
+        }
+    }
+    
+    guard let strip = targetStrip else {
+        let known = stripElements.map { parseChannelStripElement($0).trackName }.joined(separator: ", ")
+        printJSON(["success": false, "error": "Kanal für Spur '\(trackQuery)' nicht gefunden. Verfügbar: [\(known)]"])
+        exit(0)
+    }
+    
+    // Find the plugin group for slotNum (1-based)
+    guard slotNum >= 1 && slotNum <= strip.pluginGroups.count else {
+        printJSON(["success": false, "error": "Slot \(slotNum) existiert nicht auf Spur '\(strip.trackName)'. Belegt: \(strip.pluginGroups.count) Inserts"])
+        exit(0)
+    }
+    
+    let targetPlugin = strip.pluginGroups[slotNum - 1]
+    // Look inside targetPlugin.group for an AXButton (e.g. desc="geöffnet" or AXButton)
+    var openBtn: AXUIElement? = nil
+    for c in getAXChildren(targetPlugin.group) {
+        let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+        if r == "AXButton" {
+            openBtn = c
+            break
+        }
+    }
+    
+    guard let btn = openBtn else {
+        printJSON(["success": false, "error": "Öffnen-Button für Plugin '\(targetPlugin.name)' nicht gefunden"])
+        exit(0)
+    }
+    
+    let pressErr = AXUIElementPerformAction(btn, kAXPressAction as CFString)
+    guard pressErr == .success else {
+        printJSON(["success": false, "error": "AXPress fehlgeschlagen (AXError: \(pressErr.rawValue))"])
+        exit(0)
+    }
+    
+    // Poll up to 400 ms for opened window
+    var openedTitle = targetPlugin.name
+    let deadline = Date().addingTimeInterval(0.4)
+    while Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.04)
+        let freshWins = getLogicWindows(appElement)
+        for w in freshWins {
+            let sr = getAXString(w, kAXSubroleAttribute as String) ?? ""
+            let t = getAXString(w, kAXTitleAttribute as String) ?? ""
+            if (sr == "AXDialog" || sr == "AXFloatingWindow") && !t.isEmpty {
+                if t.lowercased().contains(targetPlugin.name.lowercased()) || t.lowercased().contains(strip.trackName.lowercased()) {
+                    openedTitle = t
+                    break
+                }
+            }
+        }
+    }
+    
+    printJSON(["success": true, "track": strip.trackName, "pluginName": targetPlugin.name, "openedWindow": openedTitle])
+
+case "close-plugin-window":
+    let winQuery = getArg("--window") ?? ""
+    guard let targetWin = findTargetWindow(appElement, query: winQuery) else {
+        printJSON(["success": false, "error": buildWindowError(appElement, query: winQuery)])
+        exit(0)
+    }
+    var closed = false
+    for child in getAXChildren(targetWin) {
+        let role = getAXString(child, kAXRoleAttribute as String) ?? ""
+        let sr   = getAXString(child, kAXSubroleAttribute as String) ?? ""
+        if role == "AXButton" && sr == "AXCloseButton" {
+            let err = AXUIElementPerformAction(child, kAXPressAction as CFString)
+            closed = (err == .success)
+            break
+        }
+    }
+    if !closed {
+        let err = AXUIElementPerformAction(targetWin, "AXRaise" as CFString)
+        closed = (err == .success)
+    }
+    printJSON(["success": closed])
 
 default:
     printJSON(["success": false, "error": "Unknown command: \(command)"])

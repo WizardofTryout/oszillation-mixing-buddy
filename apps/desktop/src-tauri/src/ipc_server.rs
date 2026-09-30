@@ -237,7 +237,36 @@ async fn handle_connection(
             return;
         }
 
-        // 3. POST requests
+        // 3. GET /api/channel-strips — live Mixer/Inspector channel strips via logic-ax-bridge
+        if peek_str.starts_with("GET /api/channel-strips") {
+            let body = {
+                #[cfg(target_os = "macos")]
+                {
+                    let bridge_path = crate::resolve_bridge_path();
+                    if bridge_path.exists() {
+                        match crate::execute_logic_ax_bridge(&bridge_path, &["list-channel-strips".to_string()]) {
+                            Ok(val) => val.to_string(),
+                            Err(e) => serde_json::json!({"success": false, "error": e, "channelStrips": []}).to_string(),
+                        }
+                    } else {
+                        serde_json::json!({"success": false, "error": "Bridge not found", "channelStrips": []}).to_string()
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    serde_json::json!({"success": true, "channelStrips": []}).to_string()
+                }
+            };
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(), body
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.flush().await;
+            return;
+        }
+
+        // 4. POST requests
         if peek_str.starts_with("POST ") {
             let mut req_bytes = Vec::with_capacity(4096);
             let mut temp_buf = [0u8; 2048];
