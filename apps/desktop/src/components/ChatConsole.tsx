@@ -388,25 +388,34 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
         )}
       </div>
 
-      {/* Input Bar */}
-      <div className="p-2 border-t border-darkBorder/70 bg-[#14161a] flex items-center gap-2">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={`Frag den Mixing Buddy (z. B. 'Hebe die Höhen an' oder 'Räume das Low-End auf')...`}
-          className="flex-1 bg-[#1a1c22] border border-darkBorder px-3 py-1.5 rounded text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
-        />
-        <button
-          onClick={handleSend}
-          disabled={!input.trim() || isAnalyzing}
-          className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white px-3 py-1.5 rounded flex items-center gap-1.5 text-xs font-semibold transition-colors"
-        >
-          <Send className="w-3.5 h-3.5" />
-          <span>Senden</span>
-        </button>
-      </div>
+      {/* Input Bar / External MCP Banner */}
+      {providerMode === 'mcp_external' ? (
+        <div className="px-3 py-2.5 border-t border-blue-500/30 bg-blue-950/30 flex items-center gap-2 text-xs text-blue-200 select-text">
+          <Sparkles className="w-4 h-4 text-blue-400 shrink-0" />
+          <span>
+            Co-Producer läuft über externen MCP-Client. Gib deine Mix-Befehle in Claude Desktop, Cursor oder deinem bevorzugten LLM ein – die ActionCards erscheinen live hier im HUD.
+          </span>
+        </div>
+      ) : (
+        <div className="p-2 border-t border-darkBorder/70 bg-[#14161a] flex items-center gap-2">
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={`Frag den Mixing Buddy (z. B. 'Hebe die Höhen an' oder 'Räume das Low-End auf')...`}
+            className="flex-1 bg-[#1a1c22] border border-darkBorder px-3 py-1.5 rounded text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+          />
+          <button
+            onClick={handleSend}
+            disabled={!input.trim() || isAnalyzing}
+            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white px-3 py-1.5 rounded flex items-center gap-1.5 text-xs font-semibold transition-colors"
+          >
+            <Send className="w-3.5 h-3.5" />
+            <span>Senden</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 };

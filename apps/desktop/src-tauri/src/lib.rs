@@ -831,6 +831,134 @@ async fn toggle_plugin_bypass(
     ))
 }
 
+#[tauri::command]
+async fn install_mcp_client_config(
+    client_type: String,
+    custom_path: Option<String>,
+) -> Result<String, String> {
+    let home = std::env::var("HOME").map_err(|_| "Konnte HOME-Verzeichnis nicht ermitteln".to_string())?;
+    let home_path = PathBuf::from(&home);
+
+    let node_bin = [
+        "/opt/homebrew/bin/node",
+        "/usr/local/bin/node",
+        "/usr/bin/node",
+    ]
+    .iter()
+    .find(|p| std::path::Path::new(p).exists())
+    .unwrap_or(&"node")
+    .to_string();
+
+    let server_script = "/Volumes/Spacestation/MCP/Antigravity-MCP-tools/Steinberg-Mixing-Buddy/packages/mcp-server/dist/index.js";
+
+    let target_path = if let Some(custom) = custom_path.filter(|s| !s.trim().is_empty()) {
+        if custom.starts_with("~/") {
+            home_path.join(custom.trim_start_matches("~/"))
+        } else {
+            PathBuf::from(custom)
+        }
+    } else {
+        match client_type.as_str() {
+            "claude_desktop" => home_path
+                .join("Library")
+                .join("Application Support")
+                .join("Claude")
+                .join("claude_desktop_config.json"),
+            "cursor" => home_path.join(".cursor").join("mcp.json"),
+            "vscode_custom" => {
+                let agy_cfg = home_path.join(".gemini").join("config").join("mcp_config.json");
+                let vscode_mcp = home_path
+                    .join("Library")
+                    .join("Application Support")
+                    .join("Code")
+                    .join("User")
+                    .join("mcp.json");
+                if agy_cfg.exists() {
+                    agy_cfg
+                } else {
+                    vscode_mcp
+                }
+            }
+            _ => return Err(format!("Unbekannter MCP-Client-Typ: {}", client_type)),
+        }
+    };
+
+    if let Some(parent) = target_path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Verzeichnis '{}' konnte nicht angelegt werden: {}",
+                    parent.display(),
+                    e
+                )
+            })?;
+        }
+    }
+
+    let mut root: serde_json::Value = if target_path.exists() {
+        let raw = std::fs::read_to_string(&target_path).map_err(|e| {
+            format!(
+                "Konfigurationsdatei '{}' konnte nicht gelesen werden: {}",
+                target_path.display(),
+                e
+            )
+        })?;
+        if raw.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(&raw).map_err(|e| {
+                format!(
+                    "Ungültiges JSON in '{}': {}",
+                    target_path.display(),
+                    e
+                )
+            })?
+        }
+    } else {
+        serde_json::json!({})
+    };
+
+    if !root.is_object() {
+        root = serde_json::json!({});
+    }
+
+    let entry = serde_json::json!({
+        "command": node_bin,
+        "args": [server_script, "--stdio"]
+    });
+
+    // Determine whether the file uses `servers` (VS Code native mcp.json) or `mcpServers` (Claude / Cursor / Antigravity)
+    let use_servers_key = client_type == "vscode_custom"
+        && target_path.to_string_lossy().contains("/Code/User/mcp.json")
+        && root.get("mcpServers").is_none();
+
+    let container_key = if use_servers_key { "servers" } else { "mcpServers" };
+
+    if root.get(container_key).and_then(|v| v.as_object()).is_none() {
+        root[container_key] = serde_json::json!({});
+    }
+
+    if let Some(servers_obj) = root.get_mut(container_key).and_then(|v| v.as_object_mut()) {
+        servers_obj.insert("oszillation-mixing-buddy".to_string(), entry);
+    }
+
+    let formatted = serde_json::to_string_pretty(&root)
+        .map_err(|e| format!("JSON-Serialisierung fehlgeschlagen: {}", e))?;
+
+    std::fs::write(&target_path, format!("{}\n", formatted)).map_err(|e| {
+        format!(
+            "Fehler beim Schreiben in '{}': {}",
+            target_path.display(),
+            e
+        )
+    })?;
+
+    Ok(format!(
+        "MCP-Konfiguration erfolgreich in '{}' installiert.",
+        target_path.display()
+    ))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -874,7 +1002,8 @@ pub fn run() {
             validate_volume_adjustment,
             apply_daw_action,
             create_daw_track,
-            toggle_plugin_bypass
+            toggle_plugin_bypass,
+            install_mcp_client_config
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

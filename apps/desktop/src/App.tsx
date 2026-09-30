@@ -24,6 +24,7 @@ export const App: React.FC = () => {
   });
   const [proposals, setProposals] = useState<MixActionProposal[]>([]);
   const [chatLog, setChatLog] = useState<string | null>(null);
+  const [mcpClientsCount, setMcpClientsCount] = useState<number>(0);
 
   const handleApiKeyChange = (key: string) => {
     setApiKey(key);
@@ -31,6 +32,30 @@ export const App: React.FC = () => {
       localStorage.setItem('mixing_buddy_gemini_api_key', key);
     } catch {}
   };
+
+  // Poll MCP server health on port 48124 every 3 seconds to detect active stdio / SSE MCP server
+  useEffect(() => {
+    let mcpTimer: NodeJS.Timeout;
+
+    const checkMcpHealth = async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:48124/health');
+        if (res.ok) {
+          const data = await res.json();
+          const sessions = typeof data.sessions === 'number' ? data.sessions : 0;
+          setMcpClientsCount(Math.max(1, sessions));
+        } else {
+          setMcpClientsCount(0);
+        }
+      } catch {
+        setMcpClientsCount(0);
+      }
+      mcpTimer = setTimeout(checkMcpHealth, 3000);
+    };
+
+    checkMcpHealth();
+    return () => clearTimeout(mcpTimer);
+  }, []);
 
   // Live track state — populated exclusively from GET /api/tracks (no static fallbacks)
   const [liveTracks, setLiveTracks] = useState<TrackDescriptor[]>([]);
@@ -477,7 +502,7 @@ export const App: React.FC = () => {
           activeDaw={activeDaw}
           isAudioConnected={isAudioConnected}
           isLicenseActive={true}
-          mcpClientsCount={1}
+          mcpClientsCount={mcpClientsCount}
           modelName={modelName}
           onModelNameChange={setModelName}
           apiKey={apiKey}

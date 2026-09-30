@@ -14,8 +14,12 @@ import {
   Plus,
   Trash2,
   Eye,
-  EyeOff
+  EyeOff,
+  Settings,
+  X,
+  Download
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { GeminiProvider } from '@mixing-buddy/ai-engine';
 
 export type ProviderMode =
@@ -25,6 +29,8 @@ export type ProviderMode =
   | 'byok_openai'
   | 'ollama'
   | 'mcp_external';
+
+type McpModalTab = 'claude_desktop' | 'cursor' | 'vscode_custom';
 
 interface ProviderSettingsProps {
   currentMode: ProviderMode;
@@ -64,6 +70,14 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   onApiKeysChange
 }) => {
   const [copied, setCopied] = useState(false);
+  const [isMcpModalOpen, setIsMcpModalOpen] = useState(false);
+  const [mcpModalTab, setMcpModalTab] = useState<McpModalTab>('claude_desktop');
+  const [customConfigPath, setCustomConfigPath] = useState('');
+  const [installStatus, setInstallStatus] = useState<{
+    status: 'idle' | 'installing' | 'success' | 'error';
+    message: string;
+  }>({ status: 'idle', message: '' });
+
   const [isTestingAll, setIsTestingAll] = useState(false);
   const [testSummary, setTestSummary] = useState<{
     status: 'idle' | 'valid' | 'invalid';
@@ -237,29 +251,88 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     }
   };
 
-  const claudeDesktopConfig = JSON.stringify(
-    {
-      mcpServers: {
-        'oszillation-mixing-buddy': {
-          command: 'node',
-          args: [
-            '/Volumes/Spacestation/MCP/Antigravity-MCP-tools/Steinberg-Mixing-Buddy/packages/mcp-server/dist/index.js',
-            '--stdio'
-          ]
-        }
-      }
-    },
-    null,
-    2
-  );
+  const nodeBinaryPath = '/opt/homebrew/bin/node';
+  const mcpServerDistPath =
+    '/Volumes/Spacestation/MCP/Antigravity-MCP-tools/Steinberg-Mixing-Buddy/packages/mcp-server/dist/index.js';
+
+  const getMcpConfigBlock = (tab: McpModalTab): { fileHint: string; json: string } => {
+    if (tab === 'claude_desktop') {
+      return {
+        fileHint: '~/Library/Application Support/Claude/claude_desktop_config.json',
+        json: JSON.stringify(
+          {
+            mcpServers: {
+              'oszillation-mixing-buddy': {
+                command: nodeBinaryPath,
+                args: [mcpServerDistPath, '--stdio']
+              }
+            }
+          },
+          null,
+          2
+        )
+      };
+    }
+    if (tab === 'cursor') {
+      return {
+        fileHint: '~/.cursor/mcp.json',
+        json: JSON.stringify(
+          {
+            mcpServers: {
+              'oszillation-mixing-buddy': {
+                command: nodeBinaryPath,
+                args: [mcpServerDistPath, '--stdio']
+              }
+            }
+          },
+          null,
+          2
+        )
+      };
+    }
+    return {
+      fileHint: '~/.gemini/config/mcp_config.json oder ~/Library/Application Support/Code/User/mcp.json',
+      json: JSON.stringify(
+        {
+          mcpServers: {
+            'oszillation-mixing-buddy': {
+              command: nodeBinaryPath,
+              args: [mcpServerDistPath, '--stdio'],
+              sseEndpoint: 'http://127.0.0.1:48124/sse'
+            }
+          }
+        },
+        null,
+        2
+      )
+    };
+  };
+
+  const currentMcpBlock = getMcpConfigBlock(mcpModalTab);
 
   const copyConfig = async () => {
     try {
-      await navigator.clipboard.writeText(claudeDesktopConfig);
+      await navigator.clipboard.writeText(currentMcpBlock.json);
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     } catch {
       // Fallback
+    }
+  };
+
+  const handleInstallMcpConfig = async () => {
+    setInstallStatus({ status: 'installing', message: 'Schreibe Konfiguration...' });
+    try {
+      const msg = await invoke<string>('install_mcp_client_config', {
+        clientType: mcpModalTab,
+        customPath: mcpModalTab === 'vscode_custom' && customConfigPath.trim() ? customConfigPath.trim() : null
+      });
+      setInstallStatus({ status: 'success', message: msg });
+    } catch (err: unknown) {
+      setInstallStatus({
+        status: 'error',
+        message: `Fehler beim Installieren: ${String(err)}`
+      });
     }
   };
 
@@ -270,6 +343,8 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     if (d.includes('cubase')) return 'Cubase';
     return d === 'none' || d.includes('detecting') || !d.trim() ? 'Keine / Standalone' : daw;
   };
+
+  const isMcpConnected = mcpClientsCount > 0;
 
   return (
     <div className="bg-darkSurface border border-darkBorder rounded-lg p-4 shadow-lg flex flex-col gap-4">
@@ -298,9 +373,14 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="text-[11px] font-mono bg-blue-950/80 border border-blue-500/30 text-blue-300 px-2.5 py-0.5 rounded flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-            MCP: Active on SSE 48124 / stdio ({mcpClientsCount} client{mcpClientsCount === 1 ? '' : 's'})
+          <span
+            className={`text-[11px] font-mono px-2.5 py-0.5 rounded flex items-center gap-1.5 border ${
+              isMcpConnected
+                ? 'bg-emerald-950/60 border-emerald-500/30 text-emerald-300'
+                : 'bg-slate-900/80 border-slate-700 text-slate-400'
+            }`}
+          >
+            {isMcpConnected ? '🟢 Verbunden (stdio / SSE 48124)' : '⚪ Wartet auf MCP-Client'}
           </span>
         </div>
       </div>
@@ -312,12 +392,16 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             Reasoning Engine & AI Backend:
           </label>
           <button
-            onClick={copyConfig}
-            className="flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 bg-blue-950/40 hover:bg-blue-900/40 border border-blue-500/20 px-2 py-0.5 rounded transition-all"
-            title="Copy Claude Desktop configuration JSON"
+            type="button"
+            onClick={() => {
+              setInstallStatus({ status: 'idle', message: '' });
+              setIsMcpModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 text-[11px] text-blue-300 hover:text-white bg-blue-950/50 hover:bg-blue-900/60 border border-blue-500/30 px-2.5 py-1 rounded transition-all font-medium"
+            title="Universellen MCP-Konfigurationsdialog für Claude Desktop, Cursor oder VS Code öffnen"
           >
-            {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-            {copied ? 'Config Copied!' : 'Copy Claude Desktop Config'}
+            <Settings className="w-3.5 h-3.5 text-blue-400" />
+            <span>⚙️ MCP Client verbinden...</span>
           </button>
         </div>
 
@@ -382,7 +466,7 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             <span className="text-[10px] text-slate-500">localhost:11434</span>
           </button>
 
-          {/* External MCP */}
+          {/* External MCP Client (Universal MCP) */}
           <button
             onClick={() => onSelectMode('mcp_external')}
             className={`p-2.5 rounded border text-left flex flex-col gap-1 transition-all ${
@@ -392,11 +476,154 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
             }`}
           >
             <div className="flex items-center gap-1.5 text-xs font-bold">
-              <Radio className="w-3.5 h-3.5" /> Claude Desktop
+              <Radio className="w-3.5 h-3.5" /> External MCP Client
             </div>
-            <span className="text-[10px] text-slate-500">via stdio MCP</span>
+            <span className={`text-[10px] ${isMcpConnected ? 'text-emerald-400 font-medium' : 'text-slate-500'}`}>
+              {isMcpConnected ? '🟢 Verbunden (stdio / SSE 48124)' : '⚪ Wartet auf MCP-Client'}
+            </span>
           </button>
         </div>
+
+        {/* Universal MCP Client Configuration Modal */}
+        {isMcpModalOpen && (
+          <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-[#14161d] border border-darkBorder rounded-xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col">
+              {/* Modal Header */}
+              <div className="px-4 py-3 border-b border-darkBorder flex items-center justify-between bg-[#181b24]">
+                <div className="flex items-center gap-2">
+                  <Radio className="w-4 h-4 text-blue-400" />
+                  <h3 className="text-sm font-bold text-slate-100">
+                    Universal MCP Client verbinden (stdio & SSE 48124)
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsMcpModalOpen(false)}
+                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/10 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Modal Tabs */}
+              <div className="px-4 pt-3 border-b border-darkBorder/70 bg-[#12141a] flex gap-2">
+                {[
+                  { id: 'claude_desktop' as const, label: 'Claude Desktop' },
+                  { id: 'cursor' as const, label: 'Cursor IDE' },
+                  { id: 'vscode_custom' as const, label: 'VS Code / Custom JSON' }
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => {
+                      setMcpModalTab(tab.id);
+                      setInstallStatus({ status: 'idle', message: '' });
+                    }}
+                    className={`px-3 py-2 text-xs font-semibold rounded-t-lg border-b-2 transition-all ${
+                      mcpModalTab === tab.id
+                        ? 'border-blue-500 text-blue-300 bg-[#181b24]'
+                        : 'border-transparent text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-4 flex flex-col gap-3 text-xs">
+                <div className="flex flex-col gap-1">
+                  <span className="text-slate-400">Ziel-Konfigurationsdatei:</span>
+                  <code className="text-[11px] font-mono text-blue-300 bg-[#0d0f14] px-2.5 py-1.5 rounded border border-darkBorder/60 select-text">
+                    {currentMcpBlock.fileHint}
+                  </code>
+                </div>
+
+                {mcpModalTab === 'vscode_custom' && (
+                  <div className="flex flex-col gap-1">
+                    <span className="text-slate-400">Optionaler eigener Dateipfad für Direkt-Installation:</span>
+                    <input
+                      type="text"
+                      value={customConfigPath}
+                      onChange={(e) => setCustomConfigPath(e.target.value)}
+                      placeholder="~/.gemini/config/mcp_config.json oder ~/Library/Application Support/Code/User/mcp.json"
+                      className="bg-[#0d0f14] border border-darkBorder px-2.5 py-1.5 rounded text-slate-200 font-mono text-xs focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">JSON-Konfigurationsblock:</span>
+                    <button
+                      type="button"
+                      onClick={copyConfig}
+                      className="flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300"
+                    >
+                      {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copied ? 'JSON kopiert!' : 'JSON kopieren'}</span>
+                    </button>
+                  </div>
+                  <pre className="bg-[#0b0d12] border border-darkBorder/80 rounded-lg p-3 font-mono text-[11px] text-emerald-300 overflow-x-auto select-text">
+                    {currentMcpBlock.json}
+                  </pre>
+                </div>
+
+                {installStatus.status !== 'idle' && (
+                  <div
+                    className={`p-2.5 rounded border flex items-center gap-2 text-xs select-text ${
+                      installStatus.status === 'success'
+                        ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-200'
+                        : installStatus.status === 'error'
+                        ? 'bg-rose-950/50 border-rose-500/40 text-rose-200'
+                        : 'bg-blue-950/40 border-blue-500/30 text-blue-200'
+                    }`}
+                  >
+                    {installStatus.status === 'success' ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                    ) : installStatus.status === 'error' ? (
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    ) : (
+                      <RefreshCw className="w-4 h-4 text-blue-400 animate-spin shrink-0" />
+                    )}
+                    <span>{installStatus.message}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-4 py-3 border-t border-darkBorder bg-[#101218] flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={copyConfig}
+                  className="px-3 py-1.5 rounded border border-darkBorder bg-[#1a1d26] hover:bg-[#232733] text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copied ? 'Kopiert!' : 'In Zwischenablage kopieren'}</span>
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleInstallMcpConfig}
+                    disabled={installStatus.status === 'installing'}
+                    className="px-3.5 py-1.5 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shadow"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>In Datei installieren</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsMcpModalOpen(false)}
+                    className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors"
+                  >
+                    Schließen
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Structured Multi-Key Management & Dynamic Model Selector Bar */}
         {(currentMode === 'byok_gemini' || currentMode === 'byok_claude') && (
