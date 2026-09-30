@@ -29,6 +29,7 @@ export interface MixActionProposal {
   confidenceScore: number; // 0.0 to 1.0
   deltas: ParameterDelta[];
   status: 'pending' | 'applied' | 'rejected' | 'auditioning';
+  isPinned?: boolean;
 }
 
 export interface SafetyShieldBounds {

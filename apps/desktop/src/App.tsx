@@ -30,6 +30,41 @@ export const App: React.FC = () => {
   const [proposals, setProposals] = useState<MixActionProposal[]>([]);
   const [chatLog, setChatLog] = useState<string | null>(null);
   const [mcpClientsCount, setMcpClientsCount] = useState<number>(0);
+  const [cardFilter, setCardFilter] = useState<'all' | 'pinned'>('all');
+
+  // Load pinned cards from localStorage on initial mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('mixing_buddy_pinned_cards');
+      if (raw) {
+        const saved = JSON.parse(raw) as MixActionProposal[];
+        if (Array.isArray(saved) && saved.length > 0) {
+          setProposals((prev) => {
+            const existingIds = new Set(prev.map((p) => p.id));
+            const uniqueSaved = saved
+              .filter((p) => !existingIds.has(p.id))
+              .map((p) => ({ ...p, isPinned: true }));
+            return [...uniqueSaved, ...prev];
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Failed to load pinned cards from localStorage', e);
+    }
+  }, []);
+
+  const handleTogglePin = (id: string) => {
+    setProposals((prev) => {
+      const next = prev.map((p) => (p.id === id ? { ...p, isPinned: !p.isPinned } : p));
+      const pinned = next.filter((p) => p.isPinned);
+      try {
+        localStorage.setItem('mixing_buddy_pinned_cards', JSON.stringify(pinned));
+      } catch (e) {
+        console.error('Failed to save pinned cards to localStorage', e);
+      }
+      return next;
+    });
+  };
 
   // Plugin Vault & 1-Click Auto-Profiler state
   const [isVaultOpen, setIsVaultOpen] = useState<boolean>(false);
@@ -457,15 +492,37 @@ export const App: React.FC = () => {
 
   const handleRejectAction = (id: string) => {
     const prop = proposals.find((p) => p.id === id);
-    setProposals((prev) => prev.filter((p) => p.id !== id));
+    setProposals((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      const pinned = next.filter((p) => p.isPinned);
+      try {
+        localStorage.setItem('mixing_buddy_pinned_cards', JSON.stringify(pinned));
+      } catch (e) {
+        console.error('Failed to update pinned cards in localStorage', e);
+      }
+      return next;
+    });
     if (prop) {
       setChatLog(`❌ Vorschlag entfernt: "${prop.title}".`);
     }
   };
 
+  const handleClearQueue = () => {
+    setProposals((prev) => {
+      const kept = prev.filter((p) => p.isPinned);
+      const removedCount = prev.length - kept.length;
+      if (removedCount > 0) {
+        setChatLog(`🧹 ${removedCount} nicht-angepinnte Karte(n) aus der Queue entfernt.`);
+      } else if (kept.length > 0) {
+        setChatLog(`ℹ️ Alle ${kept.length} verbleibenden Karten sind dauerhaft angepinnt.`);
+      }
+      return kept;
+    });
+  };
+
   const handleAuditionAction = async (id: string) => {
     const prop = proposals.find((p) => p.id === id);
-    if (!prop) return;
+    if (!prop || !prop.deltas || prop.deltas.length === 0) return;
 
     const isLogic = activeDaw.toLowerCase().includes('logic');
     const dawLabel = isLogic ? 'Logic Pro' : 'Nuendo';
@@ -475,29 +532,32 @@ export const App: React.FC = () => {
       prev.map((p) => (p.id === id ? { ...p, status: 'auditioning' } : p))
     );
 
-    const delta = prop.deltas[0];
-    const targetTrack = delta?.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
-
     try {
       if (previousStatus === 'applied') {
-        setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}". Plugin-Bypass auf '${targetTrack}' in ${dawLabel} umgeschaltet...`);
-        await invoke('toggle_plugin_bypass', {
-          trackName: targetTrack,
-          slotIndex: delta?.slotIndex ?? 0
-        });
+        setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}". Plugin-Bypass in ${dawLabel} umgeschaltet...`);
+        for (const delta of prop.deltas) {
+          const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
+          await invoke('toggle_plugin_bypass', {
+            trackName: targetTrack,
+            slotIndex: delta.slotIndex ?? 0
+          });
+        }
       } else {
-        setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}". Vorschlag (${delta?.proposedValue ?? 0.0} ${delta?.unit ?? 'dB'}) für 6s in ${dawLabel} aktiviert...`);
-        await invoke('apply_daw_action', {
-          trackName: targetTrack,
-          parameter: delta?.parameterName ?? 'EQ',
-          value: delta?.proposedValue ?? 0.0,
-          currentValue: delta?.currentValue ?? 0.0,
-          isRestore: false,
-          unit: delta?.unit ?? 'dB',
-          isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo'),
-          pluginName: delta?.pluginName || null,
-          slotIndex: typeof delta?.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
-        });
+        setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}" (${prop.deltas.length} Änderungen) für 6s in ${dawLabel} aktiviert...`);
+        for (const delta of prop.deltas) {
+          const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
+          await invoke('apply_daw_action', {
+            trackName: targetTrack,
+            parameter: delta.parameterName || 'EQ',
+            value: delta.proposedValue ?? 0.0,
+            currentValue: delta.currentValue ?? 0.0,
+            isRestore: false,
+            unit: delta.unit ?? 'dB',
+            isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo'),
+            pluginName: delta.pluginName || null,
+            slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
+          });
+        }
       }
     } catch (err: unknown) {
       setProposals((prev) =>
@@ -511,22 +571,28 @@ export const App: React.FC = () => {
     setTimeout(async () => {
       try {
         if (previousStatus === 'applied') {
-          await invoke('toggle_plugin_bypass', {
-            trackName: targetTrack,
-            slotIndex: delta?.slotIndex ?? 0
-          });
+          for (const delta of prop.deltas) {
+            const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
+            await invoke('toggle_plugin_bypass', {
+              trackName: targetTrack,
+              slotIndex: delta.slotIndex ?? 0
+            });
+          }
         } else {
-          await invoke('apply_daw_action', {
-            trackName: targetTrack,
-            parameter: delta?.parameterName ?? 'EQ',
-            value: delta?.currentValue ?? 0.0,
-            currentValue: delta?.currentValue ?? 0.0,
-            isRestore: true,
-            unit: delta?.unit ?? 'dB',
-            isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo'),
-            pluginName: delta?.pluginName || null,
-            slotIndex: typeof delta?.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
-          });
+          for (const delta of prop.deltas) {
+            const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
+            await invoke('apply_daw_action', {
+              trackName: targetTrack,
+              parameter: delta.parameterName || 'EQ',
+              value: delta.currentValue ?? 0.0,
+              currentValue: delta.currentValue ?? 0.0,
+              isRestore: true,
+              unit: delta.unit ?? 'dB',
+              isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo'),
+              pluginName: delta.pluginName || null,
+              slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
+            });
+          }
         }
         setChatLog(`🎧 A/B Audition beendet. Vorheriger Zustand in ${dawLabel} wiederhergestellt.`);
       } catch (err: unknown) {
@@ -739,20 +805,44 @@ export const App: React.FC = () => {
 
         {/* Action Proposals Section */}
         <section className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <h3 className="text-sm font-semibold tracking-wider text-slate-300 uppercase flex items-center gap-2">
               <Sliders className="w-4 h-4 text-blue-400" />
               AI Mix Recommendations & Proposals
             </h3>
             <div className="flex items-center gap-3">
+              {/* Filter Tabs */}
+              <div className="flex items-center bg-slate-900 border border-slate-800 rounded p-0.5 text-xs">
+                <button
+                  onClick={() => setCardFilter('all')}
+                  className={`px-2.5 py-1 rounded transition-colors text-xs ${
+                    cardFilter === 'all'
+                      ? 'bg-blue-600/30 text-blue-300 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Alle ({proposals.length})
+                </button>
+                <button
+                  onClick={() => setCardFilter('pinned')}
+                  className={`px-2.5 py-1 rounded transition-colors text-xs flex items-center gap-1 ${
+                    cardFilter === 'pinned'
+                      ? 'bg-amber-500/30 text-amber-300 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <span>📌</span> Angepinnt ({proposals.filter((p) => p.isPinned).length})
+                </button>
+              </div>
+
               <span className="text-xs text-slate-400">
                 {proposals.filter((p) => p.status === 'pending').length} pending approval
               </span>
               {proposals.length > 0 && (
                 <button
-                  onClick={() => setProposals([])}
-                  className="px-2 py-0.5 text-[11px] rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors"
-                  title="Alle Karten aus der Ansicht entfernen"
+                  onClick={handleClearQueue}
+                  className="px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors"
+                  title="Nicht-angepinnte Karten entfernen (angepinnte bleiben erhalten)"
                 >
                   Queue leeren
                 </button>
@@ -769,15 +859,24 @@ export const App: React.FC = () => {
                 um neue intelligente Anpassungen basierend auf der Live-Metrology zu erzeugen.
               </p>
             </div>
+          ) : cardFilter === 'pinned' && proposals.filter((p) => p.isPinned).length === 0 ? (
+            <div className="bg-[#121418] border border-darkBorder/60 rounded-lg p-6 flex flex-col items-center justify-center text-center gap-2">
+              <span className="text-2xl">📌</span>
+              <div className="text-xs font-semibold text-slate-300">Keine angepinnten Karten vorhanden</div>
+              <p className="text-[11px] text-slate-500 max-w-md">
+                Klicke auf das 📌-Symbol oben rechts in einer beliebigen Karte, um sie dauerhaft für spätere Tests zu sichern.
+              </p>
+            </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {proposals.map((proposal) => (
+              {(cardFilter === 'pinned' ? proposals.filter((p) => p.isPinned) : proposals).map((proposal) => (
                 <ActionCard
                   key={proposal.id}
                   proposal={proposal}
                   onApply={handleApplyAction}
                   onReject={handleRejectAction}
                   onAudition={handleAuditionAction}
+                  onTogglePin={handleTogglePin}
                 />
               ))}
             </div>

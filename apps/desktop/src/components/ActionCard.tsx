@@ -1,22 +1,30 @@
 import React from 'react';
 import type { MixActionProposal } from '@mixing-buddy/shared-types';
-import { Check, X, Volume2, Sparkles } from 'lucide-react';
+import { Check, X, Volume2, Sparkles, Pin } from 'lucide-react';
 
 interface ActionCardProps {
   proposal: MixActionProposal;
   onApply: (id: string) => void;
   onReject: (id: string) => void;
   onAudition: (id: string) => void;
+  onTogglePin?: (id: string) => void;
 }
 
 export const ActionCard: React.FC<ActionCardProps> = ({
   proposal,
   onApply,
   onReject,
-  onAudition
+  onAudition,
+  onTogglePin
 }) => {
   return (
-    <div className="bg-darkSurface border border-blue-500/40 rounded-lg p-4 shadow-xl flex flex-col gap-3">
+    <div
+      className={`bg-darkSurface rounded-lg p-4 shadow-xl flex flex-col gap-3 transition-all ${
+        proposal.isPinned
+          ? 'border-2 border-amber-500/60 shadow-amber-950/20'
+          : 'border border-blue-500/40'
+      }`}
+    >
       {/* Header */}
       <div className="flex justify-between items-start">
         <div className="flex items-center gap-2">
@@ -32,9 +40,30 @@ export const ActionCard: React.FC<ActionCardProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {proposal.isPinned && (
+            <span className="text-[10px] uppercase font-bold font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+              <span>📌</span> Gespeichert
+            </span>
+          )}
           <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
             {proposal.status}
           </span>
+          {onTogglePin && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onTogglePin(proposal.id);
+              }}
+              className={`p-1 rounded transition-colors ${
+                proposal.isPinned
+                  ? 'text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20'
+                  : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800/80'
+              }`}
+              title={proposal.isPinned ? 'Vom Merkzettel lösen' : 'Karte dauerhaft anpinnen'}
+            >
+              <Pin className={`w-3.5 h-3.5 ${proposal.isPinned ? 'fill-amber-400' : ''}`} />
+            </button>
+          )}
           <button
             onClick={() => onReject(proposal.id)}
             className="p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800/80 transition-colors"

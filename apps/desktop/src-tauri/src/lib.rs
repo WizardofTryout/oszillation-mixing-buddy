@@ -84,10 +84,48 @@ fn display_to_raw_log(val: f32, d_min: f32, d_max: f32, r_min: f64, r_max: f64) 
 
 /// Maps a parameter identifier/label and engineering value into the calibrated native Logic Pro AX target
 fn resolve_ax_param_target(parameter: &str, value: f32) -> AXParamTarget {
-    let key = parameter
+    let raw_key = parameter
         .trim()
         .to_lowercase()
         .replace(['-', ' '], "_");
+
+    // Normalize German & descriptive LLM variations:
+    let key = if (raw_key.contains("low_cut") || raw_key.contains("high_pass") || raw_key.contains("band1"))
+        && (raw_key.contains("freq") || raw_key.contains("frequenz") || raw_key.contains("hz") || raw_key.contains("cut"))
+        && !raw_key.contains("slope") && !raw_key.contains("q") && !raw_key.contains("order") {
+        "low_cut_frequency".to_string()
+    } else if (raw_key.contains("high_cut") || raw_key.contains("low_pass") || raw_key.contains("band8"))
+        && (raw_key.contains("freq") || raw_key.contains("frequenz") || raw_key.contains("hz") || raw_key.contains("cut"))
+        && !raw_key.contains("slope") && !raw_key.contains("q") && !raw_key.contains("order") {
+        "high_cut_frequency".to_string()
+    } else if (raw_key.contains("low_shelf") || raw_key.contains("band2")) && raw_key.contains("gain") {
+        "low_shelf_gain".to_string()
+    } else if (raw_key.contains("high_shelf") || raw_key.contains("band7")) && raw_key.contains("gain") {
+        "high_shelf_gain".to_string()
+    } else if raw_key.contains("bell") || raw_key.contains("peak") {
+        if raw_key.contains("gain") || raw_key.contains("pegel") || raw_key.contains("db") {
+            if raw_key.contains("450") || raw_key.contains("500") || raw_key.contains("band4") || raw_key.contains("peak_2") || raw_key.contains("bell_2") {
+                "peak_2_gain".to_string()
+            } else if raw_key.contains("100") || raw_key.contains("80") || raw_key.contains("band3") || raw_key.contains("peak_1") || raw_key.contains("bell_1") {
+                "peak_1_gain".to_string()
+            } else if raw_key.contains("2.8") || raw_key.contains("3000") || raw_key.contains("2800") || raw_key.contains("presence") || raw_key.contains("band5") || raw_key.contains("peak_3") || raw_key.contains("bell_3") {
+                "peak_3_gain".to_string()
+            } else if raw_key.contains("8k") || raw_key.contains("8000") || raw_key.contains("10k") || raw_key.contains("10000") || raw_key.contains("band6") || raw_key.contains("peak_4") || raw_key.contains("bell_4") {
+                "peak_4_gain".to_string()
+            } else {
+                "peak_3_gain".to_string()
+            }
+        } else if raw_key.contains("freq") || raw_key.contains("frequenz") {
+            if raw_key.contains("peak_1") || raw_key.contains("bell_1") { "peak_1_frequency".to_string() }
+            else if raw_key.contains("peak_2") || raw_key.contains("bell_2") { "peak_2_frequency".to_string() }
+            else if raw_key.contains("peak_4") || raw_key.contains("bell_4") { "peak_4_frequency".to_string() }
+            else { "peak_3_frequency".to_string() }
+        } else {
+            raw_key
+        }
+    } else {
+        raw_key
+    };
 
     match key.as_str() {
         // Band 1: Low Cut (High Pass)
