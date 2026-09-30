@@ -56,3 +56,7 @@ Cargo.lock
 Studio-Buddy-ai-demo/
 packages/daw-adapters/bin/
 
+# Local Agent & Serena configurations (kept local, excluded from remote)
+.agent/
+.agents/
+.serena/
