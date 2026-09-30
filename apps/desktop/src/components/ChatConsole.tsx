@@ -139,46 +139,68 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
     try {
       const lower = query.toLowerCase();
 
-      // Check for track creation intent ("erstelle eine neue spur...", "neue spur anlegen", etc.)
-      const isTrackCreation =
-        (lower.includes('spur') &&
-          (lower.includes('erstell') ||
-            lower.includes('neu') ||
-            lower.includes('anleg') ||
-            lower.includes('hinzufüg') ||
-            lower.includes('hinzufueg') ||
-            lower.includes('bereit'))) ||
-        (lower.includes('track') &&
-          (lower.includes('create') || lower.includes('new') || lower.includes('add') || lower.includes('prepare')));
+      // Retrieve effective key from prop or localStorage
+      const effectiveApiKey =
+        apiKey?.trim() ||
+        (() => {
+          try {
+            return localStorage.getItem('mixing_buddy_gemini_api_key') || '';
+          } catch {
+            return '';
+          }
+        })();
 
-      if (isTrackCreation) {
-        try {
-          const trackType = lower.includes('instrument') ? 'instrument' : 'audio';
-          await invoke('create_daw_track', {
-            trackType,
-            name: trackType === 'audio' ? 'Audio Spur' : 'Instrument Spur'
+      // 1. If BYOK Gemini is selected: Send the prompt directly to Gemini!
+      if (providerMode === 'byok_gemini') {
+        if (effectiveApiKey.length > 5) {
+          const keyList = effectiveApiKey.split(/[\n,;]+/).map((k) => k.trim()).filter(Boolean);
+          const gemini = new GeminiProvider({
+            apiKey: keyList[0] || effectiveApiKey,
+            apiKeys: keyList,
+            modelName: modelName.trim() || 'gemini-3.8-flash'
           });
-          const trackMsg = `✅ Neue ${trackType === 'audio' ? 'Audiospur' : 'Instrumentenspur'} wurde erfolgreich in ${dawLabel} angelegt (Cmd+Option+N / Menü). Der Channel EQ steht im ersten Insert bereit.`;
+
+          const res = await gemini.generateMixProposal(query, telemetry, tracks, {
+            dawName: dawLabel,
+            userPrompt: query
+          });
+
           setMessages((prev) => [
             ...prev,
             {
               id: `msg_ai_${Date.now()}`,
               sender: 'assistant',
-              text: trackMsg,
+              text: res.assistantText,
+              timestamp: Date.now()
+            }
+          ]);
+
+          if (res.proposal) {
+            onProposalGenerated(res.proposal);
+          }
+          setIsAnalyzing(false);
+          return;
+        } else {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `msg_ai_${Date.now()}`,
+              sender: 'assistant',
+              text: `⚠️ Gemini BYOK ist aktiv, aber es wurde noch kein gültiger API-Key eingetragen. Bitte trage deinen Google Gemini API-Key in den Settings oben ein, um echte ${modelName}-Inferenz zu nutzen.`,
               timestamp: Date.now()
             }
           ]);
           setIsAnalyzing(false);
           return;
-        } catch {
-          // Continue if invoke not available
         }
       }
 
       // Check for plugin learning intent ("lerne bitte das gerade geöffnete plugin an", "plugin scannen", etc.)
       const isPluginLearn =
         lower.includes('plugin') &&
-        (lower.includes('lern') || lower.includes('scan') || lower.includes('profil') || lower.includes('speicher'));
+        (lower.includes('lern') || lower.includes('scan') || lower.includes('profil') || lower.includes('speicher')) &&
+        !lower.includes('karte') &&
+        !lower.includes('vorschlag');
 
       if (isPluginLearn) {
         try {
@@ -216,48 +238,41 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
         }
       }
 
-      // 1. If BYOK Gemini is selected and API key is present: Call real Gemini API!
-      if (providerMode === 'byok_gemini' && apiKey.trim().length > 5) {
-        const gemini = new GeminiProvider({
-          apiKey: apiKey.trim(),
-          modelName: modelName.trim() || 'gemini-3.8-flash'
-        });
+      // Check for track creation intent (offline/managed fallback only)
+      const isTrackCreation =
+        !lower.includes('karte') &&
+        !lower.includes('vorschlag') &&
+        !lower.includes('proposal') &&
+        !lower.includes('eq') &&
+        !lower.includes('insert') &&
+        (lower.includes('neue spur') ||
+          lower.includes('spur anlegen') ||
+          lower.includes('spur erzeugen') ||
+          lower.includes('new track') ||
+          lower.includes('create track'));
 
-        const res = await gemini.generateMixProposal(query, telemetry, tracks, {
-          dawName: dawLabel,
-          userPrompt: query
-        });
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `msg_ai_${Date.now()}`,
-            sender: 'assistant',
-            text: res.assistantText,
-            timestamp: Date.now()
-          }
-        ]);
-
-        if (res.proposal) {
-          onProposalGenerated(res.proposal);
+      if (isTrackCreation) {
+        try {
+          const trackType = lower.includes('instrument') ? 'instrument' : 'audio';
+          await invoke('create_daw_track', {
+            trackType,
+            name: trackType === 'audio' ? 'Audio Spur' : 'Instrument Spur'
+          });
+          const trackMsg = `✅ Neue ${trackType === 'audio' ? 'Audiospur' : 'Instrumentenspur'} wurde erfolgreich in ${dawLabel} angelegt (Cmd+Option+N / Menü). Der Channel EQ steht im ersten Insert bereit.`;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `msg_ai_${Date.now()}`,
+              sender: 'assistant',
+              text: trackMsg,
+              timestamp: Date.now()
+            }
+          ]);
+          setIsAnalyzing(false);
+          return;
+        } catch {
+          // Continue if invoke not available
         }
-        setIsAnalyzing(false);
-        return;
-      }
-
-      // If BYOK Gemini is selected but NO key is set
-      if (providerMode === 'byok_gemini' && (!apiKey || apiKey.trim().length <= 5)) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `msg_ai_${Date.now()}`,
-            sender: 'assistant',
-            text: `⚠️ Gemini BYOK ist aktiv, aber es wurde noch kein gültiger API-Key eingetragen. Bitte trage deinen Google Gemini API-Key in den Settings oben ein, um echte ${modelName}-Inferenz zu nutzen.`,
-            timestamp: Date.now()
-          }
-        ]);
-        setIsAnalyzing(false);
-        return;
       }
 
       // 2. Managed Mode / Fallback: Analyze with live telemetry context against real available tracks
