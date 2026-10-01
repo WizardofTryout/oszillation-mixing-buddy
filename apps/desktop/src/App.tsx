@@ -602,6 +602,14 @@ export const App: React.FC = () => {
     }
 
     try {
+      if (proposal.sidechainRoute) {
+        await invoke('set_sidechain', {
+          track: proposal.sidechainRoute.trackName,
+          slot: proposal.sidechainRoute.slotIndex,
+          source: proposal.sidechainRoute.sourcePath
+        });
+      }
+
       for (const delta of proposal.deltas) {
         await invoke('apply_daw_action', {
           trackName: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),

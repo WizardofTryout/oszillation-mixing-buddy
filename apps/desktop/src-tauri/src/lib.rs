@@ -1970,6 +1970,38 @@ async fn set_send_level(
     }
 }
 
+#[tauri::command]
+async fn set_sidechain(
+    track: String,
+    slot: u32,
+    source: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if bridge_path.exists() {
+            return execute_logic_ax_bridge(
+                &bridge_path,
+                &[
+                    "set-sidechain".to_string(),
+                    "--track".to_string(),
+                    track,
+                    "--slot".to_string(),
+                    slot.to_string(),
+                    "--source".to_string(),
+                    source,
+                ],
+            );
+        }
+        Err("logic-ax-bridge sidecar not found".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (track, slot, source);
+        Ok(serde_json::json!({"success": true, "stub": true}))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -2037,7 +2069,8 @@ pub fn run() {
             select_track,
             load_plugin_into_slot,
             set_send_bus,
-            set_send_level
+            set_send_level,
+            set_sidechain
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

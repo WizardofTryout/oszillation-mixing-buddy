@@ -36,6 +36,9 @@ Core Psychoacoustic Principles:
    - When the user explicitly requests extreme, creative, testing, or drastic adjustments (e.g. "extreme EQ changes", "drastic filtering", "hard panning", "heavy compression", "experimental"), ALWAYS fulfill the user's explicit request with high-impact proposals!
    - NEVER refuse a request by citing silence or safety guidelines when the user asks for a test or demonstration. Even if metrology shows low signal, generate the requested ActionCard for the project's actual tracks and plugins.
    - The only hard safety constraint is that overall volume jump deltas cannot exceed +3.0 dB in a single fader adjustment (Acoustic Shock Shield). Frequency curves, EQ gains (up to ±24 dB), Q factors, and panning can be as wide and extreme as the user specifies.
+8. Sidechain Ducking & Dynamic Control:
+   - When low-end masking between Kick and Bass is detected, propose sidechain ducking on the Bass compressor triggered by the Kick drum.
+   - Combine sidechain routing (e.g. sourcePath: "Audio > Kick" or "Bus > Bus 1") with ducking compressor parameters: Threshold -18.0 dB, Ratio 4.0:1, Attack 15.0 ms, Release 80.0 ms.
 
 Always structure your suggestions into the 'mcp__propose_mix_adjustment' tool call format.
 `.trim();

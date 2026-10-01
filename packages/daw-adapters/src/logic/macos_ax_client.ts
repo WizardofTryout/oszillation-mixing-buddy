@@ -993,4 +993,61 @@ export class MacOSAccessibilityClient {
     }
     return res;
   }
+
+  /**
+   * Sprint 10: Routes a sidechain source (e.g. "Audio > Kick", "Bus > Bus 1", or "Intern") to an insert plugin's header.
+   */
+  public async setSidechain(
+    trackName: string,
+    slotIndex: number,
+    source: string
+  ): Promise<{ success: boolean; track?: string; slot?: number; pluginName?: string; sidechain?: string; error?: string }> {
+    const res = await this.runBridge<{
+      success: boolean;
+      track?: string;
+      slot?: number;
+      pluginName?: string;
+      sidechain?: string;
+      error?: string;
+    }>([
+      'set-sidechain',
+      '--track',
+      trackName,
+      '--slot',
+      String(slotIndex),
+      '--source',
+      source
+    ]);
+    if (!res) {
+      return { success: false, error: 'Failed to communicate with logic-ax-bridge sidecar' };
+    }
+    return res;
+  }
+
+  /**
+   * Sprint 10: Reads the currently assigned sidechain source from an insert plugin's header.
+   */
+  public async getSidechain(
+    trackName: string,
+    slotIndex: number
+  ): Promise<{ success: boolean; track?: string; slot?: number; pluginName?: string; sidechain?: string; error?: string }> {
+    const res = await this.runBridge<{
+      success: boolean;
+      track?: string;
+      slot?: number;
+      pluginName?: string;
+      sidechain?: string;
+      error?: string;
+    }>([
+      'get-sidechain',
+      '--track',
+      trackName,
+      '--slot',
+      String(slotIndex)
+    ]);
+    if (!res) {
+      return { success: false, error: 'Failed to communicate with logic-ax-bridge sidecar' };
+    }
+    return res;
+  }
 }

@@ -79,6 +79,19 @@ export const ActionCard: React.FC<ActionCardProps> = ({
         {proposal.rationale}
       </p>
 
+      {/* Sidechain Routing Header Strip */}
+      {proposal.sidechainRoute && (
+        <div className="flex items-center justify-between text-xs bg-indigo-950/50 border border-indigo-500/40 px-2.5 py-1.5 rounded font-mono">
+          <div className="flex items-center gap-1.5 text-indigo-300">
+            <span className="font-semibold text-indigo-200">🔗 Sidechain:</span>
+            <span>{proposal.sidechainRoute.trackName} (Slot {proposal.sidechainRoute.slotIndex})</span>
+          </div>
+          <div className="text-indigo-400 font-bold">
+            ← {proposal.sidechainRoute.sourcePath}
+          </div>
+        </div>
+      )}
+
       {/* Parameter Deltas Diff */}
       <div className="flex flex-col gap-1.5">
         <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">

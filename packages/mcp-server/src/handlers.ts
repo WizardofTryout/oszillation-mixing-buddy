@@ -31,7 +31,8 @@ import type {
   SetFolderStateInput,
   SelectTrackInput,
   LoadPluginInput,
-  RouteSendInput
+  RouteSendInput,
+  RouteSidechainInput
 } from './tools.js';
 
 export interface ResonancePeak {
@@ -1051,5 +1052,45 @@ export class MixingToolHandlers {
     }
 
     return assignResult;
+  }
+
+  /**
+   * Sprint 10: Routes a sidechain source into an insert plugin's sidechain input in Logic Pro
+   */
+  public async routeSidechain(args: RouteSidechainInput): Promise<{
+    success: boolean;
+    track?: string;
+    slot?: number;
+    pluginName?: string;
+    sidechain?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('http://127.0.0.1:48123/api/plugins/sidechain', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          track: args.trackName,
+          slot: args.slotIndex,
+          source: args.sourcePath
+        }),
+        signal: AbortSignal.timeout(8000)
+      });
+      if (res.ok) {
+        return (await res.json()) as {
+          success: boolean;
+          track?: string;
+          slot?: number;
+          pluginName?: string;
+          sidechain?: string;
+          error?: string;
+        };
+      }
+      throw new Error(`HTTP ${res.status}`);
+    } catch {
+      const { MacOSAccessibilityClient } = await import('@mixing-buddy/daw-adapters');
+      const axClient = new MacOSAccessibilityClient();
+      return await axClient.setSidechain(args.trackName, args.slotIndex, args.sourcePath);
+    }
   }
 }

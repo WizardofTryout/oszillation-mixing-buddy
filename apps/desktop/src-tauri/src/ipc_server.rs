@@ -967,6 +967,61 @@ async fn handle_connection(
                 let _ = stream.write_all(resp.as_bytes()).await;
                 let _ = stream.flush().await;
                 return;
+            } else if path.contains("/api/plugins/sidechain") {
+                // Sprint 10: Set Plugin Sidechain Routing
+                let parsed = serde_json::from_str::<serde_json::Value>(&body_str).unwrap_or(serde_json::Value::Null);
+                let track = parsed.get("track")
+                    .or_else(|| parsed.get("trackName"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let slot = parsed.get("slot")
+                    .or_else(|| parsed.get("slotIndex"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1);
+                let source = parsed.get("source")
+                    .or_else(|| parsed.get("sourcePath"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                let body = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let bridge_path = crate::resolve_bridge_path();
+                        if bridge_path.exists() {
+                            match crate::execute_logic_ax_bridge(
+                                &bridge_path,
+                                &[
+                                    "set-sidechain".to_string(),
+                                    "--track".to_string(),
+                                    track,
+                                    "--slot".to_string(),
+                                    slot.to_string(),
+                                    "--source".to_string(),
+                                    source,
+                                ],
+                            ) {
+                                Ok(val) => val.to_string(),
+                                Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
+                            }
+                        } else {
+                            serde_json::json!({"success": false, "error": "Bridge sidecar not found"}).to_string()
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let _ = (track, slot, source);
+                        serde_json::json!({"success": true, "stub": true}).to_string()
+                    }
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
             } else {
                 // Action proposal sync (e.g. /api/proposals)
                 if !body_str.trim().is_empty() {

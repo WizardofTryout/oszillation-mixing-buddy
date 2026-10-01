@@ -53,11 +53,14 @@ func findLogicApplicationElement() -> AXUIElement? {
 }
 
 func getLogicWindows(_ appElement: AXUIElement) -> [AXUIElement] {
-    guard let val = getAXAttribute(appElement, kAXWindowsAttribute as String) else { return [] }
-    if let wins = val as? [AXUIElement] {
-        return wins
+    if let val = getAXAttribute(appElement, kAXWindowsAttribute as String) as? [AXUIElement], !val.isEmpty {
+        return val
     }
-    return []
+    // Fallback: In macOS when Logic Pro is not the frontmost app, kAXWindowsAttribute can be empty.
+    // Querying kAXChildrenAttribute returns all AXWindow elements reliably.
+    let children = getAXChildren(appElement)
+    let wins = children.filter { (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXWindow" }
+    return wins
 }
 
 // Extract plugin name from a window's top-level static text elements or EQ group
@@ -849,32 +852,47 @@ func findAudioFXSlotButton(strip: ParsedChannelStrip, slotNum: Int) -> AXUIEleme
 }
 
 func findActiveMenu(appElement: AXUIElement, slotButton: AXUIElement) -> AXUIElement? {
+    func isValidMenu(_ m: AXUIElement) -> Bool {
+        let ch = getAXChildren(m)
+        let titles = ch.compactMap { getAXString($0, kAXTitleAttribute as String) }
+        if titles.contains("Über diesen Mac") || titles.contains("About This Mac") {
+            return false
+        }
+        return true
+    }
+
     // 1. Direct children of slotButton
     for c in getAXChildren(slotButton) {
-        if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" {
+        if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" && isValidMenu(c) {
             return c
         }
     }
     // 2. Direct children of appElement
     for c in getAXChildren(appElement) {
-        if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" {
+        let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+        if r == "AXMenu" && isValidMenu(c) {
             return c
         }
     }
     // 3. Search in windows
     for w in getLogicWindows(appElement) {
-        if (getAXString(w, kAXRoleAttribute as String) ?? "") == "AXMenu" {
+        if (getAXString(w, kAXRoleAttribute as String) ?? "") == "AXMenu" && isValidMenu(w) {
             return w
         }
         for c in getAXChildren(w) {
-            if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" {
+            if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" && isValidMenu(c) {
                 return c
             }
         }
     }
-    // 4. DFS search in appElement
-    if let menu = findElementDFS(root: appElement, roleFilter: "AXMenu", maxDepth: 4, predicate: { _ in true }) {
-        return menu
+    // 4. DFS search in appElement children (excluding AXMenuBar)
+    for c in getAXChildren(appElement) {
+        let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+        if r != "AXMenuBar" {
+            if let menu = findElementDFS(root: c, roleFilter: "AXMenu", maxDepth: 4, predicate: { isValidMenu($0) }) {
+                return menu
+            }
+        }
     }
     return nil
 }
@@ -1071,11 +1089,174 @@ func dragSendKnobToDb(slider: AXUIElement, targetDb: Double) -> (success: Bool, 
     return (abs(finalDb - targetDb) <= 0.5, finalDb)
 }
 
+// MARK: - Sprint 10 Helpers: Sidechain Header Routing
+
+func findSidechainButton(in window: AXUIElement) -> AXUIElement? {
+    func isSidechainElement(_ el: AXUIElement) -> Bool {
+        let role = getAXString(el, kAXRoleAttribute as String) ?? ""
+        guard role == "AXPopUpButton" || role == "AXMenuButton" else { return false }
+        let help = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
+        let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+        let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+        let combined = "\(help) \(desc) \(title)"
+        return combined.contains("side") && combined.contains("chain")
+    }
+
+    // 1. Direct children of window
+    for c in getAXChildren(window) {
+        if isSidechainElement(c) {
+            return c
+        }
+    }
+
+    // 2. Nested in window header groups (AXGroup / AXToolbar)
+    for c in getAXChildren(window) {
+        let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+        if r == "AXGroup" || r == "AXToolbar" {
+            for gc in getAXChildren(c) {
+                if isSidechainElement(gc) {
+                    return gc
+                }
+                for ggc in getAXChildren(gc) {
+                    if isSidechainElement(ggc) {
+                        return ggc
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Fallback: Any AXPopUpButton where help/desc has "side"
+    for c in getAXChildren(window) {
+        let role = getAXString(c, kAXRoleAttribute as String) ?? ""
+        if role == "AXPopUpButton" {
+            let help = (getAXString(c, kAXHelpAttribute as String) ?? "").lowercased()
+            let desc = (getAXString(c, kAXDescriptionAttribute as String) ?? "").lowercased()
+            if help.contains("side") || desc.contains("side") {
+                return c
+            }
+        }
+    }
+
+    return nil
+}
+
+func findSidechainMenu(appElement: AXUIElement, slotButton: AXUIElement) -> AXUIElement? {
+    func isSidechainMenu(_ m: AXUIElement) -> Bool {
+        let ch = getAXChildren(m)
+        let titles = ch.compactMap { getAXString($0, kAXTitleAttribute as String) }
+        return titles.contains("Intern") || titles.contains("Bus") || titles.contains("None") || titles.contains("Eingang") || titles.contains("Inst.")
+    }
+
+    // 1. Direct children of slotButton
+    for c in getAXChildren(slotButton) {
+        if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" && isSidechainMenu(c) {
+            return c
+        }
+    }
+    // 2. Direct children of appElement
+    for c in getAXChildren(appElement) {
+        let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+        if r == "AXMenu" && isSidechainMenu(c) {
+            return c
+        }
+    }
+    // 3. Search in windows
+    for w in getLogicWindows(appElement) {
+        if (getAXString(w, kAXRoleAttribute as String) ?? "") == "AXMenu" && isSidechainMenu(w) {
+            return w
+        }
+        for c in getAXChildren(w) {
+            if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" && isSidechainMenu(c) {
+                return c
+            }
+        }
+    }
+    // 4. In appElement children (excluding AXMenuBar)
+    for c in getAXChildren(appElement) {
+        let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+        if r != "AXMenuBar" {
+            if let menu = findElementDFS(root: c, roleFilter: "AXMenu", maxDepth: 4, predicate: { isSidechainMenu($0) }) {
+                return menu
+            }
+        }
+    }
+    return nil
+}
+
+func activateLogicApp() {
+    let bundleApps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.logic10")
+    bundleApps.first?.activate()
+}
+
+func ensurePluginWindowOpen(appElement: AXUIElement, trackName: String, slotNum: Int) -> (window: AXUIElement, pluginName: String, stripTrackName: String)? {
+    activateLogicApp()
+    usleep(50_000)
+
+    // 1. Find Channel Strip for track
+    guard let strip = findChannelStripForTrack(appElement: appElement, trackName: trackName) else {
+        return nil
+    }
+
+    // 2. Validate slotNum
+    guard slotNum >= 1 && slotNum <= strip.pluginGroups.count else {
+        return nil
+    }
+    let targetPlugin = strip.pluginGroups[slotNum - 1]
+
+    // 3. Check if plugin window is already open
+    let freshWins = getLogicWindows(appElement)
+    for w in freshWins {
+        let sr = getAXString(w, kAXSubroleAttribute as String) ?? ""
+        let t = getAXString(w, kAXTitleAttribute as String) ?? ""
+        if (sr == "AXDialog" || sr == "AXFloatingWindow") && !t.isEmpty {
+            let pName = detectPluginName(in: w, windowTitle: t)
+            if t.lowercased().contains(strip.trackName.lowercased()) || pName.lowercased() == targetPlugin.name.lowercased() {
+                _ = AXUIElementPerformAction(w, "AXRaise" as CFString)
+                return (w, targetPlugin.name, strip.trackName)
+            }
+        }
+    }
+
+    // 4. Open plugin via insert slot button
+    var openBtn: AXUIElement? = nil
+    for c in getAXChildren(targetPlugin.group) {
+        let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+        if r == "AXButton" {
+            openBtn = c
+            break
+        }
+    }
+    guard let btn = openBtn else { return nil }
+
+    let pressErr = AXUIElementPerformAction(btn, kAXPressAction as CFString)
+    guard pressErr == .success || pressErr == .cannotComplete else { return nil }
+
+    // Wait up to 600ms for window to appear
+    let deadline = Date().addingTimeInterval(0.6)
+    while Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.05)
+        let wins = getLogicWindows(appElement)
+        for w in wins {
+            let sr = getAXString(w, kAXSubroleAttribute as String) ?? ""
+            let t = getAXString(w, kAXTitleAttribute as String) ?? ""
+            if (sr == "AXDialog" || sr == "AXFloatingWindow") && !t.isEmpty {
+                let pName = detectPluginName(in: w, windowTitle: t)
+                if t.lowercased().contains(strip.trackName.lowercased()) || pName.lowercased() == targetPlugin.name.lowercased() {
+                    return (w, targetPlugin.name, strip.trackName)
+                }
+            }
+        }
+    }
+
+    return nil
+}
+
 // MARK: - CLI Argument Parser
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-    printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks | list-channel-strips | set-fader | set-pan | open-insert | close-plugin-window | set-folder-expanded | select-track | load-plugin | list-insert-menu | set-send-bus | set-send-level"])
+    printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks | list-channel-strips | set-fader | set-pan | open-insert | close-plugin-window | set-folder-expanded | select-track | load-plugin | list-insert-menu | set-send-bus | set-send-level | get-sidechain | set-sidechain"])
     exit(1)
 }
 
@@ -2377,6 +2558,230 @@ case "set-send-level":
         "track": strip.trackName,
         "slot": slotNum,
         "db": res.finalDb
+    ])
+
+// MARK: - SPRINT 10: Sidechain Routing in Plugin Header
+
+case "get-sidechain":
+    guard let trackName = getArg("--track"), !trackName.isEmpty else {
+        printJSON(["success": false, "error": "Missing --track argument"])
+        exit(0)
+    }
+    let slotStr = getArg("--slot") ?? "1"
+    let slotNum = Int(slotStr) ?? 1
+
+    guard let target = ensurePluginWindowOpen(appElement: appElement, trackName: trackName, slotNum: slotNum) else {
+        printJSON(["success": false, "error": "Could not open or find plugin window for track '\(trackName)' slot \(slotNum)"])
+        exit(0)
+    }
+
+    guard let scBtn = findSidechainButton(in: target.window) else {
+        printJSON(["success": false, "error": "Sidechain pop-up button not found in plugin '\(target.pluginName)' header."])
+        exit(0)
+    }
+
+    let val = getAXString(scBtn, kAXValueAttribute as String)
+        ?? getAXString(scBtn, kAXValueDescriptionAttribute as String)
+        ?? getAXString(scBtn, kAXTitleAttribute as String)
+        ?? ""
+
+    printJSON([
+        "success": true,
+        "track": target.stripTrackName,
+        "slot": slotNum,
+        "pluginName": target.pluginName,
+        "sidechain": val
+    ])
+
+case "set-sidechain":
+    guard let trackName = getArg("--track"), !trackName.isEmpty else {
+        printJSON(["success": false, "error": "Missing --track argument"])
+        exit(0)
+    }
+    let slotStr = getArg("--slot") ?? "1"
+    let slotNum = Int(slotStr) ?? 1
+    guard let sourceStr = getArg("--source"), !sourceStr.isEmpty else {
+        printJSON(["success": false, "error": "Missing --source argument"])
+        exit(0)
+    }
+
+    guard let target = ensurePluginWindowOpen(appElement: appElement, trackName: trackName, slotNum: slotNum) else {
+        printJSON(["success": false, "error": "Could not open or find plugin window for track '\(trackName)' slot \(slotNum)"])
+        exit(0)
+    }
+
+    guard let scBtn = findSidechainButton(in: target.window) else {
+        printJSON(["success": false, "error": "Sidechain pop-up button not found in plugin '\(target.pluginName)' header."])
+        exit(0)
+    }
+
+    // Click Sidechain button to open menu
+    var activeMenu: AXUIElement? = nil
+    for attempt in 0..<2 {
+        if attempt == 0 {
+            _ = AXUIElementPerformAction(scBtn, kAXPressAction as CFString)
+        } else {
+            // Fallback: Click center of scBtn
+            var pVal: AnyObject?
+            var sVal: AnyObject?
+            AXUIElementCopyAttributeValue(scBtn, kAXPositionAttribute as CFString, &pVal)
+            AXUIElementCopyAttributeValue(scBtn, kAXSizeAttribute as CFString, &sVal)
+            if let pv = pVal, let sv = sVal {
+                var p = CGPoint.zero
+                var s = CGSize.zero
+                AXValueGetValue(pv as! AXValue, .cgPoint, &p)
+                AXValueGetValue(sv as! AXValue, .cgSize, &s)
+                let center = CGPoint(x: p.x + s.width / 2.0, y: p.y + s.height / 2.0)
+                let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left)
+                let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left)
+                down?.post(tap: .cghidEventTap)
+                usleep(15_000)
+                up?.post(tap: .cghidEventTap)
+            }
+        }
+
+        for _ in 0..<10 {
+            usleep(50_000)
+            if let m = findSidechainMenu(appElement: appElement, slotButton: scBtn) {
+                activeMenu = m
+                break
+            }
+        }
+        if activeMenu != nil { break }
+    }
+
+    guard let rootMenu = activeMenu else {
+        printJSON(["success": false, "error": "Sidechain menu did not appear after clicking Sidechain button."])
+        exit(0)
+    }
+
+    let segments = sourceStr.components(separatedBy: ">").map {
+        $0.trimmingCharacters(in: .whitespacesAndNewlines)
+    }.filter { !$0.isEmpty }
+
+    let leafSegment = segments.last ?? sourceStr
+    let leafLower = leafSegment.lowercased()
+    let isNoneQuery = (leafLower == "none" || leafLower == "keine" || leafLower == "off" || leafLower == "intern" || leafLower == "ohne")
+
+    func isVisibleItem(_ it: AXUIElement) -> Bool {
+        var sVal: AnyObject?
+        AXUIElementCopyAttributeValue(it, kAXSizeAttribute as CFString, &sVal)
+        if let sv = sVal {
+            var sz = CGSize.zero
+            AXValueGetValue(sv as! AXValue, .cgSize, &sz)
+            return sz.width > 0 && sz.height > 0
+        }
+        return false
+    }
+
+    var targetItem: AXUIElement? = nil
+
+    let rootItems = getAXChildren(rootMenu).filter {
+        (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXMenuItem" && isVisibleItem($0)
+    }
+
+    // Fast-path: Check if leaf item exists directly in rootMenu (e.g. "Intern", or active bus "Bus 1 ← ...")
+    if isNoneQuery {
+        targetItem = rootItems.first {
+            let t = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return (t == "intern" || t == "keine" || t == "none" || t == "ohne" || t == "off")
+        }
+        if targetItem == nil {
+            targetItem = rootItems.first {
+                let t = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+                return !t.hasPrefix("!") && (t.contains("keine") || t.contains("none") || t.contains("intern") || t.contains("ohne"))
+            }
+        }
+    } else if leafLower != "bus" && leafLower != "audio" && leafLower != "inst." && leafLower != "eingang" {
+        targetItem = rootItems.first {
+            let t = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return !t.hasPrefix("!") && (t == leafLower || t.contains(leafLower))
+        }
+    }
+
+    // If not found in rootMenu, traverse hierarchically
+    if targetItem == nil {
+        var currentMenu = rootMenu
+        for (idx, seg) in segments.enumerated() {
+            let isFinal = (idx == segments.count - 1)
+
+            let items = getAXChildren(currentMenu).filter {
+                (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXMenuItem" && isVisibleItem($0)
+            }
+
+            if let item = findMenuItem(menu: currentMenu, query: seg) {
+                if isFinal {
+                    targetItem = item
+                    break
+                } else {
+                    guard let nextMenu = getSubmenu(of: item, appElement: appElement) else {
+                        closeMenu(rootMenu)
+                        printJSON(["success": false, "error": "Submenu '\(seg)' could not be opened in Sidechain menu."])
+                        exit(0)
+                    }
+                    currentMenu = nextMenu
+                }
+            } else {
+                // Fallback for single segment: recursively check submenus
+                if segments.count == 1 {
+                    for it in items {
+                        if let sub = getSubmenu(of: it, appElement: appElement) {
+                            if let found = findMenuItem(menu: sub, query: seg) {
+                                targetItem = found
+                                break
+                            }
+                        }
+                    }
+                    if targetItem != nil { break }
+                }
+
+                closeMenu(rootMenu)
+                printJSON(["success": false, "error": "Sidechain source '\(seg)' not found in menu."])
+                exit(0)
+            }
+        }
+    }
+
+    guard let finalItem = targetItem else {
+        closeMenu(rootMenu)
+        printJSON(["success": false, "error": "Sidechain source '\(sourceStr)' could not be resolved."])
+        exit(0)
+    }
+
+    var pVal: AnyObject?
+    var sVal: AnyObject?
+    AXUIElementCopyAttributeValue(finalItem, kAXPositionAttribute as CFString, &pVal)
+    AXUIElementCopyAttributeValue(finalItem, kAXSizeAttribute as CFString, &sVal)
+    var p = CGPoint.zero
+    var s = CGSize.zero
+    if let pv = pVal { AXValueGetValue(pv as! AXValue, .cgPoint, &p) }
+    if let sv = sVal { AXValueGetValue(sv as! AXValue, .cgSize, &s) }
+
+    if s.width > 0 && s.height > 0 {
+        let center = CGPoint(x: p.x + s.width / 2.0, y: p.y + s.height / 2.0)
+        let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left)
+        let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left)
+        down?.post(tap: .cghidEventTap)
+        usleep(20_000)
+        up?.post(tap: .cghidEventTap)
+    } else {
+        _ = AXUIElementPerformAction(finalItem, kAXPressAction as CFString)
+    }
+
+    // Wait 300ms for UI update
+    usleep(300_000)
+
+    let newVal = getAXString(scBtn, kAXValueAttribute as String)
+        ?? getAXString(scBtn, kAXValueDescriptionAttribute as String)
+        ?? getAXString(scBtn, kAXTitleAttribute as String)
+        ?? sourceStr
+
+    printJSON([
+        "success": true,
+        "track": target.stripTrackName,
+        "slot": slotNum,
+        "pluginName": target.pluginName,
+        "sidechain": newVal
     ])
 
 default:

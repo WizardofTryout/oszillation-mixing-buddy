@@ -16,7 +16,8 @@ import {
   SetFolderStateSchema,
   SelectTrackSchema,
   LoadPluginSchema,
-  RouteSendSchema
+  RouteSendSchema,
+  RouteSidechainSchema
 } from './tools.js';
 
 export interface ServerOptions {
@@ -364,6 +365,31 @@ export class MixingBuddyMCPServer {
           return {
             isError: true,
             content: [{ type: 'text', text: `Route send failed: ${String(err)}` }]
+          };
+        }
+      }
+    );
+
+    // 13. Route Sidechain (Sprint 10: Sidechain Routing & Ducking Automation)
+    this.server.tool(
+      'mcp__route_sidechain',
+      "Routes a sidechain trigger source into an insert plugin's sidechain input in Logic Pro.",
+      RouteSidechainSchema.shape,
+      async (args) => {
+        try {
+          const result = await this.handlers.routeSidechain(args);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        } catch (err: unknown) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Route sidechain failed: ${String(err)}` }]
           };
         }
       }

@@ -20,6 +20,12 @@ export interface ParameterDelta {
   unit: string;
 }
 
+export interface SidechainRoute {
+  trackName: string;
+  slotIndex: number;
+  sourcePath: string;
+}
+
 export interface MixActionProposal {
   id: string;
   timestamp: number;
@@ -30,6 +36,7 @@ export interface MixActionProposal {
   deltas: ParameterDelta[];
   status: 'pending' | 'applied' | 'rejected' | 'auditioning';
   isPinned?: boolean;
+  sidechainRoute?: SidechainRoute;
 }
 
 export interface SafetyShieldBounds {

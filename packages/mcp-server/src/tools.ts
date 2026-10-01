@@ -106,6 +106,14 @@ export const RouteSendSchema = z.object({
   levelDb: z.number().optional().describe('Optional send level in dB (e.g. -6.0 or -12.5). If omitted, default initial level is kept.')
 });
 
+// Sprint 10: Sidechain Routing & Ducking Automation
+
+export const RouteSidechainSchema = z.object({
+  trackName: z.string().describe('Name of the target track containing the plugin (e.g. "Simple Foundation", "Bass", "Pad")'),
+  slotIndex: z.number().int().min(1).max(15).describe('Audio FX insert slot number of the dynamics plugin (e.g. 1 or 5)'),
+  sourcePath: z.string().describe('Source path for sidechain trigger, separated by ">" (e.g. "Audio > Motown Revisited Kit", "Bus > Bus 1", or "Intern" / "None" to disconnect)')
+});
+
 export type GetMixTelemetryInput = z.infer<typeof GetMixTelemetrySchema>;
 export type ListTracksInput = z.infer<typeof ListTracksSchema>;
 export type ParameterDeltaInput = z.infer<typeof ParameterDeltaSchema>;
@@ -120,3 +128,4 @@ export type SetFolderStateInput = z.infer<typeof SetFolderStateSchema>;
 export type SelectTrackInput = z.infer<typeof SelectTrackSchema>;
 export type LoadPluginInput = z.infer<typeof LoadPluginSchema>;
 export type RouteSendInput = z.infer<typeof RouteSendSchema>;
+export type RouteSidechainInput = z.infer<typeof RouteSidechainSchema>;
