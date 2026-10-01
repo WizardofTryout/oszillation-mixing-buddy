@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   UploadCloud,
   Play,
@@ -15,7 +15,7 @@ import {
 import type { ReferenceTrackProfile } from '@mixing-buddy/shared-types';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { analyzeAudioBuffer } from '../utils/audioProfiler.js';
+import { analyzeAudioBuffer, CENTER_FREQUENCIES } from '../utils/audioProfiler.js';
 
 interface ReferenceTrackModalProps {
   isOpen: boolean;
@@ -37,68 +37,60 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
 
   // Loaded candidate profile
   const [candidateProfile, setCandidateProfile] = useState<ReferenceTrackProfile | null>(activeProfile);
-  const [audioBlobUrl, setAudioBlobUrl] = useState<string | null>(null);
 
-  // Audio player state
+  // Web Audio Playback & Realtime Analyser State
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const decodedBufferRef = useRef<AudioBuffer | null>(null);
+  const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
+  const analyserNodeRef = useRef<AnalyserNode | null>(null);
+  const startTimeRef = useRef<number>(0);
+  const pauseOffsetRef = useRef<number>(0);
+  const animFrameRef = useRef<number | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Reset or initialize candidate profile when opening modal
+  // Initialize or reset candidate profile when opening modal
   useEffect(() => {
     if (isOpen && activeProfile && !candidateProfile) {
       setCandidateProfile(activeProfile);
     }
   }, [isOpen, activeProfile, candidateProfile]);
 
-  // Clean up audio blob URL on unmount or file change
+  // Stop playback on modal close
   useEffect(() => {
-    return () => {
-      if (audioBlobUrl) {
-        URL.revokeObjectURL(audioBlobUrl);
+    if (!isOpen) {
+      if (sourceNodeRef.current) {
+        try { sourceNodeRef.current.stop(); } catch {}
+        sourceNodeRef.current.disconnect();
+        sourceNodeRef.current = null;
       }
-    };
-  }, [audioBlobUrl]);
-
-  // Audio playback event listeners
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const onTimeUpdate = () => setCurrentTime(audio.currentTime);
-    const onLoadedMetadata = () => setDuration(audio.duration);
-    const onEnded = () => setIsPlaying(false);
-    const onPause = () => setIsPlaying(false);
-    const onPlay = () => setIsPlaying(true);
-
-    audio.addEventListener('timeupdate', onTimeUpdate);
-    audio.addEventListener('loadedmetadata', onLoadedMetadata);
-    audio.addEventListener('ended', onEnded);
-    audio.addEventListener('pause', onPause);
-    audio.addEventListener('play', onPlay);
-
-    return () => {
-      audio.removeEventListener('timeupdate', onTimeUpdate);
-      audio.removeEventListener('loadedmetadata', onLoadedMetadata);
-      audio.removeEventListener('ended', onEnded);
-      audio.removeEventListener('pause', onPause);
-      audio.removeEventListener('play', onPlay);
-    };
-  }, [audioBlobUrl]);
-
-  // Pause playback when modal is closed
-  useEffect(() => {
-    if (!isOpen && audioRef.current && isPlaying) {
-      audioRef.current.pause();
       setIsPlaying(false);
     }
-  }, [isOpen, isPlaying]);
+  }, [isOpen]);
 
-  // Draw 32-band mini spectrum preview
+  // Clean up Web Audio resources on unmount
   useEffect(() => {
+    return () => {
+      if (sourceNodeRef.current) {
+        try { sourceNodeRef.current.stop(); } catch {}
+        sourceNodeRef.current.disconnect();
+      }
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+      }
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {});
+      }
+    };
+  }, []);
+
+  // Draw static 32-band target envelope on canvas
+  const drawStaticEnvelope = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !candidateProfile) return;
     const ctx = canvas.getContext('2d');
@@ -144,24 +136,227 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
     }
   }, [candidateProfile]);
 
+  // Draw live dynamic 32-band spectrum while playing
+  const drawLiveSpectrum = useCallback(() => {
+    const canvas = canvasRef.current;
+    const analyser = analyserNodeRef.current;
+    if (!canvas || !analyser) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const w = canvas.width;
+    const h = canvas.height;
+
+    ctx.fillStyle = '#0f1217';
+    ctx.fillRect(0, 0, w, h);
+
+    // Grid lines
+    ctx.strokeStyle = '#1e2430';
+    ctx.lineWidth = 1;
+    [-12, -24, -36, -48].forEach((db) => {
+      const y = ((0 - db) / 70.0) * h;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(w, y);
+      ctx.stroke();
+    });
+
+    const freqData = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(freqData);
+
+    const sampleRate = audioCtxRef.current?.sampleRate || 44100;
+    const fftSize = analyser.fftSize;
+    const numBands = CENTER_FREQUENCIES.length;
+    const barWidth = Math.max(2, (w / numBands) - 2);
+
+    for (let i = 0; i < numBands; i++) {
+      const fc = CENTER_FREQUENCIES[i];
+      const bin = Math.min(
+        freqData.length - 1,
+        Math.max(1, Math.round((fc * fftSize) / sampleRate))
+      );
+      const val = freqData[bin] / 255.0; // 0.0 to 1.0
+      const barHeight = Math.max(3, val * h);
+      const x = i * (w / numBands) + 1;
+      const y = h - barHeight;
+
+      const grad = ctx.createLinearGradient(0, h, 0, 0);
+      grad.addColorStop(0, '#10b981');
+      grad.addColorStop(0.5, '#06b6d4');
+      grad.addColorStop(1, '#a855f7');
+
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, y, barWidth, barHeight);
+
+      // Glowing peak cap
+      ctx.fillStyle = '#f43f5e';
+      ctx.fillRect(x, y, barWidth, 2);
+    }
+  }, []);
+
+  // Update canvas on initial profile load or when paused
+  useEffect(() => {
+    if (!isPlaying) {
+      drawStaticEnvelope();
+    }
+  }, [isPlaying, candidateProfile, drawStaticEnvelope]);
+
+  // Real-time animation loop for live playhead & animated RTA analyser
+  useEffect(() => {
+    if (!isPlaying) {
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      return;
+    }
+
+    const loop = () => {
+      const ctx = audioCtxRef.current;
+      const buffer = decodedBufferRef.current;
+      if (ctx && buffer) {
+        const cur = ctx.currentTime - startTimeRef.current;
+        if (cur >= buffer.duration) {
+          setIsPlaying(false);
+          pauseOffsetRef.current = 0;
+          setCurrentTime(0);
+          drawStaticEnvelope();
+          return;
+        }
+        setCurrentTime(cur);
+        pauseOffsetRef.current = cur;
+      }
+
+      drawLiveSpectrum();
+      animFrameRef.current = requestAnimationFrame(loop);
+    };
+
+    animFrameRef.current = requestAnimationFrame(loop);
+
+    return () => {
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+    };
+  }, [isPlaying, drawLiveSpectrum, drawStaticEnvelope]);
+
+  // Web Audio Playback Controls
+  const playAudio = async (startFromSec?: number) => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+    }
+    const ctx = audioCtxRef.current;
+    if (ctx.state === 'suspended') {
+      await ctx.resume();
+    }
+
+    const buffer = decodedBufferRef.current;
+    if (!buffer) return;
+
+    // Disconnect old source node if playing
+    if (sourceNodeRef.current) {
+      try { sourceNodeRef.current.stop(); } catch {}
+      sourceNodeRef.current.disconnect();
+      sourceNodeRef.current = null;
+    }
+
+    const offset = typeof startFromSec === 'number' ? startFromSec : pauseOffsetRef.current;
+    const clampedOffset = Math.max(0, Math.min(buffer.duration - 0.05, offset));
+
+    // Create live analyser node
+    if (!analyserNodeRef.current) {
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.75;
+      analyserNodeRef.current = analyser;
+      analyser.connect(ctx.destination);
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(analyserNodeRef.current);
+
+    source.onended = () => {
+      // Natural end of track
+      const cur = ctx.currentTime - startTimeRef.current;
+      if (cur >= buffer.duration - 0.1) {
+        setIsPlaying(false);
+        pauseOffsetRef.current = 0;
+        setCurrentTime(0);
+      }
+    };
+
+    source.start(0, clampedOffset);
+    sourceNodeRef.current = source;
+    startTimeRef.current = ctx.currentTime - clampedOffset;
+    pauseOffsetRef.current = clampedOffset;
+    setCurrentTime(clampedOffset);
+    setIsPlaying(true);
+  };
+
+  const pauseAudio = () => {
+    if (sourceNodeRef.current) {
+      try { sourceNodeRef.current.stop(); } catch {}
+      sourceNodeRef.current.disconnect();
+      sourceNodeRef.current = null;
+    }
+    pauseOffsetRef.current = currentTime;
+    setIsPlaying(false);
+  };
+
+  const togglePlay = () => {
+    if (isPlaying) {
+      pauseAudio();
+    } else {
+      playAudio();
+    }
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const targetTime = parseFloat(e.target.value);
+    pauseOffsetRef.current = targetTime;
+    setCurrentTime(targetTime);
+    if (isPlaying) {
+      playAudio(targetTime);
+    }
+  };
+
+  const jumpToChorus = () => {
+    if (candidateProfile?.chorusWindow) {
+      const target = candidateProfile.chorusWindow.startSec;
+      pauseOffsetRef.current = target;
+      setCurrentTime(target);
+      playAudio(target);
+    }
+  };
+
   // Audio file processor using Web Audio API
   const processAudioFile = async (file: File) => {
     setIsAnalyzing(true);
     setErrorMessage(null);
     setAnalysisProgress('Lese Datei...');
 
-    try {
-      if (audioBlobUrl) {
-        URL.revokeObjectURL(audioBlobUrl);
-      }
-      const newUrl = URL.createObjectURL(file);
-      setAudioBlobUrl(newUrl);
+    // Stop current playback
+    pauseAudio();
 
+    try {
       const arrayBuffer = await file.arrayBuffer();
       setAnalysisProgress('Decodiere PCM Audio...');
 
-      const audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+      }
+      const audioCtx = audioCtxRef.current;
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+
       const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      decodedBufferRef.current = audioBuffer;
+      setDuration(audioBuffer.duration);
+      setCurrentTime(0);
+      pauseOffsetRef.current = 0;
 
       setAnalysisProgress('Berechne Metrologie & 32-Band Hüllkurve...');
       const analyzed = analyzeAudioBuffer(audioBuffer, file.name);
@@ -174,7 +369,6 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
 
       setCandidateProfile(profile);
       setAnalysisProgress('');
-      await audioCtx.close();
     } catch (err: unknown) {
       console.error('Error analyzing reference audio', err);
       setErrorMessage(
@@ -281,33 +475,6 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
     const validExtensions = ['.wav', '.mp3', '.aiff', '.aif', '.flac'];
     const name = file.name.toLowerCase();
     return validExtensions.some((ext) => name.endsWith(ext)) || file.type.startsWith('audio/');
-  };
-
-  const togglePlay = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (isPlaying) {
-      audio.pause();
-    } else {
-      audio.play().catch((e) => console.error('Playback error', e));
-    }
-  };
-
-  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const time = parseFloat(e.target.value);
-    setCurrentTime(time);
-    if (audioRef.current) {
-      audioRef.current.currentTime = time;
-    }
-  };
-
-  const jumpToChorus = () => {
-    if (candidateProfile?.chorusWindow && audioRef.current) {
-      audioRef.current.currentTime = candidateProfile.chorusWindow.startSec;
-      if (!isPlaying) {
-        audioRef.current.play().catch(() => {});
-      }
-    }
   };
 
   const formatTime = (secs: number) => {
@@ -452,7 +619,7 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
                 </div>
 
                 <div className="bg-slate-900/80 border border-slate-800 p-2.5 rounded-lg">
-                  <div className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">True Peak</div>
+                  <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">True Peak</div>
                   <div className="text-sm font-black text-emerald-400 mt-0.5 font-mono">
                     {candidateProfile.truePeakDb.toFixed(1)} <span className="text-[10px] text-slate-400">dBTP</span>
                   </div>
@@ -483,7 +650,9 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
                 <div className="flex items-center justify-between text-xs text-slate-400 mb-1.5 font-medium">
                   <span className="flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-                    32-Band Hüllkurve (Lautestes 10s Chorus-Fenster)
+                    {isPlaying
+                      ? 'Live RTA Spektrum (Web Audio Playback)'
+                      : '32-Band Hüllkurve (Lautestes 10s Chorus-Fenster)'}
                   </span>
                   <span className="font-mono text-[10px] text-slate-400">20 Hz – 20 kHz</span>
                 </div>
@@ -495,50 +664,47 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
                 />
               </div>
 
-              {/* Mini Audio Player */}
-              {audioBlobUrl && (
-                <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-3 space-y-2">
-                  <audio ref={audioRef} src={audioBlobUrl} />
+              {/* Mini Audio Player (Pure Web Audio API) */}
+              <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={togglePlay}
+                    className="w-8 h-8 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center transition shadow cursor-pointer"
+                    title={isPlaying ? 'Pause' : 'Play'}
+                  >
+                    {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+                  </button>
 
-                  <div className="flex items-center gap-3">
+                  <div className="flex-1 flex flex-col gap-1">
+                    <input
+                      type="range"
+                      min={0}
+                      max={duration || candidateProfile.durationSeconds || 1}
+                      step={0.1}
+                      value={currentTime}
+                      onChange={handleSeek}
+                      className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-400"
+                    />
+                    <div className="flex justify-between text-[11px] font-mono text-slate-400">
+                      <span>{formatTime(currentTime)}</span>
+                      <span>{formatTime(duration || candidateProfile.durationSeconds)}</span>
+                    </div>
+                  </div>
+
+                  {candidateProfile.chorusWindow && (
                     <button
                       type="button"
-                      onClick={togglePlay}
-                      className="w-8 h-8 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center transition shadow"
+                      onClick={jumpToChorus}
+                      className="flex items-center gap-1 text-[11px] font-semibold text-purple-300 hover:text-white bg-purple-950/60 hover:bg-purple-900/60 border border-purple-600/40 px-2.5 py-1 rounded transition cursor-pointer"
+                      title="Springe direkt zum lautesten 10s Chorus-Abschnitt"
                     >
-                      {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+                      <Flame className="w-3 h-3 text-purple-400" />
+                      <span>Chorus</span>
                     </button>
-
-                    <div className="flex-1 flex flex-col gap-1">
-                      <input
-                        type="range"
-                        min={0}
-                        max={duration || candidateProfile.durationSeconds}
-                        step={0.1}
-                        value={currentTime}
-                        onChange={handleSeek}
-                        className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-400"
-                      />
-                      <div className="flex justify-between text-[11px] font-mono text-slate-400">
-                        <span>{formatTime(currentTime)}</span>
-                        <span>{formatTime(duration || candidateProfile.durationSeconds)}</span>
-                      </div>
-                    </div>
-
-                    {candidateProfile.chorusWindow && (
-                      <button
-                        type="button"
-                        onClick={jumpToChorus}
-                        className="flex items-center gap-1 text-[11px] font-semibold text-purple-300 hover:text-white bg-purple-950/60 hover:bg-purple-900/60 border border-purple-600/40 px-2.5 py-1 rounded transition"
-                        title="Springe direkt zum lautesten 10s Chorus-Abschnitt"
-                      >
-                        <Flame className="w-3 h-3 text-purple-400" />
-                        <span>Chorus</span>
-                      </button>
-                    )}
-                  </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           )}
         </div>
@@ -567,7 +733,7 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
                   onClose();
                 }
               }}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:pointer-events-none rounded-lg transition shadow-md"
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:pointer-events-none rounded-lg transition shadow-md cursor-pointer"
             >
               <Check className="w-4 h-4" />
               <span>Als Referenz aktivieren</span>

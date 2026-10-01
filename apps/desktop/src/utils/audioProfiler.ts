@@ -262,3 +262,101 @@ export function computeFFT(real: Float64Array, imag: Float64Array) {
     }
   }
 }
+
+export function formatTime(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+export function drawStaticEnvelope(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bands: number[]
+) {
+  ctx.fillStyle = '#0f1217';
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = '#1e2430';
+  ctx.lineWidth = 1;
+  [-12, -24, -36, -48].forEach((db) => {
+    const y = ((0 - db) / 70.0) * h;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  });
+
+  const numBands = bands.length;
+  const barWidth = Math.max(2, w / numBands - 2);
+
+  for (let i = 0; i < numBands; i++) {
+    const db = Math.max(-70, Math.min(0, bands[i]));
+    const barHeight = ((db + 70) / 70.0) * h;
+    const x = i * (w / numBands) + 1;
+    const y = h - barHeight;
+
+    const grad = ctx.createLinearGradient(0, h, 0, 0);
+    grad.addColorStop(0, '#3b82f6');
+    grad.addColorStop(0.7, '#60a5fa');
+    grad.addColorStop(1, '#a855f7');
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, barWidth, barHeight);
+
+    ctx.fillStyle = '#c084fc';
+    ctx.fillRect(x, y, barWidth, 2);
+  }
+}
+
+export function drawLiveSpectrum(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  analyser: AnalyserNode,
+  sampleRate: number
+) {
+  ctx.fillStyle = '#0f1217';
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = '#1e2430';
+  ctx.lineWidth = 1;
+  [-12, -24, -36, -48].forEach((db) => {
+    const y = ((0 - db) / 70.0) * h;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  });
+
+  const freqData = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(freqData);
+
+  const fftSize = analyser.fftSize;
+  const numBands = CENTER_FREQUENCIES.length;
+  const barWidth = Math.max(2, w / numBands - 2);
+
+  for (let i = 0; i < numBands; i++) {
+    const fc = CENTER_FREQUENCIES[i];
+    const bin = Math.min(
+      freqData.length - 1,
+      Math.max(1, Math.round((fc * fftSize) / sampleRate))
+    );
+    const val = freqData[bin] / 255.0;
+    const barHeight = Math.max(3, val * h);
+    const x = i * (w / numBands) + 1;
+    const y = h - barHeight;
+
+    const grad = ctx.createLinearGradient(0, h, 0, 0);
+    grad.addColorStop(0, '#10b981');
+    grad.addColorStop(0.5, '#06b6d4');
+    grad.addColorStop(1, '#a855f7');
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, barWidth, barHeight);
+
+    ctx.fillStyle = '#f43f5e';
+    ctx.fillRect(x, y, barWidth, 2);
+  }
+}
