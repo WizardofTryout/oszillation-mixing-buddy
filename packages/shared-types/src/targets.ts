@@ -54,6 +54,22 @@ export interface ProjectContextSyncPayload {
   targetProfile?: TargetProfile;
 }
 
+export interface ReferenceTrackProfile {
+  id: string;
+  name: string;
+  fileName: string;
+  fileFormat: string;
+  durationSeconds: number;
+  sampleRate: number;
+  channels: number;
+  integratedLufs: number;
+  truePeakDb: number;
+  crestFactorDb: number;
+  frequencyBands: number[]; // 32 bands in dB (-70 to 0)
+  chorusWindow?: { startSec: number; endSec: number };
+  timestamp: number;
+}
+
 export const STANDARD_GENRE_PROFILES: Record<string, TargetProfile> = {
   pop_radio: {
     id: 'pop_radio',

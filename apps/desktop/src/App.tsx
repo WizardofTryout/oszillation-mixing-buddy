@@ -6,6 +6,7 @@ import {
   type TargetProfile,
   type TargetScope,
   type GenreProfileId,
+  type ReferenceTrackProfile,
   resolveTargetProfile,
   detectGenreFromTelemetry
 } from '@mixing-buddy/shared-types';
@@ -17,12 +18,13 @@ import { ActionCard } from './components/ActionCard.js';
 import { ProviderSettings, type ProviderMode } from './components/ProviderSettings.js';
 import { ChatConsole } from './components/ChatConsole.js';
 import { CrossoverModal } from './components/CrossoverModal.js';
+import { ReferenceTrackModal } from './components/ReferenceTrackModal.js';
 import {
   PluginVaultModal,
   type LearnedPluginSpec,
   type PluginSummaryItem
 } from './components/PluginVaultModal.js';
-import { Sliders, Headphones, Inbox, Sparkles, Database, Target } from 'lucide-react';
+import { Sliders, Headphones, Inbox, Sparkles, Database, Target, BarChart2 } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<MetrologyTelemetryFrame | null>(null);
@@ -49,6 +51,8 @@ export const App: React.FC = () => {
   const [customProfile, setCustomProfile] = useState<TargetProfile | undefined>(undefined);
   const [detectedGenre, setDetectedGenre] = useState<GenreProfileId | null>(null);
   const [isCrossoverModalOpen, setIsCrossoverModalOpen] = useState<boolean>(false);
+  const [isReferenceModalOpen, setIsReferenceModalOpen] = useState<boolean>(false);
+  const [activeReferenceProfile, setActiveReferenceProfile] = useState<ReferenceTrackProfile | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   const effectiveGenre = genreProfile === 'auto_detect' ? (detectedGenre || 'pop_radio') : genreProfile;
@@ -98,6 +102,11 @@ export const App: React.FC = () => {
     setCustomNotes(updatedProfile.customNotes || '');
     syncContextToPlugin(targetScope, 'custom_crossover', updatedProfile.customNotes || '', updatedProfile.targetIntegratedLufs, updatedProfile);
     setChatLog(`💾 Crossover-Ziele "${updatedProfile.name}" im DAW-Projekt gesichert.`);
+  };
+
+  const handleApplyReferenceProfile = (profile: ReferenceTrackProfile) => {
+    setActiveReferenceProfile(profile);
+    setChatLog(`📊 Referenz-Track "${profile.name}" aktiviert (${profile.integratedLufs.toFixed(1)} LUFS, Crest ${profile.crestFactorDb.toFixed(1)} dB).`);
   };
 
   // Load pinned cards from localStorage on initial mount
@@ -881,6 +890,20 @@ export const App: React.FC = () => {
               </button>
             )}
           </div>
+
+          {/* Sprint 4.1: Referenz-Track Button */}
+          <button
+            type="button"
+            onClick={() => setIsReferenceModalOpen(true)}
+            className="flex items-center gap-1.5 bg-slate-800/90 hover:bg-slate-700 border border-slate-700/80 rounded px-2.5 py-1 text-xs text-indigo-300 hover:text-white font-medium transition-all shadow-sm"
+            title="Referenz-Track laden und analysieren"
+          >
+            <BarChart2 className="w-3.5 h-3.5 text-indigo-400" />
+            <span>Referenz-Track</span>
+            {activeReferenceProfile && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5" title={`Aktiv: ${activeReferenceProfile.name}`} />
+            )}
+          </button>
         </div>
 
         <div className="flex items-center gap-2.5">
@@ -934,6 +957,13 @@ export const App: React.FC = () => {
         currentProfile={activeTargetProfile}
         currentScope={targetScope}
         onSave={handleSaveCrossoverProfile}
+      />
+
+      <ReferenceTrackModal
+        isOpen={isReferenceModalOpen}
+        onClose={() => setIsReferenceModalOpen(false)}
+        activeProfile={activeReferenceProfile}
+        onApplyReference={handleApplyReferenceProfile}
       />
 
       {/* Main Studio Workspace */}
