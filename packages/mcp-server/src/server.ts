@@ -10,7 +10,8 @@ import {
   GetProjectInfoSchema,
   LearnPluginSchema,
   ListTracksSchema,
-  ProposeMixAdjustmentSchema
+  ProposeMixAdjustmentSchema,
+  MatchReferenceSpectrumSchema
 } from './tools.js';
 
 export interface ServerOptions {
@@ -208,6 +209,31 @@ export class MixingBuddyMCPServer {
           return {
             isError: true,
             content: [{ type: 'text', text: `Plugin learning failed: ${String(err)}` }]
+          };
+        }
+      }
+    );
+
+    // 7. Match Reference Spectrum (Spectral Difference to ActionCard)
+    this.server.tool(
+      'mcp__match_reference_spectrum',
+      'Calculates Delta(f) = Live_Mix(f) - Reference(f) and generates a structured MixActionProposal with Channel EQ adjustments when deviation exceeds threshold (default 2.5 dB).',
+      MatchReferenceSpectrumSchema.shape,
+      async (args) => {
+        try {
+          const result = await this.handlers.matchReferenceSpectrum(args);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        } catch (err: unknown) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Reference matching failed: ${String(err)}` }]
           };
         }
       }

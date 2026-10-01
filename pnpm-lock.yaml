@@ -268,6 +268,9 @@ importers:
 
   packages/mcp-server:
     dependencies:
+      '@mixing-buddy/ai-engine':
+        specifier: workspace:*
+        version: link:../ai-engine
       '@mixing-buddy/daw-adapters':
         specifier: workspace:*
         version: link:../daw-adapters

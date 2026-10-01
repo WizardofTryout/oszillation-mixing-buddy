@@ -1,16 +1,30 @@
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import WebSocket from 'ws';
 import {
   findParameterSpecification,
   findPluginSpecification,
   type DAWDriver
 } from '@mixing-buddy/daw-adapters';
-import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor } from '@mixing-buddy/shared-types';
+import type {
+  MetrologyTelemetryFrame,
+  MixActionProposal,
+  ReferenceTrackProfile,
+  TrackDescriptor
+} from '@mixing-buddy/shared-types';
+import {
+  computeSpectralDifference,
+  generateReferenceMatchProposal,
+  type SpectralDifferenceAnalysis
+} from '@mixing-buddy/ai-engine';
 import type {
   AuditionRegionInput,
   ExecuteMixAdjustmentInput,
   GetMixTelemetryInput,
   ListTracksInput,
-  ProposeMixAdjustmentInput
+  ProposeMixAdjustmentInput,
+  MatchReferenceSpectrumInput
 } from './tools.js';
 
 export interface ResonancePeak {
@@ -478,6 +492,97 @@ export class MixingToolHandlers {
 
   public getPendingProposals(): MixActionProposal[] {
     return Array.from(this.proposals.values()).filter((p) => p.status === 'pending');
+  }
+
+  public async matchReferenceSpectrum(args: MatchReferenceSpectrumInput): Promise<{
+    proposal: MixActionProposal | null;
+    analysis: SpectralDifferenceAnalysis | null;
+    message: string;
+  }> {
+    const telemetry = this.latestTelemetry;
+    if (!telemetry || !telemetry.spectrum) {
+      throw new Error('No live metrology telemetry available. Ensure JUCE meter plugin is active.');
+    }
+
+    let referenceProfile: ReferenceTrackProfile | null = null;
+
+    if (args.referenceId) {
+      const vaultPath = path.join(os.homedir(), '.mixing-buddy', 'references', `${args.referenceId}.json`);
+      try {
+        const raw = await fs.promises.readFile(vaultPath, 'utf-8');
+        referenceProfile = JSON.parse(raw);
+      } catch {
+        // Try without .json suffix or fuzzy match
+        const dir = path.join(os.homedir(), '.mixing-buddy', 'references');
+        if (fs.existsSync(dir)) {
+          const files = await fs.promises.readdir(dir);
+          const matched = files.find((f) => f.toLowerCase().includes(args.referenceId!.toLowerCase()));
+          if (matched) {
+            const raw = await fs.promises.readFile(path.join(dir, matched), 'utf-8');
+            referenceProfile = JSON.parse(raw);
+          }
+        }
+      }
+    }
+
+    if (!referenceProfile && args.frequencyBands) {
+      referenceProfile = {
+        id: args.referenceId || 'custom_reference',
+        name: args.referenceName || 'Custom Reference',
+        fileName: 'custom_reference.wav',
+        fileFormat: 'wav',
+        durationSeconds: 180,
+        sampleRate: 44100,
+        channels: 2,
+        integratedLufs: -12.0,
+        truePeakDb: -0.5,
+        crestFactorDb: 10.0,
+        frequencyBands: args.frequencyBands,
+        timestamp: Date.now()
+      };
+    }
+
+    if (!referenceProfile) {
+      throw new Error(
+        `Reference profile '${args.referenceId || args.referenceName}' not found in ~/.mixing-buddy/references/ and no frequencyBands provided.`
+      );
+    }
+
+    // Get active tracks
+    const tracksRes = await this.listTracks({});
+    const tracks = tracksRes.tracks;
+
+    const threshold = args.thresholdDb ?? 2.5;
+    const analysis = computeSpectralDifference(
+      telemetry.spectrum.frequencyBands,
+      referenceProfile.frequencyBands,
+      0,
+      threshold
+    );
+
+    const proposal = generateReferenceMatchProposal(
+      telemetry,
+      referenceProfile,
+      tracks,
+      0,
+      threshold
+    );
+
+    if (proposal) {
+      this.proposals.set(proposal.id, proposal);
+      await this.broadcastProposalToHUD(proposal);
+      return {
+        proposal,
+        analysis,
+        message: `Generated reference match proposal '${proposal.title}' based on ${analysis.deviantZones.length} frequency deviation zones.`
+      };
+    }
+
+    return {
+      proposal: null,
+      analysis,
+      message: `Spectral balance is already within the ±${threshold} dB tolerance threshold of reference '${referenceProfile.name}'.`
+    };
   }
 
   private extractTopResonances(bands: number[]): ResonancePeak[] {

@@ -987,10 +987,13 @@ export const App: React.FC = () => {
           <div className="lg:col-span-2 flex flex-col gap-4">
             <SpectrumRTA
               spectrum={telemetry?.spectrum}
+              telemetry={telemetry}
               liveLufs={telemetry?.loudness?.integratedLufs}
               activeReference={activeReferenceProfile}
               onSelectReference={setActiveReferenceProfile}
               onOpenReferenceModal={() => setIsReferenceModalOpen(true)}
+              onGenerateProposal={handleProposalFromChat}
+              availableTracks={availableTracks}
             />
             <ChatConsole
               telemetry={telemetry}

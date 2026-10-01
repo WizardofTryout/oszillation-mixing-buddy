@@ -63,6 +63,14 @@ export const LearnPluginSchema = z.object({
     .describe('Optional window title or track name of the open plugin window to profile (defaults to frontmost floating plugin window)')
 });
 
+export const MatchReferenceSpectrumSchema = z.object({
+  referenceId: z.string().optional().describe('ID or slug of saved reference profile (e.g. "dua-lipa-levitating")'),
+  referenceName: z.string().optional().describe('Optional name of reference track'),
+  frequencyBands: z.array(z.number()).optional().describe('Optional 32-band reference spectrum in dBFS (-70 to 0)'),
+  thresholdDb: z.number().optional().describe('Minimum deviation threshold in dB to trigger adjustments (default: 2.5 dB)'),
+  targetTrackId: z.string().optional().describe('Optional DAW track ID to apply Channel EQ adjustments to (defaults to Master / Mix Bus)')
+});
+
 export type GetMixTelemetryInput = z.infer<typeof GetMixTelemetrySchema>;
 export type ListTracksInput = z.infer<typeof ListTracksSchema>;
 export type ParameterDeltaInput = z.infer<typeof ParameterDeltaSchema>;
@@ -71,3 +79,5 @@ export type ExecuteMixAdjustmentInput = z.infer<typeof ExecuteMixAdjustmentSchem
 export type AuditionRegionInput = z.infer<typeof AuditionRegionSchema>;
 export type GetProjectInfoInput = z.infer<typeof GetProjectInfoSchema>;
 export type LearnPluginInput = z.infer<typeof LearnPluginSchema>;
+export type MatchReferenceSpectrumInput = z.infer<typeof MatchReferenceSpectrumSchema>;
+

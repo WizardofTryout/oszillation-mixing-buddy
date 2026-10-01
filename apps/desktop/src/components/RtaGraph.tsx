@@ -1,12 +1,25 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
-import type { MeterSpectrumData, ReferenceTrackProfile, ReferenceProfileSummary } from '@mixing-buddy/shared-types';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import type {
+  MeterSpectrumData,
+  ReferenceTrackProfile,
+  ReferenceProfileSummary,
+  MetrologyTelemetryFrame,
+  MixActionProposal,
+  TrackDescriptor
+} from '@mixing-buddy/shared-types';
+import {
+  computeSpectralDifference,
+  generateReferenceMatchProposal
+} from '@mixing-buddy/ai-engine';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Music, ChevronDown, Check, Plus, Scale, X } from 'lucide-react';
+import { Music, ChevronDown, Check, Plus, Scale, X, Zap } from 'lucide-react';
 
 export interface RtaGraphProps {
   /** 30 fps Live Telemetry spectrum from JUCE meter */
   spectrum?: MeterSpectrumData;
+  /** Full live metrology frame if available */
+  telemetry?: MetrologyTelemetryFrame | null;
   /** Live integrated or short-term LUFS if available for gain matching */
   liveLufs?: number;
   /** Currently active reference track profile */
@@ -15,6 +28,10 @@ export interface RtaGraphProps {
   onSelectReference: (profile: ReferenceTrackProfile | null) => void;
   /** Callback to open the full ReferenceTrackModal */
   onOpenReferenceModal: () => void;
+  /** Callback when user clicks 'An Referenz anpassen' to inject proposal */
+  onGenerateProposal?: (proposal: MixActionProposal) => void;
+  /** Available DAW tracks for target assignment */
+  availableTracks?: TrackDescriptor[];
 }
 
 const CENTER_FREQS = [
@@ -26,10 +43,13 @@ const CENTER_FREQS = [
 
 export const RtaGraph: React.FC<RtaGraphProps> = ({
   spectrum,
+  telemetry,
   liveLufs,
   activeReference,
   onSelectReference,
-  onOpenReferenceModal
+  onOpenReferenceModal,
+  onGenerateProposal,
+  availableTracks
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
@@ -38,6 +58,7 @@ export const RtaGraph: React.FC<RtaGraphProps> = ({
   const [savedReferences, setSavedReferences] = useState<ReferenceProfileSummary[]>([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState<boolean>(false);
   const [isLoadingReferences, setIsLoadingReferences] = useState<boolean>(false);
+  const [isAdapting, setIsAdapting] = useState<boolean>(false);
 
   // Gain matching (Pegel-Normalisierung)
   const [isGainMatchEnabled, setIsGainMatchEnabled] = useState<boolean>(true);
@@ -278,11 +299,70 @@ export const RtaGraph: React.FC<RtaGraphProps> = ({
     }
   }, [spectrum, activeReference, isGainMatchEnabled, liveLufs]);
 
+  // Real-time spectral difference analysis (Delta(f) = Live(f) - Reference(f))
+  const deviationZone = useMemo(() => {
+    if (!activeReference || !spectrum?.frequencyBands) return null;
+    const effectiveOffset = isGainMatchEnabled ? displayGainOffset : 0;
+    const analysis = computeSpectralDifference(
+      spectrum.frequencyBands,
+      activeReference.frequencyBands,
+      effectiveOffset,
+      2.5
+    );
+    return analysis.primaryDeviation;
+  }, [activeReference, spectrum?.frequencyBands, isGainMatchEnabled, displayGainOffset]);
+
+  const handleAdaptToReference = () => {
+    if (!activeReference || !onGenerateProposal) return;
+    setIsAdapting(true);
+
+    const effectiveOffset = isGainMatchEnabled ? displayGainOffset : 0;
+    const telemetryFrame: MetrologyTelemetryFrame = telemetry || {
+      version: '1.0',
+      sequenceNumber: 1,
+      sampleRate: 44100,
+      loudness: {
+        momentaryLufs: liveLufs ?? -14.0,
+        shortTermLufs: liveLufs ?? -14.0,
+        integratedLufs: liveLufs ?? -14.0,
+        loudnessRangeLu: 6.0,
+        truePeakDb: { left: -1.0, right: -1.0 }
+      },
+      spectrum: spectrum || {
+        timestamp: Date.now(),
+        frequencyBands: new Array(32).fill(-70),
+        centerFrequenciesHz: [],
+        spectralResonances: []
+      },
+      dynamics: {
+        stereoCorrelation: 0.9,
+        crestFactorDb: 10.0,
+        rmsDb: { left: -16.0, right: -16.0 }
+      }
+    };
+
+    const proposal = generateReferenceMatchProposal(
+      telemetryFrame,
+      activeReference,
+      availableTracks || [],
+      effectiveOffset,
+      2.5
+    );
+
+    if (proposal) {
+      onGenerateProposal(proposal);
+    }
+
+    setTimeout(() => {
+      setIsAdapting(false);
+    }, 1200);
+  };
+
   return (
     <div className="bg-darkSurface border border-darkBorder rounded-lg p-4 shadow-lg flex flex-col">
       {/* RTA Header Toolbar */}
       <div className="flex flex-wrap justify-between items-center gap-2 mb-2.5">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-semibold tracking-wider text-slate-300 uppercase">
             Real-Time Spectrum (RTA — 32 Bands)
           </h3>
@@ -294,6 +374,26 @@ export const RtaGraph: React.FC<RtaGraphProps> = ({
               <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
               A/B REF
             </span>
+          )}
+
+          {/* Spectral Difference Badge (> 2.5 dB deviation) with Action Button */}
+          {activeReference && deviationZone && (
+            <div className="flex items-center gap-1.5 bg-amber-950/70 border border-amber-500/60 px-2.5 py-1 rounded shadow-sm text-xs animate-in fade-in duration-200">
+              <span className="text-amber-300 font-mono text-[11px] flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                <span className="font-semibold">{deviationZone.label}</span>
+              </span>
+              <button
+                type="button"
+                onClick={handleAdaptToReference}
+                disabled={isAdapting}
+                className="flex items-center gap-1 bg-gradient-to-r from-amber-500 to-yellow-400 hover:from-amber-400 hover:to-yellow-300 text-slate-950 font-bold px-2.5 py-0.5 rounded text-xs transition-all shadow active:scale-95 ml-1 disabled:opacity-50 cursor-pointer"
+                title="Klick generiert eine Channel EQ Filter-Gain ActionCard, um das Frequenzbild an die Referenz anzunähern"
+              >
+                <Zap className="w-3 h-3 text-slate-950 fill-current" />
+                <span>{isAdapting ? 'Erzeugt...' : '⚡ An Referenz anpassen'}</span>
+              </button>
+            </div>
           )}
         </div>
 
