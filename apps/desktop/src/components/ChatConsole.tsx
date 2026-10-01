@@ -1,6 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, Sparkles, AlertCircle, Copy, Check, MessageSquarePlus } from 'lucide-react';
-import type { MetrologyTelemetryFrame, MixActionProposal, TrackDescriptor, TargetProfile, TargetScope } from '@mixing-buddy/shared-types';
+import type {
+  MetrologyTelemetryFrame,
+  MixActionProposal,
+  TrackDescriptor,
+  TargetProfile,
+  TargetScope,
+  MixingSkill,
+  MixingSkillSummary
+} from '@mixing-buddy/shared-types';
 import { GeminiProvider } from '@mixing-buddy/ai-engine';
 import { invoke } from '@tauri-apps/api/core';
 import type { ProviderMode } from './ProviderSettings.js';
@@ -23,6 +31,10 @@ interface ChatConsoleProps {
   externalLogMessage?: string | null;
   targetScope?: TargetScope;
   targetProfile?: TargetProfile;
+  activeSkill?: MixingSkill | null;
+  onSelectSkill?: (skill: MixingSkill | null) => void;
+  onSelectSkillId?: (id: string) => void;
+  availableSkills?: MixingSkillSummary[];
 }
 
 export const ChatConsole: React.FC<ChatConsoleProps> = ({
@@ -35,7 +47,11 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   onProposalGenerated,
   externalLogMessage,
   targetScope,
-  targetProfile
+  targetProfile,
+  activeSkill,
+  onSelectSkill,
+  onSelectSkillId,
+  availableSkills
 }) => {
   const getDawDisplayName = (daw: string) => {
     const d = daw.toLowerCase();
@@ -168,7 +184,8 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
             dawName: dawLabel,
             userPrompt: query,
             targetScope,
-            targetProfile
+            targetProfile,
+            activeSkill: activeSkill || undefined
           });
 
           setMessages((prev) => [
@@ -345,14 +362,15 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
         };
         responseText = `Im Bereich 250–350 Hz liegt eine Maskierung vor. Ich habe die ActionCard "${generatedProposal.title}" für dich erstellt.`;
       } else if (lower.includes('lufs') || lower.includes('laut') || lower.includes('level') || lower.includes('master')) {
-        const diff = -14.0 - currentLufs;
+        const targetLufs = activeSkill ? activeSkill.metrologyTargets.integratedLufs : -14.0;
+        const diff = targetLufs - currentLufs;
         const proposedDelta = Math.max(-4.0, Math.min(3.0, diff));
         generatedProposal = {
           id: `prop_${Date.now()}_master_level`,
           timestamp: Date.now(),
           category: 'gain_staging',
-          title: `Target -14.0 LUFS on '${masterTrack.name}'`,
-          rationale: `Aktuelle Lautheit: ${currentLufs.toFixed(1)} LUFS (True Peak: ${truePeak.toFixed(1)} dB). Pegelanpassung um ${proposedDelta > 0 ? '+' : ''}${proposedDelta.toFixed(1)} dB bringt ${dawLabel} an den Streaming-Standard.`,
+          title: `Target ${targetLufs.toFixed(1)} LUFS on '${masterTrack.name}' (${activeSkill ? activeSkill.name : 'Standard'})`,
+          rationale: `Aktuelle Lautheit: ${currentLufs.toFixed(1)} LUFS (True Peak: ${truePeak.toFixed(1)} dB). ${activeSkill ? `Leitplanke "${activeSkill.name}": "${activeSkill.prompts.quickstart}". ` : ''}Pegelanpassung um ${proposedDelta > 0 ? '+' : ''}${proposedDelta.toFixed(1)} dB bringt ${dawLabel} an den Zielwert von ${targetLufs.toFixed(1)} LUFS.`,
           confidenceScore: 0.92,
           deltas: [
             {
@@ -368,7 +386,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           ],
           status: 'pending'
         };
-        responseText = `Master-Bus Lautheit liegt bei ${currentLufs.toFixed(1)} LUFS. Pegelanpassung an ${masterTrack.name} vorbereitet.`;
+        responseText = `Master-Bus Lautheit liegt bei ${currentLufs.toFixed(1)} LUFS. Zielwert ${activeSkill ? `nach Skill "${activeSkill.name}"` : 'nach EBU R128'} ist ${targetLufs.toFixed(1)} LUFS.`;
       } else {
         responseText = `Verstanden: "${query}". Aktueller Mix-Status in ${dawLabel}: Lautheit ${currentLufs.toFixed(1)} LUFS, True Peak ${truePeak.toFixed(1)} dB, Phasenkorrelation ${(telemetry?.dynamics.stereoCorrelation ?? 1.0).toFixed(2)}. Was möchtest du anpassen?`;
       }
@@ -410,14 +428,44 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   return (
     <div className="bg-darkSurface border border-darkBorder rounded-lg flex flex-col h-64 shadow-md overflow-hidden">
       {/* Console Header */}
-      <div className="px-3 py-2 border-b border-darkBorder/70 bg-[#16181d] flex items-center justify-between text-xs">
+      <div className="px-3 py-2 border-b border-darkBorder/70 bg-[#16181d] flex flex-wrap items-center justify-between text-xs gap-2">
         <div className="flex items-center gap-1.5 font-semibold text-slate-200">
           <Sparkles className="w-3.5 h-3.5 text-blue-400" />
           <span>AI Co-Producer Prompt Console ({dawLabel})</span>
         </div>
-        <span className="text-[11px] text-slate-500 font-mono">
-          Context: {telemetry ? `${telemetry.sampleRate / 1000} kHz Live` : 'Standby'}
-        </span>
+
+        <div className="flex items-center gap-2">
+          {/* Skill Selector Dropdown */}
+          <div className="flex items-center bg-slate-800/90 border border-amber-500/40 rounded px-2 py-0.5 text-xs text-amber-300 font-medium shadow-sm">
+            <span className="text-amber-400 mr-1.5 text-[11px]">🎛️</span>
+            <select
+              value={activeSkill?.id || 'none'}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === 'none') {
+                  if (onSelectSkill) onSelectSkill(null);
+                } else if (onSelectSkillId) {
+                  onSelectSkillId(val);
+                }
+              }}
+              className="bg-transparent text-amber-300 text-xs font-semibold focus:outline-none cursor-pointer"
+              title="Aktiven Mixing Skill auswählen (übersteuert Metrologie-Targets & Prompt-Leitplanken)"
+            >
+              <option value="none" className="bg-[#1a1c23] text-slate-400">
+                Standard (Kein Skill)
+              </option>
+              {availableSkills?.map((s) => (
+                <option key={s.id} value={s.id} className="bg-[#1a1c23] text-amber-200">
+                  Skill: {s.name} ({s.version})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <span className="text-[11px] text-slate-500 font-mono hidden sm:inline">
+            Context: {telemetry ? `${telemetry.sampleRate / 1000} kHz Live` : 'Standby'}
+          </span>
+        </div>
       </div>
 
       {/* Messages Scroll Area */}

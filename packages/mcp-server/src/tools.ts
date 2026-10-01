@@ -71,6 +71,12 @@ export const MatchReferenceSpectrumSchema = z.object({
   targetTrackId: z.string().optional().describe('Optional DAW track ID to apply Channel EQ adjustments to (defaults to Master / Mix Bus)')
 });
 
+export const SetActiveSkillSchema = z.object({
+  skillId: z
+    .string()
+    .describe('ID or slug of the mixing skill to activate (e.g. "tonmischmeister", custom skill slug, or "none" to deactivate)')
+});
+
 export type GetMixTelemetryInput = z.infer<typeof GetMixTelemetrySchema>;
 export type ListTracksInput = z.infer<typeof ListTracksSchema>;
 export type ParameterDeltaInput = z.infer<typeof ParameterDeltaSchema>;
@@ -80,4 +86,6 @@ export type AuditionRegionInput = z.infer<typeof AuditionRegionSchema>;
 export type GetProjectInfoInput = z.infer<typeof GetProjectInfoSchema>;
 export type LearnPluginInput = z.infer<typeof LearnPluginSchema>;
 export type MatchReferenceSpectrumInput = z.infer<typeof MatchReferenceSpectrumSchema>;
+export type SetActiveSkillInput = z.infer<typeof SetActiveSkillSchema>;
+
 

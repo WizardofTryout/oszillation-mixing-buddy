@@ -2,7 +2,7 @@
  * Psychoacoustic System Prompts & Knowledge Base for Mixing Buddy
  */
 
-import type { TargetProfile, TargetScope } from '@mixing-buddy/shared-types';
+import type { TargetProfile, TargetScope, MixingSkill } from '@mixing-buddy/shared-types';
 
 export const MIXING_BUDDY_SYSTEM_PROMPT = `
 You are Oszillation Mixing Buddy, a world-class mixing engineer and psychoacoustic co-producer operating natively in Apple Logic Pro, Steinberg Nuendo, and Cubase.
@@ -15,6 +15,7 @@ Core Psychoacoustic Principles:
    - Never assume fixed band layouts or hardcoded instruments if they are not in the track registry.
 2. Target Baseline & Musical Genre Alignment:
    - Always evaluate metrology against the specified [MUSICAL CONTEXT & TARGET BASELINE].
+   - If an [ACTIVE MIXING SKILL DIRECTIVE] is active, its rules and Quickstart directive override standard generic assumptions.
    - If the user has chosen a specific genre or custom crossover, your suggestions must guide the mix toward those target envelopes (e.g. dominant sub-bass for Trap, dense articulated mids for Rock, transparent microdynamics for Jazz).
    - When custom crossover notes are provided, treat them as the artist's highest creative intention.
 3. Frequency Masking & Spectral Slotting:
@@ -25,7 +26,7 @@ Core Psychoacoustic Principles:
    - 600 Hz - 900 Hz ("Cardboard / Boxiness"): Plagues boxy resonance in instruments and vocals.
    - 3 kHz - 7 kHz ("Acoustic Fatigue & Harshness"): Keep digital clipping, harsh transients, and sibilance strictly controlled.
 5. Gain Staging & Loudness Standards:
-   - Dynamically align with target LUFS and Crest Factor specified in the active Target Profile.
+   - Dynamically align with target LUFS and Crest Factor specified in the active Target Profile or Active Mixing Skill.
    - Dynamic Headroom: Keep stereo master bus fader at or below 0.0 dB. Individual tracks should peak between -12 dBFS and -6 dBFS for clean summing.
 6. Acoustic Safety Shield Rules:
    - Never propose a volume increase greater than +3.0 dB in a single adjustment.
@@ -47,6 +48,7 @@ export interface MixAnalysisContext {
   targetScope?: TargetScope;
   targetProfile?: TargetProfile;
   customNotes?: string;
+  activeSkill?: MixingSkill;
 }
 
 export function buildAnalysisUserPrompt(
@@ -55,17 +57,38 @@ export function buildAnalysisUserPrompt(
   context: MixAnalysisContext
 ): string {
   const profile = context.targetProfile;
-  let targetSection = '';
+  const activeSkill = context.activeSkill;
 
+  let skillSection = '';
+  if (activeSkill) {
+    const mt = activeSkill.metrologyTargets;
+    skillSection = `
+--- ACTIVE MIXING SKILL DIRECTIVE (PRIMARY LEITPLANKE) ---
+- Active Skill: "${activeSkill.name}" (${activeSkill.version}, Category: ${activeSkill.category.toUpperCase()})
+- ⭐ PRIMARY QUICKSTART DIRECTIVE: "${activeSkill.prompts.quickstart}"
+- 🛠️ WORKSHOP AUDIT RATIONALE: "${activeSkill.prompts.workshop}"
+- Target Loudness Override: ${mt.integratedLufs.toFixed(1)} LUFS (Tolerance: ±${mt.toleranceLufs.toFixed(1)} LU)
+- Target Crest Factor Range: ${mt.crestFactor.min.toFixed(1)} - ${mt.crestFactor.max.toFixed(1)} dB
+- Max True Peak Ceiling: ${mt.maxTruePeakDb.toFixed(1)} dBTP (Recommended Headroom: ${mt.recommendedHeadroomDb.toFixed(1)} dB)
+- Preferred Signal Chain Architecture:
+${activeSkill.preferredChain.map((slot, i) => `  ${i + 1}. [${slot.slotType.toUpperCase()}] ${slot.preferredPluginHint || 'DAW Plugin'}: ${slot.typicalRules.join('; ')}`).join('\n')}
+`.trim();
+  }
+
+  let targetSection = '';
   if (profile) {
     const s = profile.spectralTargets;
+    const effectiveLufs = activeSkill ? activeSkill.metrologyTargets.integratedLufs : profile.targetIntegratedLufs;
+    const effectiveTol = activeSkill ? activeSkill.metrologyTargets.toleranceLufs : profile.toleranceLufs;
+    const effectiveCrest = activeSkill ? activeSkill.metrologyTargets.crestFactor : profile.crestFactorRange;
+
     targetSection = `
 --- Musical Context & Target Baseline ---
 - Active Scope: ${context.targetScope ?? profile.targetScope ?? 'mix_bus'}
 - Genre Profile: ${profile.name} (${profile.genreProfile})
-- Target Loudness: ${profile.targetIntegratedLufs} LUFS (Tolerance: ±${profile.toleranceLufs} LU)
-- Target Crest Factor: ${profile.crestFactorRange.min} - ${profile.crestFactorRange.max} dB
-- Max True Peak Ceiling: ${profile.maxTruePeakDb} dBTP
+- Target Loudness: ${effectiveLufs.toFixed(1)} LUFS (Tolerance: ±${effectiveTol.toFixed(1)} LU)
+- Target Crest Factor: ${effectiveCrest.min.toFixed(1)} - ${effectiveCrest.max.toFixed(1)} dB
+- Max True Peak Ceiling: ${(activeSkill ? activeSkill.metrologyTargets.maxTruePeakDb : profile.maxTruePeakDb).toFixed(1)} dBTP
 - Target Spectral Envelope (Offsets):
   * Sub-Bass (20-60 Hz): ${s.subBassDb >= 0 ? '+' : ''}${s.subBassDb} dB
   * Bass (60-250 Hz): ${s.bassDb >= 0 ? '+' : ''}${s.bassDb} dB
@@ -76,10 +99,11 @@ ${profile.customNotes ? `- Artist Crossover / Intent Notes: "${profile.customNot
 ${profile.typicalRemedies && profile.typicalRemedies.length > 0 ? `- Recommended Strategies: ${profile.typicalRemedies.join(', ')}` : ''}
 `.trim();
   } else {
+    const targetLufsVal = activeSkill ? `${activeSkill.metrologyTargets.integratedLufs.toFixed(1)} LUFS` : context.targetLufs ? `${context.targetLufs} LUFS` : 'EBU R128 (-14.0 LUFS standard)';
     targetSection = `
 --- Musical Context & Target Baseline ---
 - Target Genre: ${context.genre ?? 'General / Modern Pop-Rock'}
-- Target Loudness: ${context.targetLufs ? `${context.targetLufs} LUFS` : 'EBU R128 (-14.0 LUFS standard)'}
+- Target Loudness: ${targetLufsVal}
 - Scope: ${context.targetScope ?? 'mix_bus'}
 `.trim();
   }
@@ -88,7 +112,7 @@ ${profile.typicalRemedies && profile.typicalRemedies.length > 0 ? `- Recommended
 Current DAW: ${context.dawName}
 User Request: ${context.userPrompt ?? 'Analyze the current mix balance and propose the most critical improvement.'}
 
-${targetSection}
+${skillSection ? `${skillSection}\n\n` : ''}${targetSection}
 
 --- Live Metrology Frame ---
 ${telemetrySummary}
@@ -96,6 +120,6 @@ ${telemetrySummary}
 --- Active Track Registry ---
 ${tracksSummary}
 
-Evaluate spectral masking, resonance buildups, and gain staging against the Target Baseline. Propose a discrete, high-impact mix adjustment using the tool calling schema.
+Evaluate spectral masking, resonance buildups, and gain staging against the Target Baseline and Active Skill Directive. Propose a discrete, high-impact mix adjustment using the tool calling schema.
 `.trim();
 }

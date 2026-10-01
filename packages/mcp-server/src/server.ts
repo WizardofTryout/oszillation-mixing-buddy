@@ -11,7 +11,8 @@ import {
   LearnPluginSchema,
   ListTracksSchema,
   ProposeMixAdjustmentSchema,
-  MatchReferenceSpectrumSchema
+  MatchReferenceSpectrumSchema,
+  SetActiveSkillSchema
 } from './tools.js';
 
 export interface ServerOptions {
@@ -234,6 +235,31 @@ export class MixingBuddyMCPServer {
           return {
             isError: true,
             content: [{ type: 'text', text: `Reference matching failed: ${String(err)}` }]
+          };
+        }
+      }
+    );
+
+    // 8. Set Active Skill (Custom Mixing Skill injection)
+    this.server.tool(
+      'mcp__set_active_skill',
+      'Activates a specific mixing skill profile (e.g. "tonmischmeister", custom skill slug, or "none") to guide metrology targets, quickstart directives, and chain recommendations.',
+      SetActiveSkillSchema.shape,
+      async (args) => {
+        try {
+          const result = await this.handlers.setActiveSkill(args);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        } catch (err: unknown) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Skill activation failed: ${String(err)}` }]
           };
         }
       }

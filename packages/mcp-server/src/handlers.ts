@@ -11,8 +11,10 @@ import type {
   MetrologyTelemetryFrame,
   MixActionProposal,
   ReferenceTrackProfile,
-  TrackDescriptor
+  TrackDescriptor,
+  MixingSkill
 } from '@mixing-buddy/shared-types';
+import { TONMISCHMEISTER_SEED_SKILL } from '@mixing-buddy/shared-types';
 import {
   computeSpectralDifference,
   generateReferenceMatchProposal,
@@ -24,7 +26,8 @@ import type {
   GetMixTelemetryInput,
   ListTracksInput,
   ProposeMixAdjustmentInput,
-  MatchReferenceSpectrumInput
+  MatchReferenceSpectrumInput,
+  SetActiveSkillInput
 } from './tools.js';
 
 export interface ResonancePeak {
@@ -37,6 +40,8 @@ export class MixingToolHandlers {
   private latestTelemetry: MetrologyTelemetryFrame | null = null;
   private proposals: Map<string, MixActionProposal> = new Map();
   private lastTrackVolumes: Map<string, number> = new Map();
+  private activeSkill: MixingSkill | null = TONMISCHMEISTER_SEED_SKILL;
+  private activeSkillId: string = 'tonmischmeister';
 
   constructor(private dawDriver?: DAWDriver) {}
 
@@ -96,7 +101,30 @@ export class MixingToolHandlers {
     sampleRate: number;
     isPlaying: boolean;
     connected: boolean;
+    activeSkill?: {
+      id: string;
+      name: string;
+      category: string;
+      version: string;
+      targetLufs: number;
+      crestFactor: { min: number; max: number };
+      maxTruePeakDb: number;
+      quickstartDirective: string;
+    } | null;
   }> {
+    const activeSkillSummary = this.activeSkill
+      ? {
+          id: this.activeSkill.id,
+          name: this.activeSkill.name,
+          category: this.activeSkill.category,
+          version: this.activeSkill.version,
+          targetLufs: this.activeSkill.metrologyTargets.integratedLufs,
+          crestFactor: this.activeSkill.metrologyTargets.crestFactor,
+          maxTruePeakDb: this.activeSkill.metrologyTargets.maxTruePeakDb,
+          quickstartDirective: this.activeSkill.prompts.quickstart
+        }
+      : null;
+
     try {
       const res = await fetch('http://127.0.0.1:48123/api/project', {
         signal: AbortSignal.timeout(2000)
@@ -114,7 +142,8 @@ export class MixingToolHandlers {
           projectName: data.projectName,
           sampleRate: data.sampleRate,
           isPlaying: data.isPlaying,
-          connected: data.connected ?? (data.daw !== 'None' && data.daw !== 'Standalone / None')
+          connected: data.connected ?? (data.daw !== 'None' && data.daw !== 'Standalone / None'),
+          activeSkill: activeSkillSummary
         };
       }
     } catch {
@@ -126,7 +155,113 @@ export class MixingToolHandlers {
       projectName: 'Kein Projekt geöffnet',
       sampleRate: 48000,
       isPlaying: false,
-      connected: false
+      connected: false,
+      activeSkill: activeSkillSummary
+    };
+  }
+
+  public async setActiveSkill(args: SetActiveSkillInput): Promise<{
+    success: boolean;
+    activeSkillId: string;
+    name?: string;
+    category?: string;
+    version?: string;
+    targetLufs?: number;
+    crestFactor?: { min: number; max: number };
+    maxTruePeakDb?: number;
+    quickstartDirective?: string;
+    chainSlotsCount?: number;
+    message?: string;
+  }> {
+    const id = args.skillId.trim();
+    if (!id || id.toLowerCase() === 'none') {
+      this.activeSkill = null;
+      this.activeSkillId = 'none';
+      return {
+        success: true,
+        activeSkillId: 'none',
+        message: 'Kein Mixing Skill aktiv (Standard / Generischer Modus)'
+      };
+    }
+
+    if (id === 'tonmischmeister') {
+      this.activeSkill = TONMISCHMEISTER_SEED_SKILL;
+      this.activeSkillId = 'tonmischmeister';
+      return {
+        success: true,
+        activeSkillId: 'tonmischmeister',
+        name: TONMISCHMEISTER_SEED_SKILL.name,
+        category: TONMISCHMEISTER_SEED_SKILL.category,
+        version: TONMISCHMEISTER_SEED_SKILL.version,
+        targetLufs: TONMISCHMEISTER_SEED_SKILL.metrologyTargets.integratedLufs,
+        crestFactor: TONMISCHMEISTER_SEED_SKILL.metrologyTargets.crestFactor,
+        maxTruePeakDb: TONMISCHMEISTER_SEED_SKILL.metrologyTargets.maxTruePeakDb,
+        quickstartDirective: TONMISCHMEISTER_SEED_SKILL.prompts.quickstart,
+        chainSlotsCount: TONMISCHMEISTER_SEED_SKILL.preferredChain.length,
+        message: 'Mixing Skill "Tonmischmeister" erfolgreich im MCP-Server aktiviert.'
+      };
+    }
+
+    // Attempt to query Desktop companion on 127.0.0.1:48123/api/skills?id=...
+    try {
+      const res = await fetch(`http://127.0.0.1:48123/api/skills?id=${encodeURIComponent(id)}`, {
+        signal: AbortSignal.timeout(2000)
+      });
+      if (res.ok) {
+        const skill = (await res.json()) as MixingSkill;
+        if (skill && skill.id && skill.metrologyTargets) {
+          this.activeSkill = skill;
+          this.activeSkillId = skill.id;
+          return {
+            success: true,
+            activeSkillId: skill.id,
+            name: skill.name,
+            category: skill.category,
+            version: skill.version,
+            targetLufs: skill.metrologyTargets.integratedLufs,
+            crestFactor: skill.metrologyTargets.crestFactor,
+            maxTruePeakDb: skill.metrologyTargets.maxTruePeakDb,
+            quickstartDirective: skill.prompts?.quickstart,
+            chainSlotsCount: skill.preferredChain?.length || 0,
+            message: `Mixing Skill "${skill.name}" erfolgreich im MCP-Server aktiviert.`
+          };
+        }
+      }
+    } catch {
+      // Fallback: Check local disk storage ~/.mixing-buddy/skills/<id>.json
+    }
+
+    const localFile = path.join(os.homedir(), '.mixing-buddy', 'skills', `${id}.json`);
+    if (fs.existsSync(localFile)) {
+      try {
+        const raw = fs.readFileSync(localFile, 'utf-8');
+        const skill = JSON.parse(raw) as MixingSkill;
+        if (skill && skill.id && skill.metrologyTargets) {
+          this.activeSkill = skill;
+          this.activeSkillId = skill.id;
+          return {
+            success: true,
+            activeSkillId: skill.id,
+            name: skill.name,
+            category: skill.category,
+            version: skill.version,
+            targetLufs: skill.metrologyTargets.integratedLufs,
+            crestFactor: skill.metrologyTargets.crestFactor,
+            maxTruePeakDb: skill.metrologyTargets.maxTruePeakDb,
+            quickstartDirective: skill.prompts?.quickstart,
+            chainSlotsCount: skill.preferredChain?.length || 0,
+            message: `Mixing Skill "${skill.name}" von lokaler Festplatte geladen und aktiviert.`
+          };
+        }
+      } catch (err) {
+        console.warn(`Failed reading skill file ${localFile}:`, err);
+      }
+    }
+
+    return {
+      success: false,
+      activeSkillId: this.activeSkillId,
+      message: `Skill "${id}" konnte weder über den Desktop-Companion noch unter ~/.mixing-buddy/skills/ gefunden werden.`
     };
   }
 

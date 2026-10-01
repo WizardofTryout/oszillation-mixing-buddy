@@ -7,6 +7,8 @@ import {
   type TargetScope,
   type GenreProfileId,
   type ReferenceTrackProfile,
+  type MixingSkill,
+  type MixingSkillSummary,
   resolveTargetProfile,
   detectGenreFromTelemetry
 } from '@mixing-buddy/shared-types';
@@ -157,6 +159,8 @@ export const App: React.FC = () => {
   const [isSkillModalOpen, setIsSkillModalOpen] = useState<boolean>(false);
   const [isSkillWizardOpen, setIsSkillWizardOpen] = useState<boolean>(false);
   const [skillsCount, setSkillsCount] = useState<number>(1);
+  const [activeSkill, setActiveSkill] = useState<MixingSkill | null>(null);
+  const [availableSkills, setAvailableSkills] = useState<MixingSkillSummary[]>([]);
 
   const handleApiKeyChange = (key: string) => {
     setApiKey(key);
@@ -767,9 +771,20 @@ export const App: React.FC = () => {
 
   const refreshSkillsCount = async () => {
     try {
-      const list = await invoke<any[]>('list_mixing_skills');
+      const list = await invoke<MixingSkillSummary[]>('list_mixing_skills');
       if (Array.isArray(list)) {
         setSkillsCount(list.length);
+        setAvailableSkills(list);
+
+        // Auto-select first/default skill if none selected yet
+        if (!activeSkill && list.length > 0) {
+          try {
+            const first = await invoke<MixingSkill>('get_mixing_skill', { id: list[0].id });
+            if (first) {
+              setActiveSkill(first);
+            }
+          } catch {}
+        }
         return;
       }
     } catch {
@@ -782,10 +797,39 @@ export const App: React.FC = () => {
         const data = await res.json();
         if (Array.isArray(data.skills)) {
           setSkillsCount(data.skills.length);
+          setAvailableSkills(data.skills);
         }
       }
     } catch {
       // Ignore
+    }
+  };
+
+  const handleSelectSkillById = async (id: string) => {
+    try {
+      try {
+        const skill = await invoke<MixingSkill>('get_mixing_skill', { id });
+        if (skill) {
+          setActiveSkill(skill);
+          setChatLog(
+            `⭐ Mixing Skill "${skill.name}" aktiviert (${skill.metrologyTargets.integratedLufs.toFixed(1)} LUFS, Kategorie: ${skill.category}).`
+          );
+          return;
+        }
+      } catch {}
+
+      const res = await fetch(`http://127.0.0.1:48123/api/skills?id=${encodeURIComponent(id)}`);
+      if (res.ok) {
+        const skill = (await res.json()) as MixingSkill;
+        if (skill && skill.id) {
+          setActiveSkill(skill);
+          setChatLog(
+            `⭐ Mixing Skill "${skill.name}" aktiviert (${skill.metrologyTargets.integratedLufs.toFixed(1)} LUFS, Kategorie: ${skill.category}).`
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to switch active skill', err);
     }
   };
 
@@ -1027,6 +1071,7 @@ export const App: React.FC = () => {
           refreshSkillsCount();
         }}
         onSelectSkill={(skill) => {
+          setActiveSkill(skill);
           setChatLog(`⭐ Mixing Skill "${skill.name}" aktiviert (${skill.metrologyTargets.integratedLufs} LUFS, Kategorie: ${skill.category}).`);
         }}
         onStartSynthesisWizard={() => {
@@ -1042,6 +1087,7 @@ export const App: React.FC = () => {
           refreshSkillsCount();
         }}
         onSkillCreatedAndActivated={(skill) => {
+          setActiveSkill(skill);
           setChatLog(
             `🚀 Neuer KI-synthetisierter Skill "${skill.name}" (${skill.metrologyTargets.integratedLufs.toFixed(1)} LUFS, Kategorie: ${skill.category}) erfolgreich gespeichert & im Studio aktiviert.`
           );
@@ -1091,6 +1137,10 @@ export const App: React.FC = () => {
               externalLogMessage={chatLog}
               targetScope={targetScope}
               targetProfile={activeTargetProfile}
+              activeSkill={activeSkill}
+              onSelectSkill={setActiveSkill}
+              onSelectSkillId={handleSelectSkillById}
+              availableSkills={availableSkills}
             />
           </div>
           <div className="lg:col-span-1">
