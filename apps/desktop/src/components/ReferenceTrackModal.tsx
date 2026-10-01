@@ -13,6 +13,8 @@ import {
   Check
 } from 'lucide-react';
 import type { ReferenceTrackProfile } from '@mixing-buddy/shared-types';
+import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { analyzeAudioBuffer } from '../utils/audioProfiler.js';
 
 interface ReferenceTrackModalProps {
@@ -182,6 +184,72 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
       setIsAnalyzing(false);
     }
   };
+
+  const processFilePath = async (filePath: string) => {
+    const validExtensions = ['.wav', '.mp3', '.aiff', '.aif', '.flac'];
+    const lower = filePath.toLowerCase();
+    const hasValidExt = validExtensions.some((ext) => lower.endsWith(ext));
+    if (!hasValidExt) {
+      setErrorMessage('Bitte eine gültige Audiodatei ablegen (.wav, .mp3, .aiff, .flac).');
+      return;
+    }
+
+    setIsAnalyzing(true);
+    setErrorMessage(null);
+    setAnalysisProgress('Lade Datei von Finder...');
+
+    try {
+      const bytes = await invoke<number[]>('read_audio_file', { path: filePath });
+      const u8 = new Uint8Array(bytes);
+      const fileName = filePath.split('/').pop() || 'reference_audio';
+      const ext = fileName.split('.').pop()?.toLowerCase() || 'wav';
+      const mime = ext === 'mp3' ? 'audio/mpeg' : ext === 'flac' ? 'audio/flac' : 'audio/wav';
+      const blob = new Blob([u8], { type: mime });
+      const file = new File([blob], fileName, { type: mime });
+      await processAudioFile(file);
+    } catch (err: unknown) {
+      console.error('Error reading dropped file from path', err);
+      setErrorMessage(
+        err instanceof Error ? err.message : 'Datei konnte nicht vom Dateisystem gelesen werden.'
+      );
+      setIsAnalyzing(false);
+    }
+  };
+
+  // Tauri native drag & drop listener (intercepts macOS Finder drops)
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let unlisten: (() => void) | undefined;
+    try {
+      getCurrentWebview()
+        .onDragDropEvent(async (event) => {
+          if (event.payload.type === 'over' || event.payload.type === 'enter') {
+            setIsDragging(true);
+          } else if (event.payload.type === 'leave') {
+            setIsDragging(false);
+          } else if (event.payload.type === 'drop') {
+            setIsDragging(false);
+            const paths = event.payload.paths;
+            if (paths && paths.length > 0) {
+              await processFilePath(paths[0]);
+            }
+          }
+        })
+        .then((cleanup) => {
+          unlisten = cleanup;
+        })
+        .catch((err) => {
+          console.warn('Tauri onDragDropEvent listener error', err);
+        });
+    } catch (e) {
+      console.warn('getCurrentWebview not available', e);
+    }
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [isOpen]);
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();

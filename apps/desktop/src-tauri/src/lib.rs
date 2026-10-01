@@ -1690,6 +1690,11 @@ async fn list_channel_strips() -> Result<serde_json::Value, String> {
     }
 }
 
+#[tauri::command]
+async fn read_audio_file(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(&path).map_err(|e| format!("Failed to read audio file '{}': {}", path, e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -1739,7 +1744,8 @@ pub fn run() {
             list_learned_plugins,
             delete_learned_plugin,
             update_plugin_tags,
-            list_channel_strips
+            list_channel_strips,
+            read_audio_file
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");
