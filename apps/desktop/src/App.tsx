@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import type {
-  MetrologyTelemetryFrame,
-  MixActionProposal,
-  TrackDescriptor,
-  TargetProfile,
-  TargetScope,
-  GenreProfileId
+import {
+  type MetrologyTelemetryFrame,
+  type MixActionProposal,
+  type TrackDescriptor,
+  type TargetProfile,
+  type TargetScope,
+  type GenreProfileId,
+  resolveTargetProfile,
+  detectGenreFromTelemetry
 } from '@mixing-buddy/shared-types';
-import { resolveTargetProfile, detectGenreFromTelemetry } from '@mixing-buddy/ai-engine';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { SpectrumRTA } from './components/SpectrumRTA.js';
