@@ -25,6 +25,7 @@ import {
   type PluginSummaryItem
 } from './components/PluginVaultModal.js';
 import { SkillManagerModal } from './components/SkillManagerModal.js';
+import { SkillWizardModal } from './components/SkillWizardModal.js';
 import { Sliders, Headphones, Inbox, Sparkles, Database, Target, BarChart2, Star } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -154,6 +155,7 @@ export const App: React.FC = () => {
 
   // Sprint 5: Custom Mixing Skills state
   const [isSkillModalOpen, setIsSkillModalOpen] = useState<boolean>(false);
+  const [isSkillWizardOpen, setIsSkillWizardOpen] = useState<boolean>(false);
   const [skillsCount, setSkillsCount] = useState<number>(1);
 
   const handleApiKeyChange = (key: string) => {
@@ -1028,8 +1030,25 @@ export const App: React.FC = () => {
           setChatLog(`⭐ Mixing Skill "${skill.name}" aktiviert (${skill.metrologyTargets.integratedLufs} LUFS, Kategorie: ${skill.category}).`);
         }}
         onStartSynthesisWizard={() => {
-          setChatLog(`🚀 KI-Skill-Synthese Wizard wird in Step 5.3 aktiviert.`);
+          setIsSkillModalOpen(false);
+          setIsSkillWizardOpen(true);
         }}
+      />
+
+      <SkillWizardModal
+        isOpen={isSkillWizardOpen}
+        onClose={() => {
+          setIsSkillWizardOpen(false);
+          refreshSkillsCount();
+        }}
+        onSkillCreatedAndActivated={(skill) => {
+          setChatLog(
+            `🚀 Neuer KI-synthetisierter Skill "${skill.name}" (${skill.metrologyTargets.integratedLufs.toFixed(1)} LUFS, Kategorie: ${skill.category}) erfolgreich gespeichert & im Studio aktiviert.`
+          );
+          refreshSkillsCount();
+        }}
+        apiKey={apiKey}
+        modelName={modelName}
       />
 
       {/* Main Studio Workspace */}

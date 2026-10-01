@@ -15,6 +15,7 @@ export * from './providers/GeminiProvider.js';
 export * from './providers/OpenAIProvider.js';
 export * from './providers/LocalOllamaProvider.js';
 export * from './referenceMatch.js';
+export * from './skillSynthesis.js';
 
 export type ProviderType = 'managed' | 'anthropic' | 'gemini' | 'openai' | 'ollama' | 'mock';
 
