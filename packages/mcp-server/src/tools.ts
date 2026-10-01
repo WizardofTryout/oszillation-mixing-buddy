@@ -78,6 +78,17 @@ export const SetActiveSkillSchema = z.object({
     .describe('ID or slug of the mixing skill to activate (e.g. "tonmischmeister", custom skill slug, or "none" to deactivate)')
 });
 
+// Sprint 7: Arranger Navigation
+
+export const SetFolderStateSchema = z.object({
+  trackName: z.string().describe('Name of the Track Stack or folder track to expand/collapse (e.g. "Drums", "Vocals", "Keys")'),
+  expanded: z.boolean().describe('true to expand (open) the track stack, false to collapse (close) it')
+});
+
+export const SelectTrackSchema = z.object({
+  trackName: z.string().describe('Name of the track to select in Logic Pro\'s arrangement. Selection causes the left Inspector to show this track\'s channel strip (e.g. "Snare 2", "Lead Vox", "Bass DI").')
+});
+
 export type GetMixTelemetryInput = z.infer<typeof GetMixTelemetrySchema>;
 export type ListTracksInput = z.infer<typeof ListTracksSchema>;
 export type ParameterDeltaInput = z.infer<typeof ParameterDeltaSchema>;
@@ -88,5 +99,5 @@ export type GetProjectInfoInput = z.infer<typeof GetProjectInfoSchema>;
 export type LearnPluginInput = z.infer<typeof LearnPluginSchema>;
 export type MatchReferenceSpectrumInput = z.infer<typeof MatchReferenceSpectrumSchema>;
 export type SetActiveSkillInput = z.infer<typeof SetActiveSkillSchema>;
-
-
+export type SetFolderStateInput = z.infer<typeof SetFolderStateSchema>;
+export type SelectTrackInput = z.infer<typeof SelectTrackSchema>;

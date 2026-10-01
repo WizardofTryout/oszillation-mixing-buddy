@@ -827,4 +827,50 @@ export class MacOSAccessibilityClient {
       parameters: Array.isArray(res.parameters) ? res.parameters : []
     };
   }
+
+  /**
+   * Expands or collapses a folder track or track stack in the Logic Pro arrangement
+   */
+  public async setFolderExpanded(
+    trackName: string,
+    expanded: boolean
+  ): Promise<{ success: boolean; track?: string; isExpanded?: boolean; error?: string }> {
+    const res = await this.runBridge<{
+      success: boolean;
+      track?: string;
+      isExpanded?: boolean;
+      error?: string;
+    }>([
+      'set-folder-expanded',
+      '--track',
+      trackName,
+      '--expanded',
+      String(expanded)
+    ]);
+    if (!res) {
+      return { success: false, error: 'Failed to communicate with logic-ax-bridge sidecar' };
+    }
+    return res;
+  }
+
+  /**
+   * Selects a track in the Logic Pro arrangement, switching the left Inspector to its channel strip
+   */
+  public async selectTrack(
+    trackName: string
+  ): Promise<{ success: boolean; selectedTrack?: string; error?: string }> {
+    const res = await this.runBridge<{
+      success: boolean;
+      selectedTrack?: string;
+      error?: string;
+    }>([
+      'select-track',
+      '--track',
+      trackName
+    ]);
+    if (!res) {
+      return { success: false, error: 'Failed to communicate with logic-ax-bridge sidecar' };
+    }
+    return res;
+  }
 }

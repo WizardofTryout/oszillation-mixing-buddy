@@ -27,7 +27,9 @@ import type {
   ListTracksInput,
   ProposeMixAdjustmentInput,
   MatchReferenceSpectrumInput,
-  SetActiveSkillInput
+  SetActiveSkillInput,
+  SetFolderStateInput,
+  SelectTrackInput
 } from './tools.js';
 
 export interface ResonancePeak {
@@ -867,5 +869,66 @@ export class MixingToolHandlers {
         character
       };
     });
+  }
+
+  /**
+   * Sprint 7: Expands or collapses a folder track or track stack in Logic Pro
+   */
+  public async setFolderState(args: SetFolderStateInput): Promise<{
+    success: boolean;
+    track?: string;
+    isExpanded?: boolean;
+    error?: string;
+  }> {
+    // 1. Try Desktop Companion IPC server (port 48123)
+    try {
+      const res = await fetch('http://127.0.0.1:48123/api/arranger/set-folder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trackName: args.trackName, expanded: args.expanded }),
+        signal: AbortSignal.timeout(3000)
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { success: boolean; track?: string; isExpanded?: boolean; error?: string };
+        return data;
+      }
+    } catch {
+      // Fallback to direct bridge
+    }
+
+    // 2. Direct MacOSAccessibilityClient execution
+    const { MacOSAccessibilityClient } = await import('@mixing-buddy/daw-adapters');
+    const axClient = new MacOSAccessibilityClient();
+    return await axClient.setFolderExpanded(args.trackName, args.expanded);
+  }
+
+  /**
+   * Sprint 7: Selects a specific track in the arrangement, bringing its channel strip into focus in the left inspector
+   */
+  public async selectTrack(args: SelectTrackInput): Promise<{
+    success: boolean;
+    selectedTrack?: string;
+    error?: string;
+  }> {
+    // 1. Try Desktop Companion IPC server (port 48123)
+    try {
+      const res = await fetch('http://127.0.0.1:48123/api/arranger/select-track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trackName: args.trackName }),
+        signal: AbortSignal.timeout(3000)
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { success: boolean; selectedTrack?: string; error?: string };
+        return data;
+      }
+    } catch {
+      // Fallback to direct bridge
+    }
+
+    // 2. Direct MacOSAccessibilityClient execution
+    const { MacOSAccessibilityClient } = await import('@mixing-buddy/daw-adapters');
+    const axClient = new MacOSAccessibilityClient();
+    return await axClient.selectTrack(args.trackName);
   }
 }

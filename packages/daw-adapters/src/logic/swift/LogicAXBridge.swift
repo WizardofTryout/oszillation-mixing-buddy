@@ -1378,6 +1378,167 @@ case "close-plugin-window":
     }
     printJSON(["success": closed])
 
+// MARK: - SPRINT 7: Arranger Navigation – Folder Expansion & Track Selection
+
+case "set-folder-expanded":
+    // Finds a Track Stack / Folder header in Logic Pro's arrangement view and
+    // toggles its disclosure triangle to the desired expanded state.
+    guard let trackName = getArg("--track"), !trackName.isEmpty else {
+        printJSON(["success": false, "error": "Missing --track argument"])
+        exit(0)
+    }
+    let wantExpanded: Bool = {
+        let raw = (getArg("--expanded") ?? "true").lowercased()
+        return raw == "true" || raw == "1" || raw == "yes"
+    }()
+
+    var found = false
+    var resultExpanded = false
+
+    let allWindows = getLogicWindows(appElement)
+    for w in allWindows {
+        let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
+        guard subrole == "AXStandardWindow" else { continue }
+
+        // The arrangement track list is typically an AXScrollArea → AXList of track rows.
+        // Each row is either AXGroup or AXRow with children for track header elements.
+        // We use a broad DFS to find any element whose AXTitle or AXDescription matches
+        // the target track name and is adjacent to an AXDisclosureTriangle.
+
+        // Strategy: find the AXDisclosureTriangle whose parent row title matches trackName
+        if let triangle = findElementDFS(root: w, roleFilter: "AXDisclosureTriangle", predicate: { el in
+            // Check the parent group / row for the track name
+            guard let parentVal = getAXAttribute(el, kAXParentAttribute as String) else { return false }
+            let p = parentVal as! AXUIElement
+            let parentTitle = (getAXString(p, kAXTitleAttribute as String) ?? "").lowercased()
+            let parentDesc  = (getAXString(p, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let target = trackName.lowercased()
+            return parentTitle.contains(target) || parentDesc.contains(target)
+        }) {
+            // Read current AXValue (0 = collapsed, 1 = expanded)
+            let rawVal = getAXAttribute(triangle, kAXValueAttribute as String)
+            let isExpanded: Bool = {
+                if let n = rawVal as? NSNumber { return n.boolValue }
+                if let b = rawVal as? Bool { return b }
+                return false
+            }()
+
+            if isExpanded != wantExpanded {
+                AXUIElementPerformAction(triangle, kAXPressAction as CFString)
+            }
+            found = true
+            resultExpanded = wantExpanded
+            break
+        }
+
+        if found { break }
+
+        // Fallback: find any AXButton (chevron) near a row whose title matches trackName
+        if let chevron = findElementDFS(root: w, roleFilter: "AXButton", predicate: { el in
+            let desc  = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            let help  = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
+            let target = trackName.lowercased()
+            // Chevron buttons often have "open" / "close" / "expand" / "folder" in description
+            let isChevron = desc.contains("expand") || desc.contains("collapse") ||
+                            desc.contains("öffnen") || desc.contains("schließen") ||
+                            desc.contains("folder") || desc.contains("ordner") ||
+                            help.contains("expand") || help.contains("collapse")
+            guard isChevron else { return false }
+            // Parent or sibling should contain the track name
+            guard let parentVal = getAXAttribute(el, kAXParentAttribute as String) else { return false }
+            let p = parentVal as! AXUIElement
+            let parentTitle = (getAXString(p, kAXTitleAttribute as String) ?? "").lowercased()
+            let parentDesc  = (getAXString(p, kAXDescriptionAttribute as String) ?? "").lowercased()
+            return parentTitle.contains(target) || parentDesc.contains(target) ||
+                   title.contains(target) || desc.contains(target)
+        }) {
+            let err = AXUIElementPerformAction(chevron, kAXPressAction as CFString)
+            found = (err == .success || err == .cannotComplete)
+            resultExpanded = wantExpanded
+        }
+
+        if found { break }
+    }
+
+    guard found else {
+        printJSON(["success": false,
+                   "error": "Track Stack '\(trackName)' not found in Logic Pro arrangement. Ensure the track is visible in the main window."])
+        exit(0)
+    }
+
+    printJSON(["success": true, "track": trackName, "isExpanded": resultExpanded])
+
+case "select-track":
+    // Selects a track in Logic Pro's arrangement/track list, causing the
+    // left Inspector to switch to that track's channel strip.
+    guard let trackName = getArg("--track"), !trackName.isEmpty else {
+        printJSON(["success": false, "error": "Missing --track argument"])
+        exit(0)
+    }
+
+    var selected = false
+
+    let allWindows = getLogicWindows(appElement)
+    for w in allWindows {
+        let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
+        guard subrole == "AXStandardWindow" else { continue }
+
+        let target = trackName.lowercased()
+
+        // Strategy 1: Find an AXRow / AXGroup whose AXTitle exactly or partially matches
+        // the track name and set kAXSelectedAttribute = true
+        if let trackRow = findElementDFS(root: w, roleFilter: "AXRow", predicate: { el in
+            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            let desc  = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            return title.contains(target) || desc.contains(target)
+        }) {
+            let setErr = AXUIElementSetAttributeValue(
+                trackRow,
+                kAXSelectedAttribute as CFString,
+                true as CFTypeRef
+            )
+            if setErr == .success || setErr == .cannotComplete {
+                selected = true
+            }
+            // Also try AXPress as secondary action
+            if !selected {
+                let pressErr = AXUIElementPerformAction(trackRow, kAXPressAction as CFString)
+                selected = (pressErr == .success || pressErr == .cannotComplete)
+            }
+            break
+        }
+
+        // Strategy 2: Fallback – find any static text / cell matching the name and click it
+        if !selected {
+            if let nameCell = findElementDFS(root: w, roleFilter: "AXStaticText", predicate: { el in
+                let val = (getAXString(el, kAXValueAttribute as String) ?? "").lowercased()
+                let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+                return val.contains(target) || title.contains(target)
+            }) {
+                // Click the parent (track header cell) of the label
+                if let parentVal = getAXAttribute(nameCell, kAXParentAttribute as String) {
+                    let p = parentVal as! AXUIElement
+                    let pressErr = AXUIElementPerformAction(p, kAXPressAction as CFString)
+                    selected = (pressErr == .success || pressErr == .cannotComplete)
+                } else {
+                    let pressErr = AXUIElementPerformAction(nameCell, kAXPressAction as CFString)
+                    selected = (pressErr == .success || pressErr == .cannotComplete)
+                }
+            }
+        }
+
+        if selected { break }
+    }
+
+    guard selected else {
+        printJSON(["success": false,
+                   "error": "Track '\(trackName)' not found in Logic Pro arrangement. Ensure Logic Pro's main window is open and the track is visible."])
+        exit(0)
+    }
+
+    printJSON(["success": true, "selectedTrack": trackName])
+
 // MARK: - SPRINT 6: Transport Control Commands
 
 case "transport-play":

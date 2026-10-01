@@ -12,7 +12,9 @@ import {
   ListTracksSchema,
   ProposeMixAdjustmentSchema,
   MatchReferenceSpectrumSchema,
-  SetActiveSkillSchema
+  SetActiveSkillSchema,
+  SetFolderStateSchema,
+  SelectTrackSchema
 } from './tools.js';
 
 export interface ServerOptions {
@@ -260,6 +262,56 @@ export class MixingBuddyMCPServer {
           return {
             isError: true,
             content: [{ type: 'text', text: `Skill activation failed: ${String(err)}` }]
+          };
+        }
+      }
+    );
+
+    // 9. Set Folder State (Sprint 7: Arranger Navigation)
+    this.server.tool(
+      'mcp__set_folder_state',
+      'Expands or collapses a folder track or track stack (e.g. Drums, Vocals) in the Logic Pro arrangement.',
+      SetFolderStateSchema.shape,
+      async (args) => {
+        try {
+          const result = await this.handlers.setFolderState(args);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        } catch (err: unknown) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Set folder state failed: ${String(err)}` }]
+          };
+        }
+      }
+    );
+
+    // 10. Select Track (Sprint 7: Arranger Navigation)
+    this.server.tool(
+      'mcp__select_track',
+      'Selects a specific track in the arrangement, bringing its channel strip into focus in the left inspector.',
+      SelectTrackSchema.shape,
+      async (args) => {
+        try {
+          const result = await this.handlers.selectTrack(args);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        } catch (err: unknown) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Select track failed: ${String(err)}` }]
           };
         }
       }

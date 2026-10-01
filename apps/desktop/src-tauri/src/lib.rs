@@ -1824,6 +1824,56 @@ async fn daw_locate_bar(bar: u32, state: State<'_, AppState>) -> Result<(), Stri
     }
 }
 
+#[tauri::command]
+async fn set_folder_expanded(track_name: String, expanded: bool) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if bridge_path.exists() {
+            return execute_logic_ax_bridge(
+                &bridge_path,
+                &[
+                    "set-folder-expanded".to_string(),
+                    "--track".to_string(),
+                    track_name,
+                    "--expanded".to_string(),
+                    expanded.to_string(),
+                ],
+            );
+        }
+        Err("logic-ax-bridge sidecar not found".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (track_name, expanded);
+        Ok(serde_json::json!({"success": true, "stub": true}))
+    }
+}
+
+#[tauri::command]
+async fn select_track(track_name: String) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if bridge_path.exists() {
+            return execute_logic_ax_bridge(
+                &bridge_path,
+                &[
+                    "select-track".to_string(),
+                    "--track".to_string(),
+                    track_name,
+                ],
+            );
+        }
+        Err("logic-ax-bridge sidecar not found".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = track_name;
+        Ok(serde_json::json!({"success": true, "stub": true}))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -1886,7 +1936,9 @@ pub fn run() {
             delete_mixing_skill,
             daw_play,
             daw_stop,
-            daw_locate_bar
+            daw_locate_bar,
+            set_folder_expanded,
+            select_track
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");
