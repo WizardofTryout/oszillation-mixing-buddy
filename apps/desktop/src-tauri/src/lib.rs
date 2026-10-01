@@ -1874,6 +1874,38 @@ async fn select_track(track_name: String) -> Result<serde_json::Value, String> {
     }
 }
 
+#[tauri::command]
+async fn load_plugin_into_slot(
+    track: String,
+    slot: u32,
+    plugin_path: String,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if bridge_path.exists() {
+            return execute_logic_ax_bridge(
+                &bridge_path,
+                &[
+                    "load-plugin".to_string(),
+                    "--track".to_string(),
+                    track,
+                    "--slot".to_string(),
+                    slot.to_string(),
+                    "--plugin-path".to_string(),
+                    plugin_path,
+                ],
+            );
+        }
+        Err("logic-ax-bridge sidecar not found".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (track, slot, plugin_path);
+        Ok(serde_json::json!({"success": true, "stub": true}))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -1938,7 +1970,8 @@ pub fn run() {
             daw_stop,
             daw_locate_bar,
             set_folder_expanded,
-            select_track
+            select_track,
+            load_plugin_into_slot
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

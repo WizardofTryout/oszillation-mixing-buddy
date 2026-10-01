@@ -29,7 +29,8 @@ import type {
   MatchReferenceSpectrumInput,
   SetActiveSkillInput,
   SetFolderStateInput,
-  SelectTrackInput
+  SelectTrackInput,
+  LoadPluginInput
 } from './tools.js';
 
 export interface ResonancePeak {
@@ -930,5 +931,47 @@ export class MixingToolHandlers {
     const { MacOSAccessibilityClient } = await import('@mixing-buddy/daw-adapters');
     const axClient = new MacOSAccessibilityClient();
     return await axClient.selectTrack(args.trackName);
+  }
+
+  /**
+   * Sprint 8: Dynamically loads a plugin into an Audio FX slot via Logic Pro's native menu hierarchy
+   */
+  public async loadPlugin(args: LoadPluginInput): Promise<{
+    success: boolean;
+    track?: string;
+    slot?: number;
+    plugin?: string;
+    error?: string;
+  }> {
+    // 1. Try Desktop Companion IPC server (port 48123)
+    try {
+      const res = await fetch('http://127.0.0.1:48123/api/plugins/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          track: args.trackName,
+          slot: args.slotIndex,
+          pluginPath: args.pluginPath
+        }),
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.ok) {
+        const data = (await res.json()) as {
+          success: boolean;
+          track?: string;
+          slot?: number;
+          plugin?: string;
+          error?: string;
+        };
+        return data;
+      }
+    } catch {
+      // Fallback to direct bridge
+    }
+
+    // 2. Direct MacOSAccessibilityClient execution
+    const { MacOSAccessibilityClient } = await import('@mixing-buddy/daw-adapters');
+    const axClient = new MacOSAccessibilityClient();
+    return await axClient.loadPlugin(args.trackName, args.slotIndex, args.pluginPath);
   }
 }

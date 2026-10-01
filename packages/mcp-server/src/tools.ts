@@ -89,6 +89,14 @@ export const SelectTrackSchema = z.object({
   trackName: z.string().describe('Name of the track to select in Logic Pro\'s arrangement. Selection causes the left Inspector to show this track\'s channel strip (e.g. "Snare 2", "Lead Vox", "Bass DI").')
 });
 
+// Sprint 8: Dynamic Plugin Loading via Logic Menus
+
+export const LoadPluginSchema = z.object({
+  trackName: z.string().describe('Name of the target track in Logic Pro (e.g. "Snare 2", "Motown Revisited Kit", "Lead Vox")'),
+  slotIndex: z.number().int().min(1).max(15).describe('Audio FX insert slot number (1 to 15)'),
+  pluginPath: z.string().describe('Hierarchy or name of the plugin to load, separated by ">" (e.g. "EQ > Channel EQ", "Dynamics > Compressor", "Audio Units > FabFilter > Pro-Q 3")')
+});
+
 export type GetMixTelemetryInput = z.infer<typeof GetMixTelemetrySchema>;
 export type ListTracksInput = z.infer<typeof ListTracksSchema>;
 export type ParameterDeltaInput = z.infer<typeof ParameterDeltaSchema>;
@@ -101,3 +109,4 @@ export type MatchReferenceSpectrumInput = z.infer<typeof MatchReferenceSpectrumS
 export type SetActiveSkillInput = z.infer<typeof SetActiveSkillSchema>;
 export type SetFolderStateInput = z.infer<typeof SetFolderStateSchema>;
 export type SelectTrackInput = z.infer<typeof SelectTrackSchema>;
+export type LoadPluginInput = z.infer<typeof LoadPluginSchema>;

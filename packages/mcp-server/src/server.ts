@@ -14,7 +14,8 @@ import {
   MatchReferenceSpectrumSchema,
   SetActiveSkillSchema,
   SetFolderStateSchema,
-  SelectTrackSchema
+  SelectTrackSchema,
+  LoadPluginSchema
 } from './tools.js';
 
 export interface ServerOptions {
@@ -312,6 +313,31 @@ export class MixingBuddyMCPServer {
           return {
             isError: true,
             content: [{ type: 'text', text: `Select track failed: ${String(err)}` }]
+          };
+        }
+      }
+    );
+
+    // 11. Load Plugin (Sprint 8: Dynamic Plugin Loading via Logic Menus)
+    this.server.tool(
+      'mcp__load_plugin',
+      "Dynamically inserts and loads a plugin into an Audio FX slot of a track using Logic Pro's native menu hierarchy.",
+      LoadPluginSchema.shape,
+      async (args) => {
+        try {
+          const result = await this.handlers.loadPlugin(args);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        } catch (err: unknown) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Load plugin failed: ${String(err)}` }]
           };
         }
       }

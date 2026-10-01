@@ -646,11 +646,210 @@ func parseChannelStripElement(_ strip: AXUIElement) -> ParsedChannelStrip {
     )
 }
 
+// MARK: - Sprint 8 Helpers: Channel Strip and Audio FX Menu Traversal
+
+func selectTrackByName(appElement: AXUIElement, trackName: String) -> Bool {
+    let allWindows = getLogicWindows(appElement)
+    let target = trackName.lowercased()
+    for w in allWindows {
+        let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
+        guard subrole == "AXStandardWindow" else { continue }
+        if let trackRow = findElementDFS(root: w, roleFilter: "AXRow", predicate: { el in
+            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            let desc  = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            return title.contains(target) || desc.contains(target)
+        }) {
+            _ = AXUIElementSetAttributeValue(trackRow, kAXSelectedAttribute as CFString, true as CFTypeRef)
+            _ = AXUIElementPerformAction(trackRow, kAXPressAction as CFString)
+            return true
+        }
+        if let nameCell = findElementDFS(root: w, roleFilter: "AXStaticText", predicate: { el in
+            let val = (getAXString(el, kAXValueAttribute as String) ?? "").lowercased()
+            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            return val.contains(target) || title.contains(target)
+        }) {
+            if let parentVal = getAXAttribute(nameCell, kAXParentAttribute as String) {
+                let p = parentVal as! AXUIElement
+                _ = AXUIElementPerformAction(p, kAXPressAction as CFString)
+                return true
+            } else {
+                _ = AXUIElementPerformAction(nameCell, kAXPressAction as CFString)
+                return true
+            }
+        }
+    }
+    return false
+}
+
+func findChannelStripForTrack(appElement: AXUIElement, trackName: String) -> ParsedChannelStrip? {
+    let allWins = getLogicWindows(appElement)
+    let stripElements = findAllChannelStripElements(allWins)
+    
+    for el in stripElements {
+        let parsed = parseChannelStripElement(el)
+        if matchesTrackName(parsed.trackName, query: trackName) {
+            return parsed
+        }
+    }
+    
+    // Fallback: Select track to bring Inspector into focus
+    if selectTrackByName(appElement: appElement, trackName: trackName) {
+        usleep(150_000)
+        let updatedWins = getLogicWindows(appElement)
+        let updatedStrips = findAllChannelStripElements(updatedWins)
+        for el in updatedStrips {
+            let parsed = parseChannelStripElement(el)
+            if matchesTrackName(parsed.trackName, query: trackName) {
+                return parsed
+            }
+        }
+        if let first = updatedStrips.first {
+            return parseChannelStripElement(first)
+        }
+    }
+    return nil
+}
+
+func findAudioFXSlotButton(strip: ParsedChannelStrip, slotNum: Int) -> AXUIElement? {
+    // 1. If slot is occupied by an existing plugin
+    if slotNum >= 1 && slotNum <= strip.pluginGroups.count {
+        let pg = strip.pluginGroups[slotNum - 1].group
+        for c in getAXChildren(pg) {
+            let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+            if r == "AXPopUpButton" || r == "AXButton" {
+                return c
+            }
+        }
+        return pg
+    }
+    
+    // 2. If slot is empty: collect empty Audio FX slot buttons
+    let children = getAXChildren(strip.element)
+    var emptyFXButtons: [AXUIElement] = []
+    
+    for c in children {
+        let role = getAXString(c, kAXRoleAttribute as String) ?? ""
+        guard role == "AXButton" || role == "AXPopUpButton" else { continue }
+        let desc = (getAXString(c, kAXDescriptionAttribute as String) ?? "").lowercased()
+        let title = (getAXString(c, kAXTitleAttribute as String) ?? "").lowercased()
+        let help = (getAXString(c, kAXHelpAttribute as String) ?? "").lowercased()
+        
+        let isIgnored = desc.contains("ton aus") || desc.contains("mute") || desc.contains("stumm") ||
+                        desc.contains("solo") || desc.contains("rec") || desc.contains("aufnahme") ||
+                        desc.contains("read") || desc.contains("touch") || desc.contains("latch") ||
+                        desc.contains("automation") || desc.contains("input") || desc.contains("eingang") ||
+                        desc.contains("stereo-ausgabe") || desc.contains("output") || desc.contains("send") ||
+                        title == "m" || title == "s" || title == "r" || title == "i"
+        guard !isIgnored else { continue }
+        
+        if desc.contains("audio-fx") || desc.contains("audio fx") || desc.contains("audio-effekt") ||
+           desc.contains("insert") || desc.contains("plug-in") || desc.contains("plugin") ||
+           help.contains("audio-fx") || help.contains("insert") || help.contains("plug-in") {
+            emptyFXButtons.append(c)
+        } else if desc.isEmpty && title.isEmpty {
+            emptyFXButtons.append(c)
+        }
+    }
+    
+    let emptyIdx = slotNum - (strip.pluginGroups.count + 1)
+    if emptyIdx >= 0 && emptyIdx < emptyFXButtons.count {
+        return emptyFXButtons[emptyIdx]
+    }
+    return emptyFXButtons.first
+}
+
+func findActiveMenu(appElement: AXUIElement, slotButton: AXUIElement) -> AXUIElement? {
+    // 1. Direct children of slotButton
+    for c in getAXChildren(slotButton) {
+        if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" {
+            return c
+        }
+    }
+    // 2. Direct children of appElement
+    for c in getAXChildren(appElement) {
+        if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" {
+            return c
+        }
+    }
+    // 3. Search in windows
+    for w in getLogicWindows(appElement) {
+        if (getAXString(w, kAXRoleAttribute as String) ?? "") == "AXMenu" {
+            return w
+        }
+        for c in getAXChildren(w) {
+            if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" {
+                return c
+            }
+        }
+    }
+    // 4. DFS search in appElement
+    if let menu = findElementDFS(root: appElement, roleFilter: "AXMenu", maxDepth: 4, predicate: { _ in true }) {
+        return menu
+    }
+    return nil
+}
+
+func getSubmenu(of item: AXUIElement, appElement: AXUIElement) -> AXUIElement? {
+    // 1. Check children of the item
+    for c in getAXChildren(item) {
+        if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" {
+            return c
+        }
+    }
+    // 2. Check AXSubmenu attribute if present
+    if let subVal = getAXAttribute(item, "AXSubmenu") {
+        return (subVal as! AXUIElement)
+    }
+    // 3. Trigger submenu opening with AXPress
+    _ = AXUIElementPerformAction(item, kAXPressAction as CFString)
+    usleep(80_000)
+    for c in getAXChildren(item) {
+        if (getAXString(c, kAXRoleAttribute as String) ?? "") == "AXMenu" {
+            return c
+        }
+    }
+    // 4. In macOS, newly opened submenus may be appended to appElement's children
+    let menus = getAXChildren(appElement).filter {
+        (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXMenu"
+    }
+    if let lastMenu = menus.last {
+        return lastMenu
+    }
+    return nil
+}
+
+func findMenuItem(menu: AXUIElement, query: String) -> AXUIElement? {
+    let items = getAXChildren(menu).filter {
+        (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXMenuItem"
+    }
+    let q = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    
+    // Exact match
+    if let exact = items.first(where: {
+        (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == q
+    }) {
+        return exact
+    }
+    
+    // Substring match
+    if let sub = items.first(where: {
+        (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased().contains(q)
+    }) {
+        return sub
+    }
+    return nil
+}
+
+func closeMenu(_ menu: AXUIElement?) {
+    guard let m = menu else { return }
+    _ = AXUIElementPerformAction(m, kAXCancelAction as CFString)
+}
+
 // MARK: - CLI Argument Parser
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-    printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks | list-channel-strips | set-fader | set-pan | open-insert | close-plugin-window"])
+    printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks | list-channel-strips | set-fader | set-pan | open-insert | close-plugin-window | set-folder-expanded | select-track | load-plugin | list-insert-menu"])
     exit(1)
 }
 
@@ -1538,6 +1737,166 @@ case "select-track":
     }
 
     printJSON(["success": true, "selectedTrack": trackName])
+
+// MARK: - SPRINT 8: Dynamic Plugin Loading via Logic Menus (Audio FX Slots)
+
+case "load-plugin":
+    guard let trackName = getArg("--track"), !trackName.isEmpty else {
+        printJSON(["success": false, "error": "Missing --track argument"])
+        exit(0)
+    }
+    let slotStr = getArg("--slot") ?? "1"
+    guard let slotNum = Int(slotStr), slotNum >= 1 && slotNum <= 15 else {
+        printJSON(["success": false, "error": "Invalid or missing --slot (expected 1 to 15)"])
+        exit(0)
+    }
+    guard let pluginPath = getArg("--plugin-path"), !pluginPath.isEmpty else {
+        printJSON(["success": false, "error": "Missing --plugin-path argument"])
+        exit(0)
+    }
+
+    // 1. Find Channel Strip for track
+    guard let strip = findChannelStripForTrack(appElement: appElement, trackName: trackName) else {
+        printJSON(["success": false, "error": "Channel strip for track '\(trackName)' not found in Logic Pro. Ensure track is visible or mixer is open."])
+        exit(0)
+    }
+
+    // 2. Find Audio FX Slot Button
+    guard let slotButton = findAudioFXSlotButton(strip: strip, slotNum: slotNum) else {
+        printJSON(["success": false, "error": "Audio FX slot \(slotNum) button not found on track '\(strip.trackName)'."])
+        exit(0)
+    }
+
+    // 3. Click slot button to open native AXMenu
+    let pressErr = AXUIElementPerformAction(slotButton, kAXPressAction as CFString)
+    guard pressErr == .success || pressErr == .cannotComplete else {
+        printJSON(["success": false, "error": "Failed to click Audio FX slot \(slotNum) button (AXError: \(pressErr.rawValue))."])
+        exit(0)
+    }
+
+    // Wait up to 500ms for AXMenu to appear
+    var activeMenu: AXUIElement? = nil
+    for _ in 0..<10 {
+        usleep(50_000)
+        if let m = findActiveMenu(appElement: appElement, slotButton: slotButton) {
+            activeMenu = m
+            break
+        }
+    }
+
+    guard let rootMenu = activeMenu else {
+        printJSON(["success": false, "error": "Logic Pro insert menu did not appear after clicking slot \(slotNum)."])
+        exit(0)
+    }
+
+    // 4. Menu Navigation
+    let segments = pluginPath.components(separatedBy: ">").map {
+        $0.trimmingCharacters(in: .whitespacesAndNewlines)
+    }.filter { !$0.isEmpty }
+
+    var currentMenu = rootMenu
+    var targetItem: AXUIElement? = nil
+
+    for (idx, seg) in segments.enumerated() {
+        let isFinal = (idx == segments.count - 1)
+        if let item = findMenuItem(menu: currentMenu, query: seg) {
+            if isFinal {
+                targetItem = item
+                break
+            } else {
+                guard let nextMenu = getSubmenu(of: item, appElement: appElement) else {
+                    closeMenu(rootMenu)
+                    printJSON(["success": false, "error": "Submenu '\(seg)' could not be opened in insert menu."])
+                    exit(0)
+                }
+                currentMenu = nextMenu
+            }
+        } else {
+            // Fallback for single segment query: recursively check submenus
+            if segments.count == 1 {
+                let items = getAXChildren(currentMenu).filter {
+                    (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXMenuItem"
+                }
+                for it in items {
+                    if let sub = getSubmenu(of: it, appElement: appElement) {
+                        if let found = findMenuItem(menu: sub, query: seg) {
+                            targetItem = found
+                            break
+                        }
+                    }
+                }
+                if targetItem != nil { break }
+            }
+
+            closeMenu(rootMenu)
+            printJSON(["success": false, "error": "Menu item '\(seg)' not found in insert menu."])
+            exit(0)
+        }
+    }
+
+    guard let finalItem = targetItem else {
+        closeMenu(rootMenu)
+        printJSON(["success": false, "error": "Plugin '\(pluginPath)' not found in insert menu."])
+        exit(0)
+    }
+
+    let selectErr = AXUIElementPerformAction(finalItem, kAXPressAction as CFString)
+    guard selectErr == .success || selectErr == .cannotComplete else {
+        closeMenu(rootMenu)
+        printJSON(["success": false, "error": "Failed to select plugin item '\(pluginPath)' (AXError: \(selectErr.rawValue))."])
+        exit(0)
+    }
+
+    // Wait up to 400ms for menu to close and plugin to instantiate
+    usleep(400_000)
+
+    printJSON([
+        "success": true,
+        "track": strip.trackName,
+        "slot": slotNum,
+        "plugin": pluginPath
+    ])
+
+case "list-insert-menu":
+    guard let trackName = getArg("--track"), !trackName.isEmpty else {
+        printJSON(["success": false, "error": "Missing --track argument"])
+        exit(0)
+    }
+    let slotStr = getArg("--slot") ?? "1"
+    let slotNum = Int(slotStr) ?? 1
+
+    guard let strip = findChannelStripForTrack(appElement: appElement, trackName: trackName) else {
+        printJSON(["success": false, "error": "Channel strip for track '\(trackName)' not found in Logic Pro."])
+        exit(0)
+    }
+
+    guard let slotButton = findAudioFXSlotButton(strip: strip, slotNum: slotNum) else {
+        printJSON(["success": false, "error": "Audio FX slot \(slotNum) button not found on track '\(strip.trackName)'."])
+        exit(0)
+    }
+
+    _ = AXUIElementPerformAction(slotButton, kAXPressAction as CFString)
+    var activeMenu: AXUIElement? = nil
+    for _ in 0..<10 {
+        usleep(50_000)
+        if let m = findActiveMenu(appElement: appElement, slotButton: slotButton) {
+            activeMenu = m
+            break
+        }
+    }
+
+    guard let rootMenu = activeMenu else {
+        printJSON(["success": false, "error": "Logic Pro insert menu did not appear after clicking slot \(slotNum)."])
+        exit(0)
+    }
+
+    let items = getAXChildren(rootMenu).filter {
+        (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXMenuItem"
+    }
+    let names = items.compactMap { getAXString($0, kAXTitleAttribute as String) }.filter { !$0.isEmpty }
+
+    closeMenu(rootMenu)
+    printJSON(["success": true, "track": strip.trackName, "slot": slotNum, "menuItems": names])
 
 // MARK: - SPRINT 6: Transport Control Commands
 

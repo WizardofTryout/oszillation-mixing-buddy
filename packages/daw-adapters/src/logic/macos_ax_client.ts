@@ -873,4 +873,59 @@ export class MacOSAccessibilityClient {
     }
     return res;
   }
+
+  /**
+   * Dynamically loads a plugin into an Audio FX slot via Logic Pro's native menu hierarchy
+   */
+  public async loadPlugin(
+    trackName: string,
+    slotIndex: number,
+    pluginPath: string
+  ): Promise<{ success: boolean; track?: string; slot?: number; plugin?: string; error?: string }> {
+    const res = await this.runBridge<{
+      success: boolean;
+      track?: string;
+      slot?: number;
+      plugin?: string;
+      error?: string;
+    }>([
+      'load-plugin',
+      '--track',
+      trackName,
+      '--slot',
+      String(slotIndex),
+      '--plugin-path',
+      pluginPath
+    ]);
+    if (!res) {
+      return { success: false, error: 'Failed to communicate with logic-ax-bridge sidecar' };
+    }
+    return res;
+  }
+
+  /**
+   * Lists available top-level plugin menu items for an Audio FX slot
+   */
+  public async listInsertMenu(
+    trackName: string,
+    slotIndex: number
+  ): Promise<{ success: boolean; track?: string; slot?: number; menuItems?: string[]; error?: string }> {
+    const res = await this.runBridge<{
+      success: boolean;
+      track?: string;
+      slot?: number;
+      menuItems?: string[];
+      error?: string;
+    }>([
+      'list-insert-menu',
+      '--track',
+      trackName,
+      '--slot',
+      String(slotIndex)
+    ]);
+    if (!res) {
+      return { success: false, error: 'Failed to communicate with logic-ax-bridge sidecar' };
+    }
+    return res;
+  }
 }
