@@ -584,14 +584,133 @@ export class MixingToolHandlers {
     auditioning: boolean;
     startBar: number;
     endBar: number;
+    durationSeconds: number;
+    telemetrySummary: {
+      peakLufs: number;
+      avgLufs: number;
+      truePeakDb: number;
+      dynamicRange: number;
+      crestFactorDb: number;
+      sampleCount: number;
+    } | null;
   }> {
-    if (this.dawDriver && args.autoPlay !== false) {
-      await this.dawDriver.playRegion(args.startBar, args.endBar);
+    const duration = args.durationSeconds ?? 8;
+    const IPC_BASE = 'http://127.0.0.1:48123';
+
+    // ── 1. Locate playhead ───────────────────────────────────────────────────
+    try {
+      await fetch(`${IPC_BASE}/api/transport/locate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bar: args.startBar })
+      });
+    } catch {
+      // IPC server may not be reachable in unit tests; continue anyway
     }
+
+    // ── 2. Start playback ────────────────────────────────────────────────────
+    try {
+      await fetch(`${IPC_BASE}/api/transport/play`, { method: 'POST' });
+    } catch {
+      // quiet fallback
+    }
+
+    // Also delegate to the DAW driver if available
+    if (this.dawDriver && args.autoPlay !== false) {
+      try {
+        await this.dawDriver.playRegion(args.startBar, args.endBar);
+      } catch {
+        // quiet fallback
+      }
+    }
+
+    // ── 3. Collect telemetry for durationSeconds ─────────────────────────────
+    const telemetrySnapshots: MetrologyTelemetryFrame[] = [];
+    if (this.latestTelemetry) {
+      telemetrySnapshots.push(this.latestTelemetry);
+    }
+
+    const pollIntervalMs = 200;
+    const totalPolls = Math.ceil((duration * 1000) / pollIntervalMs);
+
+    await new Promise<void>((resolve) => {
+      let count = 0;
+      const iv = setInterval(() => {
+        if (this.latestTelemetry) {
+          telemetrySnapshots.push(this.latestTelemetry);
+        }
+        count++;
+        if (count >= totalPolls) {
+          clearInterval(iv);
+          resolve();
+        }
+      }, pollIntervalMs);
+    });
+
+    // ── 4. Stop playback ─────────────────────────────────────────────────────
+    try {
+      await fetch(`${IPC_BASE}/api/transport/stop`, { method: 'POST' });
+    } catch {
+      // quiet fallback
+    }
+
+    // ── 5. Summarize collected telemetry ─────────────────────────────────────
+    let telemetrySummary: {
+      peakLufs: number;
+      avgLufs: number;
+      truePeakDb: number;
+      dynamicRange: number;
+      crestFactorDb: number;
+      sampleCount: number;
+    } | null = null;
+
+    if (telemetrySnapshots.length > 0) {
+      const lufsValues = telemetrySnapshots
+        .map((f) => f.loudness?.momentaryLufs ?? -60)
+        .filter((v) => v > -60);
+
+      const truePeaks = telemetrySnapshots
+        .map((f) => Math.max(f.loudness?.truePeakDb?.left ?? -60, f.loudness?.truePeakDb?.right ?? -60))
+        .filter((v) => v > -60);
+
+      const crestValues = telemetrySnapshots
+        .map((f) => f.dynamics?.crestFactorDb ?? 0)
+        .filter((v) => v > 0);
+
+      const avgLufs =
+        lufsValues.length > 0
+          ? lufsValues.reduce((a, b) => a + b, 0) / lufsValues.length
+          : -60;
+
+      const peakLufs = lufsValues.length > 0 ? Math.max(...lufsValues) : -60;
+
+      const peakTruePeak = truePeaks.length > 0 ? Math.max(...truePeaks) : -60;
+
+      const avgCrest =
+        crestValues.length > 0
+          ? crestValues.reduce((a, b) => a + b, 0) / crestValues.length
+          : 0;
+
+      // Dynamic range: difference between loudest and quietest momentary LUFS
+      const minLufs = lufsValues.length > 0 ? Math.min(...lufsValues) : -60;
+      const dynamicRange = peakLufs - minLufs;
+
+      telemetrySummary = {
+        peakLufs: Math.round(peakLufs * 10) / 10,
+        avgLufs: Math.round(avgLufs * 10) / 10,
+        truePeakDb: Math.round(peakTruePeak * 10) / 10,
+        dynamicRange: Math.round(dynamicRange * 10) / 10,
+        crestFactorDb: Math.round(avgCrest * 10) / 10,
+        sampleCount: telemetrySnapshots.length
+      };
+    }
+
     return {
       auditioning: true,
       startBar: args.startBar,
-      endBar: args.endBar
+      endBar: args.endBar,
+      durationSeconds: duration,
+      telemetrySummary
     };
   }
 

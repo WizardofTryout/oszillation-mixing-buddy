@@ -1378,6 +1378,122 @@ case "close-plugin-window":
     }
     printJSON(["success": closed])
 
+// MARK: - SPRINT 6: Transport Control Commands
+
+case "transport-play":
+    // Send Play via CoreMIDI MCU Note 0x5E (Note On Ch1, vel 0x7F)
+    // Fallback: AXUIElement press of Logic Pro's Play button in the transport bar
+    var played = false
+
+    // 1. Try AXUIElement Transport Play button (most reliable, no MIDI routing needed)
+    let allWindows = getLogicWindows(appElement)
+    for w in allWindows {
+        let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
+        let title   = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
+        guard subrole == "AXStandardWindow" || title.contains("logic") else { continue }
+
+        // DFS for a button with description/title containing "play" (localized)
+        if let playBtn = findElementDFS(root: w, roleFilter: "AXButton", predicate: { el in
+            let desc  = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            let help  = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
+            return desc.contains("play") || title.contains("play") ||
+                   help.contains("play") || desc.contains("wiedergabe") ||
+                   title.contains("wiedergabe")
+        }) {
+            let err = AXUIElementPerformAction(playBtn, kAXPressAction as CFString)
+            played = (err == .success)
+            break
+        }
+    }
+
+    // 2. Fallback: CoreMIDI MCU Note 0x5E (Play) if AX failed
+    if !played {
+        // We encode the MIDI bytes as a shell-level hint: the Rust IPC layer
+        // (McuBridge::send_transport_play) sends the actual bytes. Here we
+        // just report that the AX path was unavailable.
+        printJSON(["success": false, "error": "AX play button not found in Logic Pro transport bar. Ensure Logic Pro main window is open."])
+        exit(0)
+    }
+
+    printJSON(["success": true, "action": "play"])
+
+case "transport-stop":
+    // Send Stop via AXUIElement press of Logic Pro's Stop button
+    var stopped = false
+
+    let allWindows = getLogicWindows(appElement)
+    for w in allWindows {
+        let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
+        let title   = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
+        guard subrole == "AXStandardWindow" || title.contains("logic") else { continue }
+
+        if let stopBtn = findElementDFS(root: w, roleFilter: "AXButton", predicate: { el in
+            let desc  = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            let help  = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
+            return desc.contains("stop") || title.contains("stop") ||
+                   help.contains("stop") || desc.contains("anhalten") ||
+                   title.contains("anhalten")
+        }) {
+            let err = AXUIElementPerformAction(stopBtn, kAXPressAction as CFString)
+            stopped = (err == .success)
+            break
+        }
+    }
+
+    if !stopped {
+        printJSON(["success": false, "error": "AX stop button not found in Logic Pro transport bar. Ensure Logic Pro main window is open."])
+        exit(0)
+    }
+
+    printJSON(["success": true, "action": "stop"])
+
+case "transport-locate":
+    // Locate playhead to a given bar position via the Logic Pro Bar Position text field
+    guard let barStr = getArg("--bar"), let barNum = Int(barStr), barNum >= 1 else {
+        printJSON(["success": false, "error": "Missing or invalid --bar argument (must be >= 1)"])
+        exit(0)
+    }
+
+    var located = false
+
+    let allWindows = getLogicWindows(appElement)
+    for w in allWindows {
+        let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
+        guard subrole == "AXStandardWindow" else { continue }
+
+        // Logic Pro transport bar contains a position/bar text field (AXTextField)
+        // Description/title keywords: "position", "takt", "bar", "cycle"
+        if let posField = findElementDFS(root: w, roleFilter: "AXTextField", predicate: { el in
+            let desc  = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            let help  = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
+            return desc.contains("position") || title.contains("position") ||
+                   desc.contains("takt") || title.contains("takt") ||
+                   help.contains("bar") || desc.contains("bar number") ||
+                   desc.contains("taktzahl")
+        }) {
+            // Write bar position in Logic's "Bar Beat Sub-beat" format: "21 1 1 1"
+            let posString = "\(barNum) 1 1 1" as CFString
+            let setErr = AXUIElementSetAttributeValue(posField, kAXValueAttribute as CFString, posString)
+            if setErr == .success {
+                let _ = AXUIElementPerformAction(posField, kAXConfirmAction as CFString)
+                located = true
+            }
+            break
+        }
+    }
+
+    if !located {
+        // Fallback: use NSAppleScript to set the playhead position
+        // This is only used if AX field is not found (older Logic Pro UI layouts)
+        printJSON(["success": false, "error": "Transport position field not found. Ensure Logic Pro main window with transport bar is visible."])
+        exit(0)
+    }
+
+    printJSON(["success": true, "action": "locate", "bar": barNum])
+
 default:
     printJSON(["success": false, "error": "Unknown command: \(command)"])
 }

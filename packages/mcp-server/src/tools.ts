@@ -51,7 +51,8 @@ export const ExecuteMixAdjustmentSchema = z.object({
 export const AuditionRegionSchema = z.object({
   startBar: z.number().positive().describe('Start bar number for cycle/loop region'),
   endBar: z.number().positive().describe('End bar number for cycle/loop region'),
-  autoPlay: z.boolean().optional().describe('Immediately trigger DAW playback on the audition region (default: true)')
+  autoPlay: z.boolean().optional().describe('Immediately trigger DAW playback on the audition region (default: true)'),
+  durationSeconds: z.number().positive().optional().describe('Duration of the audit window in seconds (default: 8). Telemetry is collected for this duration.')
 });
 
 export const GetProjectInfoSchema = z.object({});

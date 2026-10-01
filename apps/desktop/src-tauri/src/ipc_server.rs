@@ -599,6 +599,127 @@ async fn handle_connection(
                 let _ = stream.write_all(resp.as_bytes()).await;
                 let _ = stream.flush().await;
                 return;
+            } else if path.contains("/api/transport/play") {
+                // Sprint 6: Transport Play — try AX bridge first, fall back to MCU MIDI
+                let body = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let bridge_path = crate::resolve_bridge_path();
+                        if bridge_path.exists() {
+                            match crate::execute_logic_ax_bridge(&bridge_path, &["transport-play".to_string()]) {
+                                Ok(val) => {
+                                    // AX success: also send MCU MIDI as belt-and-suspenders
+                                    let _ = mcu_bridge.send_transport_play();
+                                    val.to_string()
+                                }
+                                Err(_) => {
+                                    // AX failed: try pure MIDI path
+                                    match mcu_bridge.send_transport_play() {
+                                        Ok(()) => serde_json::json!({"success": true, "action": "play", "via": "midi"}).to_string(),
+                                        Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
+                                    }
+                                }
+                            }
+                        } else {
+                            match mcu_bridge.send_transport_play() {
+                                Ok(()) => serde_json::json!({"success": true, "action": "play", "via": "midi"}).to_string(),
+                                Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
+                            }
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        serde_json::json!({"success": true, "action": "play", "via": "stub"}).to_string()
+                    }
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
+            } else if path.contains("/api/transport/stop") {
+                let body = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let bridge_path = crate::resolve_bridge_path();
+                        if bridge_path.exists() {
+                            match crate::execute_logic_ax_bridge(&bridge_path, &["transport-stop".to_string()]) {
+                                Ok(val) => {
+                                    let _ = mcu_bridge.send_transport_stop();
+                                    val.to_string()
+                                }
+                                Err(_) => {
+                                    match mcu_bridge.send_transport_stop() {
+                                        Ok(()) => serde_json::json!({"success": true, "action": "stop", "via": "midi"}).to_string(),
+                                        Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
+                                    }
+                                }
+                            }
+                        } else {
+                            match mcu_bridge.send_transport_stop() {
+                                Ok(()) => serde_json::json!({"success": true, "action": "stop", "via": "midi"}).to_string(),
+                                Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
+                            }
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        serde_json::json!({"success": true, "action": "stop", "via": "stub"}).to_string()
+                    }
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
+            } else if path.contains("/api/transport/locate") {
+                // Parse { "bar": 21 } from body
+                let bar: u32 = serde_json::from_str::<serde_json::Value>(&body_str)
+                    .ok()
+                    .and_then(|v| v.get("bar").and_then(|b| b.as_u64()))
+                    .map(|b| b as u32)
+                    .unwrap_or(1);
+
+                let body = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let bridge_path = crate::resolve_bridge_path();
+                        if bridge_path.exists() {
+                            match crate::execute_logic_ax_bridge(
+                                &bridge_path,
+                                &["transport-locate".to_string(), "--bar".to_string(), bar.to_string()],
+                            ) {
+                                Ok(val) => val.to_string(),
+                                Err(_) => {
+                                    match mcu_bridge.send_transport_locate(bar) {
+                                        Ok(()) => serde_json::json!({"success": true, "action": "locate", "bar": bar, "via": "midi"}).to_string(),
+                                        Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
+                                    }
+                                }
+                            }
+                        } else {
+                            match mcu_bridge.send_transport_locate(bar) {
+                                Ok(()) => serde_json::json!({"success": true, "action": "locate", "bar": bar, "via": "midi"}).to_string(),
+                                Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
+                            }
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        serde_json::json!({"success": true, "action": "locate", "bar": bar, "via": "stub"}).to_string()
+                    }
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
             } else {
                 // Action proposal sync (e.g. /api/proposals)
                 if !body_str.trim().is_empty() {
@@ -615,6 +736,7 @@ async fn handle_connection(
                 let _ = stream.flush().await;
                 return;
             }
+
         } else if peek_str.starts_with("OPTIONS ") {
             let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: POST, GET, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = stream.write_all(resp.as_bytes()).await;

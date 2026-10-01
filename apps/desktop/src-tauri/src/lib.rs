@@ -1751,6 +1751,79 @@ async fn delete_mixing_skill(id: String, app: tauri::AppHandle) -> Result<(), St
     Ok(())
 }
 
+// ── Sprint 6: Transport Commands ──────────────────────────────────────────────
+
+#[tauri::command]
+async fn daw_play(state: State<'_, AppState>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if bridge_path.exists() {
+            if let Ok(val) = execute_logic_ax_bridge(&bridge_path, &["transport-play".to_string()]) {
+                if val.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    let _ = state.ipc_server.mcu_bridge.send_transport_play();
+                    return Ok(());
+                }
+            }
+        }
+        state.ipc_server.mcu_bridge.send_transport_play()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = state;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+async fn daw_stop(state: State<'_, AppState>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if bridge_path.exists() {
+            if let Ok(val) = execute_logic_ax_bridge(&bridge_path, &["transport-stop".to_string()]) {
+                if val.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    let _ = state.ipc_server.mcu_bridge.send_transport_stop();
+                    return Ok(());
+                }
+            }
+        }
+        state.ipc_server.mcu_bridge.send_transport_stop()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = state;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+async fn daw_locate_bar(bar: u32, state: State<'_, AppState>) -> Result<(), String> {
+    if bar < 1 {
+        return Err("Bar number must be >= 1".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if bridge_path.exists() {
+            if let Ok(val) = execute_logic_ax_bridge(
+                &bridge_path,
+                &["transport-locate".to_string(), "--bar".to_string(), bar.to_string()],
+            ) {
+                if val.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    return Ok(());
+                }
+            }
+        }
+        state.ipc_server.mcu_bridge.send_transport_locate(bar)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (bar, state);
+        Ok(())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -1810,7 +1883,10 @@ pub fn run() {
             save_mixing_skill,
             list_mixing_skills,
             get_mixing_skill,
-            delete_mixing_skill
+            delete_mixing_skill,
+            daw_play,
+            daw_stop,
+            daw_locate_bar
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

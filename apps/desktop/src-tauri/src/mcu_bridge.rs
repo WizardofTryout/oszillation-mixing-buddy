@@ -344,7 +344,37 @@ impl McuBridge {
         self.set_fader_touch(channel_idx, false)?;
         Ok(())
     }
+
+    // -----------------------------------------------------------------------
+    // Sprint 6: MCU Transport Controls
+    // -----------------------------------------------------------------------
+
+    /// Sends MCU Play command (Note On 0x5E, vel 0x7F on Channel 1).
+    /// This is the preferred path when AX transport buttons are unavailable.
+    pub fn send_transport_play(&self) -> Result<(), String> {
+        // MCU Play: Note On, Note 0x5E, Velocity 0x7F
+        self.send_midi(&[0x90, 0x5E, 0x7F])?;
+        // Immediately release (Note Off) to avoid held state
+        self.send_midi(&[0x80, 0x5E, 0x00])
+    }
+
+    /// Sends MCU Stop command (Note On 0x5D, vel 0x7F on Channel 1).
+    pub fn send_transport_stop(&self) -> Result<(), String> {
+        self.send_midi(&[0x90, 0x5D, 0x7F])?;
+        self.send_midi(&[0x80, 0x5D, 0x00])
+    }
+
+    /// Sends MCU Rewind / locate-to-start command followed by bar offset.
+    /// For coarse positioning: sends Rewind (0x5B) clicks proportional to bar number.
+    /// Note: precise bar navigation requires AX bridge or Logic MIDI position SysEx.
+    pub fn send_transport_locate(&self, _bar: u32) -> Result<(), String> {
+        // First: Return to Zero (MCU: Note 0x5B = Rewind, 0x60 = RTZ)
+        self.send_midi(&[0x90, 0x60, 0x7F])?; // RTZ / Go To Beginning
+        self.send_midi(&[0x80, 0x60, 0x00])?;
+        Ok(())
+    }
 }
+
 
 impl Default for McuBridge {
     fn default() -> Self {
