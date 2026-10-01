@@ -385,6 +385,10 @@ func matchesTrackName(_ stripName: String, query: String) -> Bool {
 }
 
 func parseDbString(_ raw: String) -> Double {
+    let lower = raw.lowercased()
+    if lower.contains("∞") || lower.contains("inf") {
+        return -100.0
+    }
     let pattern = "[-+]?[0-9]+([.,][0-9]+)?"
     if let regex = try? NSRegularExpression(pattern: pattern),
        let match = regex.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)),
@@ -539,6 +543,77 @@ func findAllChannelStripElements(_ windows: [AXUIElement]) -> [AXUIElement] {
     return []
 }
 
+struct ParsedSendSlot {
+    let slot: Int
+    let bus: Int?
+    let name: String
+    let levelDb: Double
+    let button: AXUIElement?
+    let slider: AXUIElement?
+}
+
+func parseSends(strip: AXUIElement) -> [ParsedSendSlot] {
+    let children = getAXChildren(strip)
+    var sliders: [(slider: AXUIElement, pos: CGPoint)] = []
+    var groups: [(group: AXUIElement, pos: CGPoint, desc: String)] = []
+
+    for c in children {
+        let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+        let d = (getAXString(c, kAXDescriptionAttribute as String) ?? "").lowercased()
+        if r == "AXSlider" && d.contains("send") {
+            var pVal: AnyObject?
+            AXUIElementCopyAttributeValue(c, kAXPositionAttribute as CFString, &pVal)
+            var p = CGPoint.zero
+            if let pv = pVal { AXValueGetValue(pv as! AXValue, .cgPoint, &p) }
+            sliders.append((slider: c, pos: p))
+        }
+        if r == "AXGroup" && (d.contains("bus") || d.contains("aux") || d.contains("send")) {
+            var pVal: AnyObject?
+            AXUIElementCopyAttributeValue(c, kAXPositionAttribute as CFString, &pVal)
+            var p = CGPoint.zero
+            if let pv = pVal { AXValueGetValue(pv as! AXValue, .cgPoint, &p) }
+            groups.append((group: c, pos: p, desc: getAXString(c, kAXDescriptionAttribute as String) ?? ""))
+        }
+    }
+
+    sliders.sort { $0.pos.y < $1.pos.y }
+
+    var result: [ParsedSendSlot] = []
+    for (idx, sItem) in sliders.enumerated() {
+        let slotNum = idx + 1
+        let matchingGroup = groups.first { abs($0.pos.y - sItem.pos.y) <= 8.0 }
+        let groupDesc = matchingGroup?.desc ?? "Bus \(slotNum)"
+
+        var busNum: Int? = nil
+        let parts = groupDesc.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { !$0.isEmpty }
+        if let firstNum = parts.first, let num = Int(firstNum) {
+            busNum = num
+        }
+
+        var slotBtn: AXUIElement? = nil
+        if let g = matchingGroup?.group {
+            slotBtn = getAXChildren(g).first { c in
+                let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+                let d = (getAXString(c, kAXDescriptionAttribute as String) ?? "").lowercased()
+                return r == "AXButton" && (d.contains("liste") || d.contains("list") || d.isEmpty)
+            } ?? g
+        }
+
+        let valDesc = getAXString(sItem.slider, kAXValueDescriptionAttribute as String) ?? ""
+        let db = parseDbString(valDesc)
+
+        result.append(ParsedSendSlot(
+            slot: slotNum,
+            bus: busNum,
+            name: groupDesc,
+            levelDb: db,
+            button: slotBtn,
+            slider: sItem.slider
+        ))
+    }
+    return result
+}
+
 struct ParsedChannelStrip {
     let element: AXUIElement
     let trackName: String
@@ -547,10 +622,12 @@ struct ParsedChannelStrip {
     let mute: Bool
     let solo: Bool
     let inserts: [[String: Any]]
+    let sends: [[String: Any]]
     let faderSlider: AXUIElement?
     let faderTextField: AXUIElement?
     let balanceSlider: AXUIElement?
     let pluginGroups: [(name: String, group: AXUIElement)]
+    let sendSlots: [ParsedSendSlot]
 }
 
 func parseChannelStripElement(_ strip: AXUIElement) -> ParsedChannelStrip {
@@ -571,7 +648,6 @@ func parseChannelStripElement(_ strip: AXUIElement) -> ParsedChannelStrip {
         let desc = getAXString(c, kAXDescriptionAttribute as String) ?? ""
         let title = getAXString(c, kAXTitleAttribute as String) ?? ""
         let descLower = desc.lowercased()
-        let titleLower = title.lowercased()
         
         if role == "AXTextField" && descLower == "name" {
             let val = getAXString(c, kAXValueAttribute as String) ?? ""
@@ -615,7 +691,7 @@ func parseChannelStripElement(_ strip: AXUIElement) -> ParsedChannelStrip {
         }
         
         if role == "AXGroup" {
-            let ignored = ["automation", "read", "gruppe", "stereo-ausgabe", "pegelreduktionsmesser"]
+            let ignored = ["automation", "read", "gruppe", "stereo-ausgabe", "pegelreduktionsmesser", "bus", "send", "aux"]
             let isIgnored = ignored.contains(where: { descLower.contains($0) })
             if !desc.isEmpty && !isIgnored {
                 pluginGroups.append((name: desc, group: c))
@@ -630,6 +706,18 @@ func parseChannelStripElement(_ strip: AXUIElement) -> ParsedChannelStrip {
             "name": pg.name
         ])
     }
+
+    // Parse send slots
+    let parsedSendsList = parseSends(strip: strip)
+    var sends: [[String: Any]] = []
+    for s in parsedSendsList {
+        sends.append([
+            "slot": s.slot,
+            "bus": s.bus ?? 0,
+            "name": s.name,
+            "levelDb": s.levelDb
+        ])
+    }
     
     return ParsedChannelStrip(
         element: strip,
@@ -639,10 +727,12 @@ func parseChannelStripElement(_ strip: AXUIElement) -> ParsedChannelStrip {
         mute: muted,
         solo: soloed,
         inserts: inserts,
+        sends: sends,
         faderSlider: faderSlider,
         faderTextField: faderTextField,
         balanceSlider: balanceSlider,
-        pluginGroups: pluginGroups
+        pluginGroups: pluginGroups,
+        sendSlots: parsedSendsList
     )
 }
 
@@ -845,11 +935,147 @@ func closeMenu(_ menu: AXUIElement?) {
     _ = AXUIElementPerformAction(m, kAXCancelAction as CFString)
 }
 
+// MARK: - Sprint 9 Helpers: Bus Sends, Routing & Send Level Control
+
+func findSendSlotButton(strip: ParsedChannelStrip, slotNum: Int) -> AXUIElement? {
+    // 1. If slot is already assigned to a bus, return its button/list button to reassign
+    if slotNum >= 1 && slotNum <= strip.sendSlots.count {
+        return strip.sendSlots[slotNum - 1].button
+    }
+
+    // 2. Otherwise find the unassigned Send slot button (e.g. desc="Taste „Send“" or help containing "Send-Slot")
+    let children = getAXChildren(strip.element)
+    var emptySendButtons: [AXUIElement] = []
+    for c in children {
+        let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+        guard r == "AXButton" || r == "AXPopUpButton" else { continue }
+        let d = (getAXString(c, kAXDescriptionAttribute as String) ?? "").lowercased()
+        let h = (getAXString(c, kAXHelpAttribute as String) ?? "").lowercased()
+        let t = (getAXString(c, kAXTitleAttribute as String) ?? "").lowercased()
+        if (d.contains("send") || h.contains("send-slot") || t.contains("send")) && !d.contains("stereo-ausgabe") && !d.contains("output") {
+            emptySendButtons.append(c)
+        }
+    }
+
+    // In Logic Pro, unassigned send slots are filled in sequence
+    let emptyIdx = slotNum - (strip.sendSlots.count + 1)
+    if emptyIdx >= 0 && emptyIdx < emptySendButtons.count {
+        return emptySendButtons[emptyIdx]
+    }
+    return emptySendButtons.first
+}
+
+func findSendMenu(appElement: AXUIElement) -> AXUIElement? {
+    func findIn(_ el: AXUIElement, depth: Int = 0) -> AXUIElement? {
+        if depth > 6 { return nil }
+        let r = getAXString(el, kAXRoleAttribute as String) ?? ""
+        if r == "AXMenu" {
+            let p = getAXChildren(el)
+            let titles = p.compactMap { getAXString($0, kAXTitleAttribute as String) }
+            if titles.contains("Bus") || titles.contains("Kein Send") || titles.contains("Post-Pan") || titles.contains("No Send") {
+                return el
+            }
+        }
+        for c in getAXChildren(el) {
+            if let m = findIn(c, depth: depth + 1) { return m }
+        }
+        return nil
+    }
+
+    for w in getLogicWindows(appElement) {
+        if let m = findIn(w) { return m }
+    }
+    for c in getAXChildren(appElement) {
+        let r = getAXString(c, kAXRoleAttribute as String) ?? ""
+        if r != "AXMenuBar" {
+            if let m = findIn(c) { return m }
+        }
+    }
+    return nil
+}
+
+func dragSendKnobToDb(slider: AXUIElement, targetDb: Double) -> (success: Bool, finalDb: Double) {
+    var pVal: AnyObject?
+    var sVal: AnyObject?
+    AXUIElementCopyAttributeValue(slider, kAXPositionAttribute as CFString, &pVal)
+    AXUIElementCopyAttributeValue(slider, kAXSizeAttribute as CFString, &sVal)
+    var p = CGPoint.zero
+    var s = CGSize.zero
+    if let pv = pVal { AXValueGetValue(pv as! AXValue, .cgPoint, &p) }
+    if let sv = sVal { AXValueGetValue(sv as! AXValue, .cgSize, &s) }
+    let center = CGPoint(x: p.x + s.width / 2.0, y: p.y + s.height / 2.0)
+
+    // If target is -inf / mute
+    if targetDb <= -70.0 {
+        for _ in 0..<20 {
+            _ = AXUIElementPerformAction(slider, "AXDecrement" as CFString)
+            let desc = getAXString(slider, kAXValueDescriptionAttribute as String) ?? ""
+            if parseDbString(desc) <= -70.0 {
+                return (true, -100.0)
+            }
+        }
+    }
+
+    // If currently at -inf, wake up the knob
+    let initDesc = getAXString(slider, kAXValueDescriptionAttribute as String) ?? ""
+    if parseDbString(initDesc) <= -70.0 && targetDb > -70.0 {
+        _ = AXUIElementPerformAction(slider, "AXIncrement" as CFString)
+        usleep(10_000)
+    }
+
+    let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left)
+    down?.post(tap: .cghidEventTap)
+    usleep(15_000)
+
+    var curY = center.y
+    var bestDb = parseDbString(getAXString(slider, kAXValueDescriptionAttribute as String) ?? "")
+    var bestDiff = abs(bestDb - targetDb)
+
+    for _ in 0..<80 {
+        let curDesc = getAXString(slider, kAXValueDescriptionAttribute as String) ?? ""
+        let curDb = parseDbString(curDesc)
+        let diff = targetDb - curDb // positive means we need higher dB (drag UP = -y)
+
+        if abs(diff) < bestDiff {
+            bestDiff = abs(diff)
+            bestDb = curDb
+        }
+        if abs(diff) <= 0.15 {
+            break
+        }
+
+        let stepY: CGFloat
+        if abs(diff) > 10.0 {
+            stepY = (diff > 0 ? -12.0 : 12.0)
+        } else if abs(diff) > 3.0 {
+            stepY = (diff > 0 ? -4.0 : 4.0)
+        } else if abs(diff) > 1.0 {
+            stepY = (diff > 0 ? -1.5 : 1.5)
+        } else {
+            stepY = (diff > 0 ? -0.5 : 0.5)
+        }
+
+        curY += stepY
+        let dragPt = CGPoint(x: center.x, y: curY)
+        let drag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: dragPt, mouseButton: .left)
+        drag?.post(tap: .cghidEventTap)
+        usleep(6_000)
+    }
+
+    let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: CGPoint(x: center.x, y: curY), mouseButton: .left)
+    up?.post(tap: .cghidEventTap)
+    usleep(25_000)
+
+    let finalDesc = getAXString(slider, kAXValueDescriptionAttribute as String) ?? ""
+    let finalDb = parseDbString(finalDesc)
+    return (abs(finalDb - targetDb) <= 0.5, finalDb)
+}
+
 // MARK: - CLI Argument Parser
 
 let args = Array(CommandLine.arguments.dropFirst())
 guard let command = args.first else {
-    printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks | list-channel-strips | set-fader | set-pan | open-insert | close-plugin-window | set-folder-expanded | select-track | load-plugin | list-insert-menu"])
+    printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks | list-channel-strips | set-fader | set-pan | open-insert | close-plugin-window | set-folder-expanded | select-track | load-plugin | list-insert-menu | set-send-bus | set-send-level"])
     exit(1)
 }
 
@@ -1340,7 +1566,8 @@ case "list-channel-strips":
             "pan": parsed.pan,
             "mute": parsed.mute,
             "solo": parsed.solo,
-            "inserts": parsed.inserts
+            "inserts": parsed.inserts,
+            "sends": parsed.sends
         ])
     }
     printJSON(["success": true, "channelStrips": channelStrips])
@@ -2013,6 +2240,144 @@ case "transport-locate":
     }
 
     printJSON(["success": true, "action": "locate", "bar": barNum])
+
+// MARK: - SPRINT 9: Bus Sends, Routing & Send Level Control
+
+case "set-send-bus":
+    guard let trackName = getArg("--track"), !trackName.isEmpty else {
+        printJSON(["success": false, "error": "Missing --track argument"])
+        exit(0)
+    }
+    guard let slotStr = getArg("--slot"), let slotNum = Int(slotStr), slotNum >= 1 && slotNum <= 8 else {
+        printJSON(["success": false, "error": "Missing or invalid --slot argument (expected 1 to 8)"])
+        exit(0)
+    }
+    guard let busStr = getArg("--bus"), let busNum = Int(busStr), busNum >= 1 else {
+        printJSON(["success": false, "error": "Missing or invalid --bus argument (expected integer >= 1)"])
+        exit(0)
+    }
+
+    // 1. Find Channel Strip
+    guard let strip = findChannelStripForTrack(appElement: appElement, trackName: trackName) else {
+        printJSON(["success": false, "error": "Channel strip for track '\(trackName)' not found in Logic Pro."])
+        exit(0)
+    }
+
+    // 2. Find Send Slot Button
+    guard let slotButton = findSendSlotButton(strip: strip, slotNum: slotNum) else {
+        printJSON(["success": false, "error": "Send slot \(slotNum) button not found on track '\(strip.trackName)'."])
+        exit(0)
+    }
+
+    // 3. Click slot button to open native AXMenu
+    let pressErr = AXUIElementPerformAction(slotButton, kAXPressAction as CFString)
+    guard pressErr == .success || pressErr == .cannotComplete else {
+        printJSON(["success": false, "error": "Failed to click Send slot \(slotNum) button (AXError: \(pressErr.rawValue))."])
+        exit(0)
+    }
+
+    // Wait up to 500ms for AXMenu to appear
+    var activeMenu: AXUIElement? = nil
+    for _ in 0..<10 {
+        usleep(50_000)
+        if let m = findSendMenu(appElement: appElement) {
+            activeMenu = m
+            break
+        }
+    }
+
+    guard let rootMenu = activeMenu else {
+        printJSON(["success": false, "error": "Logic Pro Send menu did not appear after clicking slot \(slotNum)."])
+        exit(0)
+    }
+
+    // 4. Menu Navigation: Find "Bus" item
+    guard let busMenuItem = findMenuItem(menu: rootMenu, query: "Bus") else {
+        closeMenu(rootMenu)
+        printJSON(["success": false, "error": "Menu item 'Bus' not found in Send menu."])
+        exit(0)
+    }
+
+    // 5. Open "Bus" Submenu
+    guard let busSubmenu = getSubmenu(of: busMenuItem, appElement: appElement) else {
+        closeMenu(rootMenu)
+        printJSON(["success": false, "error": "Bus submenu could not be opened in Send menu."])
+        exit(0)
+    }
+
+    // 6. Find target "Bus <busNum>" (e.g. "Bus 1" or "Bus 1 (Reverb)")
+    let targetBusQuery = "Bus \(busNum)"
+    let items = getAXChildren(busSubmenu).filter {
+        (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXMenuItem"
+    }
+    let targetItem = items.first { el in
+        let title = getAXString(el, kAXTitleAttribute as String) ?? ""
+        return title == targetBusQuery ||
+               title.starts(with: targetBusQuery + " ") ||
+               title.starts(with: targetBusQuery + "(")
+    }
+
+    guard let finalItem = targetItem else {
+        closeMenu(rootMenu)
+        printJSON(["success": false, "error": "Target Bus '\(targetBusQuery)' not found in Bus submenu."])
+        exit(0)
+    }
+
+    let selectErr = AXUIElementPerformAction(finalItem, kAXPressAction as CFString)
+    guard selectErr == .success || selectErr == .cannotComplete else {
+        closeMenu(rootMenu)
+        printJSON(["success": false, "error": "Failed to select Bus item '\(targetBusQuery)' (AXError: \(selectErr.rawValue))."])
+        exit(0)
+    }
+
+    usleep(300_000)
+    printJSON([
+        "success": true,
+        "track": strip.trackName,
+        "slot": slotNum,
+        "bus": busNum
+    ])
+
+case "set-send-level":
+    guard let trackName = getArg("--track"), !trackName.isEmpty else {
+        printJSON(["success": false, "error": "Missing --track argument"])
+        exit(0)
+    }
+    guard let slotStr = getArg("--slot"), let slotNum = Int(slotStr), slotNum >= 1 && slotNum <= 8 else {
+        printJSON(["success": false, "error": "Missing or invalid --slot argument (expected 1 to 8)"])
+        exit(0)
+    }
+    guard let dbStr = getArg("--db"), let targetDb = Double(dbStr.replacingOccurrences(of: ",", with: ".")) else {
+        printJSON(["success": false, "error": "Missing or invalid --db value"])
+        exit(0)
+    }
+
+    // 1. Find Channel Strip
+    guard let strip = findChannelStripForTrack(appElement: appElement, trackName: trackName) else {
+        printJSON(["success": false, "error": "Channel strip for track '\(trackName)' not found in Logic Pro."])
+        exit(0)
+    }
+
+    // 2. Validate slot index against assigned send slots
+    guard slotNum >= 1 && slotNum <= strip.sendSlots.count else {
+        printJSON(["success": false, "error": "Send slot \(slotNum) is not assigned on track '\(strip.trackName)'. Assigned sends: \(strip.sendSlots.count)."])
+        exit(0)
+    }
+
+    let targetSend = strip.sendSlots[slotNum - 1]
+    guard let slider = targetSend.slider else {
+        printJSON(["success": false, "error": "Send level knob not found for slot \(slotNum) on track '\(strip.trackName)'."])
+        exit(0)
+    }
+
+    // 3. Drag knob to target dB
+    let res = dragSendKnobToDb(slider: slider, targetDb: targetDb)
+    printJSON([
+        "success": res.success,
+        "track": strip.trackName,
+        "slot": slotNum,
+        "db": res.finalDb
+    ])
 
 default:
     printJSON(["success": false, "error": "Unknown command: \(command)"])

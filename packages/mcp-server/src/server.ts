@@ -15,7 +15,8 @@ import {
   SetActiveSkillSchema,
   SetFolderStateSchema,
   SelectTrackSchema,
-  LoadPluginSchema
+  LoadPluginSchema,
+  RouteSendSchema
 } from './tools.js';
 
 export interface ServerOptions {
@@ -338,6 +339,31 @@ export class MixingBuddyMCPServer {
           return {
             isError: true,
             content: [{ type: 'text', text: `Load plugin failed: ${String(err)}` }]
+          };
+        }
+      }
+    );
+
+    // 12. Route Send (Sprint 9: Bus-Sends, Submixes & Aux-Routing)
+    this.server.tool(
+      'mcp__route_send',
+      "Assigns a track's Send slot to a specific Bus (e.g., Bus 1 for Reverb) and optionally sets the send level in dB.",
+      RouteSendSchema.shape,
+      async (args) => {
+        try {
+          const result = await this.handlers.routeSend(args);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        } catch (err: unknown) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Route send failed: ${String(err)}` }]
           };
         }
       }

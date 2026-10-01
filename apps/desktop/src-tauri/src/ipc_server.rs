@@ -859,6 +859,114 @@ async fn handle_connection(
                 let _ = stream.write_all(resp.as_bytes()).await;
                 let _ = stream.flush().await;
                 return;
+            } else if path.contains("/api/sends/assign") {
+                // Sprint 9: Assign Bus to Send Slot
+                let parsed = serde_json::from_str::<serde_json::Value>(&body_str).unwrap_or(serde_json::Value::Null);
+                let track = parsed.get("track")
+                    .or_else(|| parsed.get("trackName"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let slot = parsed.get("slot")
+                    .or_else(|| parsed.get("slotIndex"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1);
+                let bus = parsed.get("bus")
+                    .or_else(|| parsed.get("busNumber"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1);
+
+                let body = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let bridge_path = crate::resolve_bridge_path();
+                        if bridge_path.exists() {
+                            match crate::execute_logic_ax_bridge(
+                                &bridge_path,
+                                &[
+                                    "set-send-bus".to_string(),
+                                    "--track".to_string(),
+                                    track,
+                                    "--slot".to_string(),
+                                    slot.to_string(),
+                                    "--bus".to_string(),
+                                    bus.to_string(),
+                                ],
+                            ) {
+                                Ok(val) => val.to_string(),
+                                Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
+                            }
+                        } else {
+                            serde_json::json!({"success": false, "error": "Bridge sidecar not found"}).to_string()
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let _ = (track, slot, bus);
+                        serde_json::json!({"success": true, "stub": true}).to_string()
+                    }
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
+            } else if path.contains("/api/sends/level") {
+                // Sprint 9: Set Send Level (dB)
+                let parsed = serde_json::from_str::<serde_json::Value>(&body_str).unwrap_or(serde_json::Value::Null);
+                let track = parsed.get("track")
+                    .or_else(|| parsed.get("trackName"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let slot = parsed.get("slot")
+                    .or_else(|| parsed.get("slotIndex"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1);
+                let db = parsed.get("db")
+                    .or_else(|| parsed.get("levelDb"))
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+
+                let body = {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let bridge_path = crate::resolve_bridge_path();
+                        if bridge_path.exists() {
+                            match crate::execute_logic_ax_bridge(
+                                &bridge_path,
+                                &[
+                                    "set-send-level".to_string(),
+                                    "--track".to_string(),
+                                    track,
+                                    "--slot".to_string(),
+                                    slot.to_string(),
+                                    "--db".to_string(),
+                                    db.to_string(),
+                                ],
+                            ) {
+                                Ok(val) => val.to_string(),
+                                Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
+                            }
+                        } else {
+                            serde_json::json!({"success": false, "error": "Bridge sidecar not found"}).to_string()
+                        }
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        let _ = (track, slot, db);
+                        serde_json::json!({"success": true, "stub": true}).to_string()
+                    }
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(), body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
             } else {
                 // Action proposal sync (e.g. /api/proposals)
                 if !body_str.trim().is_empty() {

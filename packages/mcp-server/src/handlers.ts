@@ -30,7 +30,8 @@ import type {
   SetActiveSkillInput,
   SetFolderStateInput,
   SelectTrackInput,
-  LoadPluginInput
+  LoadPluginInput,
+  RouteSendInput
 } from './tools.js';
 
 export interface ResonancePeak {
@@ -973,5 +974,82 @@ export class MixingToolHandlers {
     const { MacOSAccessibilityClient } = await import('@mixing-buddy/daw-adapters');
     const axClient = new MacOSAccessibilityClient();
     return await axClient.loadPlugin(args.trackName, args.slotIndex, args.pluginPath);
+  }
+
+  /**
+   * Sprint 9: Assigns a track's Send slot to a specific Bus and optionally sets the send level in dB
+   */
+  public async routeSend(args: RouteSendInput): Promise<{
+    success: boolean;
+    track?: string;
+    slot?: number;
+    bus?: number;
+    levelDb?: number;
+    error?: string;
+  }> {
+    // 1. Assign Send Bus via Desktop Companion IPC server (port 48123) or direct bridge
+    let assignResult: { success: boolean; track?: string; slot?: number; bus?: number; error?: string };
+    try {
+      const res = await fetch('http://127.0.0.1:48123/api/sends/assign', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          track: args.trackName,
+          slot: args.slotIndex,
+          bus: args.busNumber
+        }),
+        signal: AbortSignal.timeout(6000)
+      });
+      if (res.ok) {
+        assignResult = (await res.json()) as typeof assignResult;
+      } else {
+        throw new Error(`HTTP ${res.status}`);
+      }
+    } catch {
+      const { MacOSAccessibilityClient } = await import('@mixing-buddy/daw-adapters');
+      const axClient = new MacOSAccessibilityClient();
+      assignResult = await axClient.setSendBus(args.trackName, args.slotIndex, args.busNumber);
+    }
+
+    if (!assignResult.success) {
+      return assignResult;
+    }
+
+    // 2. Optionally set Send Level (dB)
+    if (args.levelDb !== undefined) {
+      let levelResult: { success: boolean; track?: string; slot?: number; db?: number; error?: string };
+      try {
+        const res = await fetch('http://127.0.0.1:48123/api/sends/level', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            track: args.trackName,
+            slot: args.slotIndex,
+            db: args.levelDb
+          }),
+          signal: AbortSignal.timeout(6000)
+        });
+        if (res.ok) {
+          levelResult = (await res.json()) as typeof levelResult;
+        } else {
+          throw new Error(`HTTP ${res.status}`);
+        }
+      } catch {
+        const { MacOSAccessibilityClient } = await import('@mixing-buddy/daw-adapters');
+        const axClient = new MacOSAccessibilityClient();
+        levelResult = await axClient.setSendLevel(args.trackName, args.slotIndex, args.levelDb);
+      }
+
+      return {
+        success: levelResult.success,
+        track: assignResult.track,
+        slot: assignResult.slot,
+        bus: assignResult.bus,
+        levelDb: levelResult.db ?? args.levelDb,
+        error: levelResult.error
+      };
+    }
+
+    return assignResult;
   }
 }

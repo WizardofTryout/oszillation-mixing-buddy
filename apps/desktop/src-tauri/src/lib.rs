@@ -1906,6 +1906,70 @@ async fn load_plugin_into_slot(
     }
 }
 
+#[tauri::command]
+async fn set_send_bus(
+    track: String,
+    slot: u32,
+    bus: u32,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if bridge_path.exists() {
+            return execute_logic_ax_bridge(
+                &bridge_path,
+                &[
+                    "set-send-bus".to_string(),
+                    "--track".to_string(),
+                    track,
+                    "--slot".to_string(),
+                    slot.to_string(),
+                    "--bus".to_string(),
+                    bus.to_string(),
+                ],
+            );
+        }
+        Err("logic-ax-bridge sidecar not found".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (track, slot, bus);
+        Ok(serde_json::json!({"success": true, "stub": true}))
+    }
+}
+
+#[tauri::command]
+async fn set_send_level(
+    track: String,
+    slot: u32,
+    db: f64,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if bridge_path.exists() {
+            return execute_logic_ax_bridge(
+                &bridge_path,
+                &[
+                    "set-send-level".to_string(),
+                    "--track".to_string(),
+                    track,
+                    "--slot".to_string(),
+                    slot.to_string(),
+                    "--db".to_string(),
+                    db.to_string(),
+                ],
+            );
+        }
+        Err("logic-ax-bridge sidecar not found".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (track, slot, db);
+        Ok(serde_json::json!({"success": true, "stub": true}))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -1971,7 +2035,9 @@ pub fn run() {
             daw_locate_bar,
             set_folder_expanded,
             select_track,
-            load_plugin_into_slot
+            load_plugin_into_slot,
+            set_send_bus,
+            set_send_level
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

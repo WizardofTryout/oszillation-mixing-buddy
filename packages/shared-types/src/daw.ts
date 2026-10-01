@@ -24,6 +24,13 @@ export interface PluginMetadata {
   parameters: PluginParameter[];
 }
 
+export interface SendSlotDescriptor {
+  slotIndex: number;
+  busNumber: number;
+  name?: string;
+  levelDb: number;
+}
+
 export interface TrackDescriptor {
   id: string;
   index: number;
@@ -36,6 +43,7 @@ export interface TrackDescriptor {
   isSoloed: boolean;
   isSelected: boolean;
   insertSlots: (PluginMetadata | null)[];
+  sendSlots?: SendSlotDescriptor[];
 }
 
 export interface TransportState {

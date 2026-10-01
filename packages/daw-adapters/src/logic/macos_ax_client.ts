@@ -642,6 +642,7 @@ export class MacOSAccessibilityClient {
         mute: boolean;
         solo: boolean;
         inserts?: Array<{ slot: number; name: string }>;
+        sends?: Array<{ slot: number; bus: number; name?: string; levelDb: number }>;
       }>;
     }>(['list-channel-strips']);
 
@@ -671,6 +672,12 @@ export class MacOSAccessibilityClient {
             format: 'au' as const,
             isBypassed: false,
             parameters: []
+          })),
+          sendSlots: (s.sends ?? []).map((snd) => ({
+            slotIndex: snd.slot,
+            busNumber: snd.bus,
+            name: snd.name,
+            levelDb: snd.levelDb
           }))
         };
       });
@@ -922,6 +929,64 @@ export class MacOSAccessibilityClient {
       trackName,
       '--slot',
       String(slotIndex)
+    ]);
+    if (!res) {
+      return { success: false, error: 'Failed to communicate with logic-ax-bridge sidecar' };
+    }
+    return res;
+  }
+
+  /**
+   * Sprint 9: Assigns a track's Send slot to a specific Bus (e.g. Bus 1, Bus 2)
+   */
+  public async setSendBus(
+    trackName: string,
+    slotIndex: number,
+    busNumber: number
+  ): Promise<{ success: boolean; track?: string; slot?: number; bus?: number; error?: string }> {
+    const res = await this.runBridge<{
+      success: boolean;
+      track?: string;
+      slot?: number;
+      bus?: number;
+      error?: string;
+    }>([
+      'set-send-bus',
+      '--track',
+      trackName,
+      '--slot',
+      String(slotIndex),
+      '--bus',
+      String(busNumber)
+    ]);
+    if (!res) {
+      return { success: false, error: 'Failed to communicate with logic-ax-bridge sidecar' };
+    }
+    return res;
+  }
+
+  /**
+   * Sprint 9: Sets the level of an assigned Send slot in dB (e.g. -6.0 dB)
+   */
+  public async setSendLevel(
+    trackName: string,
+    slotIndex: number,
+    levelDb: number
+  ): Promise<{ success: boolean; track?: string; slot?: number; db?: number; error?: string }> {
+    const res = await this.runBridge<{
+      success: boolean;
+      track?: string;
+      slot?: number;
+      db?: number;
+      error?: string;
+    }>([
+      'set-send-level',
+      '--track',
+      trackName,
+      '--slot',
+      String(slotIndex),
+      '--db',
+      String(levelDb)
     ]);
     if (!res) {
       return { success: false, error: 'Failed to communicate with logic-ax-bridge sidecar' };

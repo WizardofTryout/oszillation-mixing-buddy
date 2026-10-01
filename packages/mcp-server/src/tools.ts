@@ -97,6 +97,15 @@ export const LoadPluginSchema = z.object({
   pluginPath: z.string().describe('Hierarchy or name of the plugin to load, separated by ">" (e.g. "EQ > Channel EQ", "Dynamics > Compressor", "Audio Units > FabFilter > Pro-Q 3")')
 });
 
+// Sprint 9: Bus-Sends, Submixes & Aux-Routing
+
+export const RouteSendSchema = z.object({
+  trackName: z.string().describe('Name of the target track in Logic Pro (e.g. "Snare 2", "Vocal Lead")'),
+  slotIndex: z.number().int().min(1).max(8).describe('Send slot index (1 to 8)'),
+  busNumber: z.number().int().min(1).describe('Bus number to assign (e.g. 1 for Bus 1, 3 for Bus 3)'),
+  levelDb: z.number().optional().describe('Optional send level in dB (e.g. -6.0 or -12.5). If omitted, default initial level is kept.')
+});
+
 export type GetMixTelemetryInput = z.infer<typeof GetMixTelemetrySchema>;
 export type ListTracksInput = z.infer<typeof ListTracksSchema>;
 export type ParameterDeltaInput = z.infer<typeof ParameterDeltaSchema>;
@@ -110,3 +119,4 @@ export type SetActiveSkillInput = z.infer<typeof SetActiveSkillSchema>;
 export type SetFolderStateInput = z.infer<typeof SetFolderStateSchema>;
 export type SelectTrackInput = z.infer<typeof SelectTrackSchema>;
 export type LoadPluginInput = z.infer<typeof LoadPluginSchema>;
+export type RouteSendInput = z.infer<typeof RouteSendSchema>;
