@@ -985,7 +985,13 @@ export const App: React.FC = () => {
         {/* Meters Grid: Spectrum RTA + EBU R128 HUD + Chat Console */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 flex flex-col gap-4">
-            <SpectrumRTA spectrum={telemetry?.spectrum} />
+            <SpectrumRTA
+              spectrum={telemetry?.spectrum}
+              liveLufs={telemetry?.loudness?.integratedLufs}
+              activeReference={activeReferenceProfile}
+              onSelectReference={setActiveReferenceProfile}
+              onOpenReferenceModal={() => setIsReferenceModalOpen(true)}
+            />
             <ChatConsole
               telemetry={telemetry}
               activeDaw={activeDaw}
