@@ -24,7 +24,8 @@ import {
   type LearnedPluginSpec,
   type PluginSummaryItem
 } from './components/PluginVaultModal.js';
-import { Sliders, Headphones, Inbox, Sparkles, Database, Target, BarChart2 } from 'lucide-react';
+import { SkillManagerModal } from './components/SkillManagerModal.js';
+import { Sliders, Headphones, Inbox, Sparkles, Database, Target, BarChart2, Star } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<MetrologyTelemetryFrame | null>(null);
@@ -150,6 +151,10 @@ export const App: React.FC = () => {
   const [vaultPlugins, setVaultPlugins] = useState<PluginSummaryItem[]>([]);
   const [isLearningPlugin, setIsLearningPlugin] = useState<boolean>(false);
   const [learnError, setLearnError] = useState<string | null>(null);
+
+  // Sprint 5: Custom Mixing Skills state
+  const [isSkillModalOpen, setIsSkillModalOpen] = useState<boolean>(false);
+  const [skillsCount, setSkillsCount] = useState<number>(1);
 
   const handleApiKeyChange = (key: string) => {
     setApiKey(key);
@@ -758,8 +763,44 @@ export const App: React.FC = () => {
     }
   };
 
+  const refreshSkillsCount = async () => {
+    try {
+      const list = await invoke<any[]>('list_mixing_skills');
+      if (Array.isArray(list)) {
+        setSkillsCount(list.length);
+        return;
+      }
+    } catch {
+      // Fallback to HTTP endpoint on 127.0.0.1:48123
+    }
+
+    try {
+      const res = await fetch('http://127.0.0.1:48123/api/skills');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.skills)) {
+          setSkillsCount(data.skills.length);
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  };
+
   useEffect(() => {
     refreshVaultPlugins();
+    refreshSkillsCount();
+
+    let unlisten: (() => void) | undefined;
+    listen('skill-vault-updated', () => {
+      refreshSkillsCount();
+    }).then((unsub) => {
+      unlisten = unsub;
+    }).catch(console.warn);
+
+    return () => {
+      if (unlisten) unlisten();
+    };
   }, []);
 
   const handleLearnActivePlugin = async () => {
@@ -927,6 +968,17 @@ export const App: React.FC = () => {
             <span>Plugin Vault ({vaultPlugins.length})</span>
           </button>
 
+          {/* Sprint 5.2: Mixing Skills Toolbar Button */}
+          <button
+            type="button"
+            onClick={() => setIsSkillModalOpen(true)}
+            className="flex items-center gap-1.5 text-xs font-medium text-amber-300 hover:text-white bg-amber-950/50 hover:bg-amber-900/60 border border-amber-500/40 px-2.5 py-1 rounded transition-all shadow-sm cursor-pointer"
+            title="Mixing Skill Vault (Tonmischmeister, Custom Chains & Prompts)"
+          >
+            <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400/30" />
+            <span>Skills ({skillsCount})</span>
+          </button>
+
           <div className="flex items-center gap-1.5 text-xs text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded">
             <Headphones className={`w-3.5 h-3.5 ${telemetry ? 'text-emerald-400' : isAudioConnected ? 'text-yellow-400' : 'text-slate-500'}`} />
             <span className={telemetry ? 'text-emerald-400 font-medium' : ''}>
@@ -964,6 +1016,20 @@ export const App: React.FC = () => {
         onClose={() => setIsReferenceModalOpen(false)}
         activeProfile={activeReferenceProfile}
         onApplyReference={handleApplyReferenceProfile}
+      />
+
+      <SkillManagerModal
+        isOpen={isSkillModalOpen}
+        onClose={() => {
+          setIsSkillModalOpen(false);
+          refreshSkillsCount();
+        }}
+        onSelectSkill={(skill) => {
+          setChatLog(`⭐ Mixing Skill "${skill.name}" aktiviert (${skill.metrologyTargets.integratedLufs} LUFS, Kategorie: ${skill.category}).`);
+        }}
+        onStartSynthesisWizard={() => {
+          setChatLog(`🚀 KI-Skill-Synthese Wizard wird in Step 5.3 aktiviert.`);
+        }}
       />
 
       {/* Main Studio Workspace */}
