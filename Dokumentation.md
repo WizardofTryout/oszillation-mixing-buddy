@@ -98,6 +98,10 @@ Das Monorepo ruht strikt auf vier voneinander getrennten Schichten:
   - **Crest Factor / Dynamikbereich:** Verhältnis Peak zu RMS in dB.
   - **32-Band Spectrum Analyzer:** FFT mit Blackman-Harris-Fensterung (20 Hz bis 20 kHz).
 - **Streaming:** Sendet alle 33 ms (30 fps) Binär-/JSON-Frames an den lokalen WebSocket `ws://127.0.0.1:48123/meter`.
+- **JUCE-Handshake & Projekt-Lifecycle:**
+  1. **DAW lädt Projekt (`.logicx` / `.cpr`):** Das Audio-Plugin liest Metadaten & XML-Chunk via `setStateInformation`.
+  2. **WebSocket-Handshake:** Das Plugin öffnet eine Verbindung zu `ws://127.0.0.1:48123/meter` und sendet initial ein `project_context_sync`-Paket (Projektname, Sample-Rate, Transport).
+  3. **HUD-State Synchronisation:** Der Desktop Companion aktualisiert seinen HUD-State (Target Scope, Genre, Custom Notes) automatisch.
 
 ### Säule 2: Desktop Companion & IPC Hub
 - **Standort:** `apps/desktop/`
@@ -125,6 +129,19 @@ Das Monorepo ruht strikt auf vier voneinander getrennten Schichten:
   - `set-param --window <name> --description <param> --value <val>`: Setzt Regler, Frequenzen, Q-Faktoren und Gains in Plugins.
   - `toggle-bypass --window <name>`: Schaltet den Plugin-Bypass für blitzschnelle A/B-Vergleiche um.
   - `close-plugin-window --window <name>`: Schließt temporär geöffnete Plugin-Fenster nach getaner Arbeit sauber wieder.
+- **Polymorphes DAWDriver-Interface & Dispatcher-Architektur:**
+  Um neben Logic Pro auch Steinberg Nuendo, Cubase und Ableton Live nahtlos einzubinden, ruht Säule 3 auf einem einheitlichen Treiber-Vertrag:
+  ```typescript
+  export interface DAWDriverAdapter {
+    id: 'logic' | 'nuendo' | 'cubase' | 'ableton';
+    getChannelStrips(): Promise<TrackDescriptor[]>;
+    setFader(trackName: string, db: number): Promise<boolean>;
+    setPan(trackName: string, pan: number): Promise<boolean>;
+    setParameter(target: ParameterTarget): Promise<boolean>;
+    openInsertSlot?(trackName: string, slotIndex: number): Promise<boolean>;
+  }
+  ```
+  - **Dispatcher-Prinzip:** `lib.rs` und der Desktop Companion sprechen künftig nicht mehr über hardcodierte Einzellogiken, sondern leiten Steuerungsbefehle polymorph an den Treiber weiter, der zur zur Laufzeit erkannten DAW passt (`LogicAXBridge` via macOS Accessibility, Steinberg MIDI Remote Script für Nuendo/Cubase, Ableton Remote Script).
 
 ### Säule 4: MCP-Server & AI-Gateway („The Brain“)
 - **Standort:** `packages/mcp-server/` & `packages/ai-engine/`
@@ -161,6 +178,10 @@ Das Monorepo ruht strikt auf vier voneinander getrennten Schichten:
 - **Target Bus:** `mix_bus`, `lead_vocal`, `drum_bus`, `sub_bass`, `keys_synths`, `acoustic`.
 - **Genre-Profile:** `auto_detect` (KI-Klassifikation), `pop_radio`, `hiphop_trap`, `rock_metal`, `edm_club`, `acoustic_jazz`, `custom_crossover`.
 - **CrossoverModal:** Individuelle 5-Zonen Zielkorridore mit Notizen für den Co-Producer.
+- **Projekt-Lifecycle & Kontext-Sync (3-Schritt-Sequenz):**
+  1. **DAW lädt Projekt (`.logicx` / `.cpr`):** Das JUCE-Plugin liest den Projekt-State und XML-Chunk via `setStateInformation`.
+  2. **WebSocket-Sync:** Das Plugin verbindet zu `ws://127.0.0.1:48123/meter` und sendet initial `project_context_sync`.
+  3. **HUD-Reaktion:** Der Desktop Companion übernimmt sofort den Target Scope, das Genre-Profil und verknüpfte Mixing-Notizen.
 
 ### Feature 4: Human-in-the-Loop ActionCards mit 6-Sekunden A/B-Audition
 - Strukturierte Karten mit Rationale, Vorher-/Nachher-Parameter-Diffs und Konfidenz-Score.
@@ -212,7 +233,7 @@ Das Monorepo ruht strikt auf vier voneinander getrennten Schichten:
 | **`/api/tracks`** | `GET` | – | `{ tracks: TrackDescriptor[] }` | Liste aller aktiven Kanalzüge samt Fader, Pan und Insert-Namen. |
 | **`/api/channel-strips`** | `GET` | – | `{ channelStrips: any[] }` | Direkte Inspektion der Logic Pro Inspector/Mixer-Streifen via Swift-Bridge. |
 | **`/api/proposals`** | `POST` | `MixActionProposal` (JSON) | `{ success: boolean, proposalId: string }` | Liefert eine neu generierte ActionCard in die HUD-Queue ein. |
-| **`/api/execute-action`** | `POST` | `{ proposalId, isAudition, isRestore? }` | `{ success: boolean, executedDeltas: number }` | Führt `[Anwenden]`, `[A/B Listen]` oder die Wiederherstellung aus. |
+| **`/api/execute-action`** | `POST` | `{ proposalId, isAudition, isRestore? }` | `{ success: boolean, executedDeltas: number, shieldInterventions: [...], errorCode: string \| null }` | Führt `[Anwenden]`, `[A/B Listen]` oder die Wiederherstellung aus. |
 | **`/api/vault/plugins`** | `GET` | – | `{ plugins: PluginSummaryItem[] }` | Liefert alle im Plugin Vault gespeicherten Drittanbieter-Plugins. |
 | **`/api/vault/learn`** | `POST` | `{ windowTitle: string \| null }` | `LearnedPluginSpec` | Triggert den 1-Click Auto-Profiler für das geöffnete Plugin-Fenster. |
 | **`/api/vault/delete`** | `POST` | `{ slug: string }` | `{ success: boolean }` | Löscht ein Plugin aus dem Plugin Vault. |
@@ -223,6 +244,27 @@ Das Monorepo ruht strikt auf vier voneinander getrennten Schichten:
 | **`/api/skills`** | `POST` | `MixingSkill` (JSON) | `{ success: boolean }` | Speichert einen Skill dauerhaft in `~/.mixing-buddy/skills/`. |
 | **`/api/skills/delete`** | `POST` | `{ id: string }` | `{ success: boolean }` | Löscht einen benutzerdefinierten Mixing-Skill. |
 | **`/meter`** | `WS` | WebSocket Connect | 30 fps JSON-Stream (`MetrologyTelemetryFrame`) | Kontinuierlicher Telemetrie-Stream direkt aus dem JUCE-Master-Plugin. |
+
+#### Strukturierte Shield- & Fehler-Rückmeldung (`POST /api/execute-action`)
+Um im Frontend maximale Transparenz und Gehörschutz-Sicherheit zu gewährleisten, liefert der Endpoint detaillierte Telemetrie über eingreifende Schutzmechanismen und Multi-DAW-Status:
+```json
+{
+  "success": true,
+  "executedDeltas": 3,
+  "shieldInterventions": [
+    {
+      "parameter": "fader_db",
+      "requested": 5.0,
+      "clampedTo": 3.0,
+      "reason": "ACOUSTIC_SHOCK_SHIELD_MAX_BOOST"
+    }
+  ],
+  "errorCode": null
+}
+```
+**Frontend-Relevanz:**
+- **Visuelle Warnung bei Pegeldrosselung:** Das Musiker-HUD warnt optisch, wenn ein Vorschlag vom *Acoustic Shock Shield* gekappt wurde (z. B. Begrenzung auf maximal $+3.0$ dB pro Schritt).
+- **Multi-DAW-Fehlerdiagnose:** Falls in heterogenen Umgebungen (z. B. Nuendo vs. Logic) eine adressierte Spur oder ein Plugin-Parameter nicht existiert oder verriegelt ist, wird ein präziser `errorCode` geliefert, statt stillschweigend Scheinerfolge zu melden.
 
 ### 5.2 MCP AI-Gateway Routing (Port 48124 & Stdio)
 
