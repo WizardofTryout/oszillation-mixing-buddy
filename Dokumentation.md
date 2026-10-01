@@ -1,9 +1,10 @@
 # Oszillation Mixing Buddy — Umfassende System- & Feature-Dokumentation
 
-> **Status:** Version 0.5.0 (Produktiv / Verifiziert / Sprint 1 bis 5 Vollständig Abgeschlossen)  
+> **Status:** Version 0.8.0 (Produktiv / Verifiziert / Phase 3 zu 100 % abgeschlossen — Sprints 1 bis 10)  
 > **Zielgruppe:** Web-Frontend-Entwickler, UI/UX-Designer, Core-Entwickler & Stakeholder  
 > **Repository:** `Steinberg-Mixing-Buddy` / `Oszillation Mixing Buddy`  
-> **Stand:** Oktober 2026  
+> **Code-Graph:** 2.165 Knoten, 4.380 Kanten, 185 Flows (GitNexus indiziert)  
+> **Stand:** Oktober 2026 (Commit `fefba9f` / `bb202ae`)  
 
 ---
 
@@ -121,11 +122,19 @@ Das Monorepo ruht strikt auf vier voneinander getrennten Schichten:
 - **Standort:** `packages/daw-adapters/` (Swift Mach-O: `packages/daw-adapters/bin/logic-ax-bridge`).
 - **Technologie:** Natives Swift mit Apple `ApplicationServices` (`AXUIElement`).
 - **Verbot von AppleScript:** Kein träger `osascript`-Overhead; Ausführungszeit $< 0,1$ ms.
-- **Befehle:**
+- **Befehle (Vollständige Logic Pro Suite):**
   - `list-channel-strips`: Liest alle Kanalzüge samt Fader, Pan, Mute, Solo und allen belegten Insert-Plugin-Namen pro Slot aus.
   - `set-fader --track <name> --db <val>`: Fährt den Fader per logarithmischer Kennlinie und Textfeld auf den exakten dB-Wert.
   - `set-pan --track <name> --pan <val>`: 2-stufige präzise Panorama-Einstellung (-64 bis +63).
   - `open-insert --track <name> --slot <idx>`: Öffnet ein Plugin per GUI-Klick auf den Insert-Slot, falls das Fenster geschlossen ist.
+  - `load-plugin --track <name> --slot <idx> --plugin <path>`: Adressiert freie/belegte Audio-FX-Slots und lädt Plugins (z. B. "EQ > Channel EQ" oder AU-Plugins) autonom via rekursiver `AXMenu`-Traversierung.
+  - `set-send-routing --track <name> --slot <idx> --destination <dest>`: Belegt Sends-Slots und verdrahtet Busse ("Bus > Bus 1 (Reverb)", "Bus 2") inklusive automatischer Aux-Kanal-Generierung.
+  - `set-send-level --track <name> --slot <idx> --db <val>`: Sub-Millimeter CGEvent-Drag-Steuerung für Send-Regler auf 0.1 dB genau.
+  - `set-sidechain --track <name> --slot <idx> --source <source>`: Adressiert das Sidechain-Header-Menü (`AXPopUpButton`) in Dynamik-Plugins und verdrahtet Steuersignale ("Bus > Bus 1", "Audio > Kick", "Intern").
+  - `get-sidechain --track <name> --slot <idx>`: Liest das aktuell gewählte Sidechain-Steuersignal aus.
+  - `transport-play`, `transport-stop`, `transport-locate --bar <bar>`: Blitzschnelle Wiedergabesteuerung via macOS Accessibility & CoreMIDI MCU Fallback (Note 0x5E, 0x5D, 0x60).
+  - `select-track --track <name>`: Wählt gezielt Spuren im Arranger an und fokussiert automatisch den linken Inspector.
+  - `set-folder-expanded --track <name> --expanded <bool>`: Klappt Track Stacks / Ordner-Spuren im Arranger auf oder zu.
   - `set-param --window <name> --description <param> --value <val>`: Setzt Regler, Frequenzen, Q-Faktoren und Gains in Plugins.
   - `toggle-bypass --window <name>`: Schaltet den Plugin-Bypass für blitzschnelle A/B-Vergleiche um.
   - `close-plugin-window --window <name>`: Schließt temporär geöffnete Plugin-Fenster nach getaner Arbeit sauber wieder.
@@ -139,6 +148,12 @@ Das Monorepo ruht strikt auf vier voneinander getrennten Schichten:
     setPan(trackName: string, pan: number): Promise<boolean>;
     setParameter(target: ParameterTarget): Promise<boolean>;
     openInsertSlot?(trackName: string, slotIndex: number): Promise<boolean>;
+    loadPlugin?(trackName: string, slotIndex: number, pluginPath: string): Promise<boolean>;
+    setSend?(trackName: string, slotIndex: number, destination: string, levelDb?: number): Promise<boolean>;
+    setSidechain?(trackName: string, slotIndex: number, sourcePath: string): Promise<boolean>;
+    transportPlay?(): Promise<boolean>;
+    transportStop?(): Promise<boolean>;
+    transportLocate?(bar: number): Promise<boolean>;
   }
   ```
   - **Dispatcher-Prinzip:** `lib.rs` und der Desktop Companion sprechen künftig nicht mehr über hardcodierte Einzellogiken, sondern leiten Steuerungsbefehle polymorph an den Treiber weiter, der zur zur Laufzeit erkannten DAW passt (`LogicAXBridge` via macOS Accessibility, Steinberg MIDI Remote Script für Nuendo/Cubase, Ableton Remote Script).
@@ -146,16 +161,19 @@ Das Monorepo ruht strikt auf vier voneinander getrennten Schichten:
 ### Säule 4: MCP-Server & AI-Gateway („The Brain“)
 - **Standort:** `packages/mcp-server/` & `packages/ai-engine/`
 - **Technologie:** Model Context Protocol (Spec 2026), Node.js / TypeScript, Stdio & SSE (Port 48124).
-- **Die 8 Kern-Tools:**
+- **Die 12 Kern-Tools:**
   1. `mcp__get_project_info`: Liest DAW-Name, Projekttitel, Sample-Rate, Play-Status und den **aktiven Mixing-Skill** aus.
   2. `mcp__get_mix_telemetry`: Liefert aktuelle LUFS-, Peak-, Dynamik- und Frequenzband-Messwerte.
   3. `mcp__list_tracks`: Liefert echte Kanalzüge mit Lautstärke, Pan und allen Insert-Effekten.
   4. `mcp__propose_mix_adjustment`: Erstellt eine strukturierte ActionCard für die Queue.
   5. `mcp__execute_mix_adjustment`: Direkte Ausführung nach Nutzerfreigabe.
-  6. `mcp__audition_region`: Temporäres A/B-Vorhören in der DAW.
+  6. `mcp__audition_region`: 8-Sekunden synchrones A/B-Vorhören mit integrierter Telemetrie-Messung.
   7. `mcp__learn_plugin`: 1-Click Auto-Profiler für Drittanbieter-Plugins.
   8. `mcp__set_active_skill`: Aktiviert zur Laufzeit einen Mixing-Skill (`tonmischmeister`, Custom-Skills oder `none`).
   9. `mcp__match_reference_spectrum`: Berechnet $\Delta(f)$ gegen gespeicherte Referenzkurven und erzeugt Channel EQ Vorschläge.
+  10. `mcp__load_plugin`: Lädt autonom Plugins in freie oder belegte Audio-FX Slots.
+  11. `mcp__set_send`: Belegt Sends-Slots und stellt Send-Pegel präzise in dB ein.
+  12. `mcp__route_sidechain`: Verdrahtet Sidechain-Quellen direkt im Header von Dynamik-Plugins.
 
 ---
 
@@ -221,6 +239,42 @@ Das Monorepo ruht strikt auf vier voneinander getrennten Schichten:
 - Der Quickstart-Prompt des aktiven Skills wird als primäre Leitplanke (`--- ACTIVE MIXING SKILL DIRECTIVE ---`) an die AI-Engine übergeben.
 - Metrologie-Ziele des Skills überschreiben Standard-Grenzwerte bei ActionCard-Generierung.
 
+### Feature 9: Transport-Steuerung & 8-Sekunden Audition-Loop (Sprint 6)
+- **AX-First Transport mit MCU MIDI Fallback:**
+  - `transport-play`, `transport-stop`, `transport-locate --bar <bar>` steuern Logic Pro verzögerungsfrei über macOS Accessibility (`AXPress` auf Play/Stop-Buttons im Control Bar).
+  - Falls Accessibility temporär verdeckt ist, springt der integrierte **CoreMIDI Mackie Control Universal (MCU) Fallback** ein (Notes `0x5E` Play, `0x5D` Stop, `0x60` Cycle).
+- **Automatischer 8-Sekunden A/B-Audit:**
+  - `mcp__audition_region` positioniert den Playhead taktgenau, aktiviert die Wiedergabe für exakt 8 Sekunden, sammelt synchron Echtzeit-LUFS und Crest-Faktor und stellt den Ursprungszustand automatisch wieder her.
+
+### Feature 10: Arranger-Navigation & Track-Stack / Folder-Expansion (Sprint 7)
+- **Dynamische Arranger-Spur-Interaktion:**
+  - `select-track`: Selektiert Spuren im Haupt-Arranger von Logic Pro direkt über deren Spurtitel (`AXRow` / `AXCell`).
+  - **Automatischer Inspector-Fokus:** Durch die Spuranwahl aktualisiert Logic Pro sofort den linken Inspector-Kanalzug – Fader, Pan und Inserts stehen dem Mixing Buddy unmittelbar zur Verfügung.
+- **Track-Stack / Ordner-Expansion (`set-folder-expanded`):**
+  - Erkennt Disclosure-Dreiecke von Gruppen- und Ordnerspuren (z. B. "Drums", "Vocals") und klappt diese gezielt auf oder zu, um Unterspuren (z. B. "Snare 2", "Kick In") für die Bearbeitung freizulegen.
+
+### Feature 11: Autonomes Plugin-Laden aus Audio-FX-Menüs (Sprint 8)
+- **Rekursive AXMenu-Traversierung:**
+  - `mcp__load_plugin` bzw. `load-plugin` adressiert jeden der 15 Audio-FX-Slots auf dem gewählten Kanalzug.
+  - Öffnet das native Logic-PopUp-Menü und navigiert hierarchisch durch Untermenüs (z. B. `["EQ", "Channel EQ"]`, `["Dynamics", "Compressor"]` oder `["Audio Units", "FabFilter", "Pro-Q 3"]`).
+  - Unterscheidet zuverlässig zwischen leeren Slots (`SlotButton`) und bereits belegten Slots (`MenuButton`).
+  - Schützt vor falschen Mausklicks auf Trennlinien oder deaktivierte Menüeinträge.
+
+### Feature 12: Bus-Sends, Submixe & Send-Pegel-Automation (Sprint 9)
+- **Bus-Routing & Aux-Verdrahtung:**
+  - `mcp__set_send` bzw. `set-send-routing` belegt freie oder bestehende Sends-Slots (1 bis 8) mit Zielbussen (z. B. `"Bus > Bus 1 (Reverb)"` oder `"Bus > Bus 3 (Drum Bus)"`).
+  - Logic Pro erzeugt bzw. verknüpft dabei automatisch den zugehörigen Aux-Return-Kanalzug.
+- **Sub-Millimeter CGEvent Send-Pegelregelung:**
+  - Send-Regler in Logic besitzen oft kein direktes Eingabefeld. Die Bridge ermittelt die exakten Bildschirmkoordinaten des Drehreglers und vollzieht hochpräzise `CGEvent`-Maus-Drags (vertikal/horizontal skaliert) auf $\pm 0.1$ dB genau.
+
+### Feature 13: Sidechain-Header-Routing & Ducking-Automation (Sprint 10)
+- **Header-Inspektion im Plugin-Fenster:**
+  - Adressiert zielsicher den `AXPopUpButton` im oberen Header-Bereich von Dynamik-Plugins (lokalisierte Suche nach „Side Chain“).
+  - Traversiert das Sidechain-Menü und verdrahtet Quellspuren oder Busse (z. B. `"Bus > Bus 1"`, `"Audio > Kick"` oder `"Intern"` zum Deaktivieren).
+- **Ducking ActionCards mit dualer Ausführung:**
+  - Bei Erkennung von Frequenzkollisionen im Sub-Bass (z. B. Kick vs. Bass) fasst die AI-Engine sowohl das Sidechain-Routing als auch die chirurgischen Kompressor-Parameter (Threshold -18.0 dB, Ratio 4:1, Attack 15 ms, Release 80 ms) in einer einzigen Karte zusammen.
+  - Das Musiker-HUD zeigt das Routing transparent an (`🔗 Sidechain: Bass (Slot 1) ← Audio > Kick`) und führt beim Klick auf *Anwenden* beide Schritte atomar aus.
+
 ---
 
 ## 5. REST- & WebSocket-Schnittstellen (Routing-Tabelle)
@@ -231,7 +285,16 @@ Das Monorepo ruht strikt auf vier voneinander getrennten Schichten:
 | :--- | :---: | :--- | :--- | :--- |
 | **`/api/project`** | `GET` | – | `{ daw, projectName, sampleRate, isPlaying, connected }` | Liefert DAW-Status und aktive Session-Metadaten. |
 | **`/api/tracks`** | `GET` | – | `{ tracks: TrackDescriptor[] }` | Liste aller aktiven Kanalzüge samt Fader, Pan und Insert-Namen. |
+| **`/api/tracks/select`** | `POST` | `{ track: string }` | `{ success: boolean, track: string }` | Selektiert Spur im Arranger und fokussiert linken Inspector. |
+| **`/api/tracks/folder-expanded`**| `POST` | `{ track: string, expanded: boolean }` | `{ success: boolean }` | Klappt Track-Stack/Ordner im Arranger auf oder zu. |
 | **`/api/channel-strips`** | `GET` | – | `{ channelStrips: any[] }` | Direkte Inspektion der Logic Pro Inspector/Mixer-Streifen via Swift-Bridge. |
+| **`/api/plugins/load`** | `POST` | `{ track: string, slot: number, plugin: string }` | `{ success: boolean, track, slot, plugin }` | Lädt ein Plugin autonom in einen Audio-FX-Slot (1–15). |
+| **`/api/plugins/sidechain`** | `POST` | `{ track: string, slot: number, source: string }` | `{ success: boolean, track, slot, sidechain }` | Verdrahtet die Sidechain-Quelle im Plugin-Header. |
+| **`/api/sends/route`** | `POST` | `{ track: string, slot: number, destination: string }` | `{ success: boolean, track, slot, destination }` | Weist einem Send-Slot einen Bus zu (erzeugt Aux-Kanal). |
+| **`/api/sends/level`** | `POST` | `{ track: string, slot: number, db: number }` | `{ success: boolean, track, slot, db }` | Stellt den Send-Pegel via CGEvent auf 0.1 dB genau ein. |
+| **`/api/transport/play`** | `POST` | – | `{ success: boolean }` | Startet DAW-Wiedergabe (AX-First & MCU Fallback). |
+| **`/api/transport/stop`** | `POST` | – | `{ success: boolean }` | Stoppt DAW-Wiedergabe (AX-First & MCU Fallback). |
+| **`/api/transport/locate`** | `POST` | `{ bar: number }` | `{ success: boolean, bar: number }` | Positioniert den Playhead auf Takt x. |
 | **`/api/proposals`** | `POST` | `MixActionProposal` (JSON) | `{ success: boolean, proposalId: string }` | Liefert eine neu generierte ActionCard in die HUD-Queue ein. |
 | **`/api/execute-action`** | `POST` | `{ proposalId, isAudition, isRestore? }` | `{ success: boolean, executedDeltas: number, shieldInterventions: [...], errorCode: string \| null }` | Führt `[Anwenden]`, `[A/B Listen]` oder die Wiederherstellung aus. |
 | **`/api/vault/plugins`** | `GET` | – | `{ plugins: PluginSummaryItem[] }` | Liefert alle im Plugin Vault gespeicherten Drittanbieter-Plugins. |
@@ -275,10 +338,13 @@ Um im Frontend maximale Transparenz und Gehörschutz-Sicherheit zu gewährleiste
 | **`mcp__list_tracks`** | Tool | `{ includePlugins?: boolean }` | Echte Kanalzüge mit Pegel, Pan und belegten Effekten. |
 | **`mcp__propose_mix_adjustment`**| Tool | `ProposeMixAdjustmentInput` | Erstellt eine ActionCard unter Beachtung des Gehörschutzes. |
 | **`mcp__execute_mix_adjustment`**| Tool | `ExecuteMixAdjustmentInput` | Direkte DAW-Parameterausführung nach Genehmigung. |
-| **`mcp__audition_region`** | Tool | `{ startBar, endBar, autoPlay }` | Startet DAW-Cycle-Wiedergabe zum Vorhören. |
+| **`mcp__audition_region`** | Tool | `{ startBar, endBar, autoPlay }` | Startet 8-Sekunden DAW-Cycle-Wiedergabe zum Vorhören mit Telemetrie. |
 | **`mcp__learn_plugin`** | Tool | `{ windowTitle?: string }` | Auto-Profiler für das geöffnete Plugin-Fenster. |
 | **`mcp__set_active_skill`** | Tool | `{ skillId: string }` | Aktiviert einen Mixing-Skill (`tonmischmeister`, Custom-Skill oder `none`). |
 | **`mcp__match_reference_spectrum`**| Tool | `{ referenceId, thresholdDb? }` | Berechnet Spektraldifferenz und schlägt EQ-Deltas vor. |
+| **`mcp__load_plugin`** | Tool | `{ trackName, slotIndex, pluginPath }` | Lädt autonom Plugins aus Menühierarchien in Audio-FX-Slots. |
+| **`mcp__set_send`** | Tool | `{ trackName, slotIndex, destination, levelDb? }` | Belegt Sends-Slots und regelt Send-Pegel präzise in dB. |
+| **`mcp__route_sidechain`** | Tool | `{ trackName, slotIndex, sourcePath }` | Verdrahtet Sidechain-Quellen direkt im Header von Dynamik-Plugins. |
 | **`/health`** | HTTP | – | Status, Versionsnummer und Anzahl gelernter Plugins. |
 | **`/sse`** | HTTP | Server-Sent Events | Standard MCP SSE-Transport für Cursor & Claude Desktop. |
 
@@ -336,6 +402,15 @@ export interface ReferenceTrackProfile {
 }
 ```
 
+### `SidechainRoute` (Ducking- & Sidechain-Routing)
+```typescript
+export interface SidechainRoute {
+  trackName: string;                  // Zielspur des Plugins (z. B. "Bass")
+  slotIndex: number;                  // Audio-FX Slot (1 bis 15)
+  sourcePath: string;                 // z. B. "Bus > Bus 1" oder "Audio > Motown Revisited Kit"
+}
+```
+
 ### `MixActionProposal` (Die ActionCard)
 ```typescript
 export interface MixActionProposal {
@@ -348,6 +423,7 @@ export interface MixActionProposal {
   deltas: ParameterDelta[];
   status: 'pending' | 'applied' | 'rejected' | 'auditioning';
   isPinned?: boolean;
+  sidechainRoute?: SidechainRoute;    // Optional: Ducking- & Sidechain-Header-Verdrahtung
 }
 ```
 
@@ -370,7 +446,40 @@ export interface MixActionProposal {
 | **Custom Mixing Skill Vault** (Sprint 5.1/5.2)| Rust / Desktop HUD | ✅ Fertig | Legal Studio Kachelmanager, Favoriten ⭐, Revisions-Historie |
 | **5-Schritte-Synthese-Wizard** (Sprint 5.3) | AI-Engine / Desktop | ✅ Fertig | Disziplin, Targets, Ästhetik, Ampel 🟢🟡🔴, KI-Synthese |
 | **Runtime Skill Injection** (Sprint 5.4) | HUD / MCP Server | ✅ Fertig | Dropdown in Prompt Console, `mcp__set_active_skill` Tool |
-| **Packaging & App Installation** (Sprint 5.4)| macOS | ✅ Fertig | Installiert unter `/Applications/Oszillation Mixing Buddy.app` |
+| **Transport & 8s-Audition-Loop** (Sprint 6) | macOS (AX + CoreMIDI) | ✅ Fertig | AX Transport, MCU Note 0x5E/5D/60 Fallback, 8s Audit |
+| **Arranger & Folder-Expansion** (Sprint 7) | macOS (Swift AX) | ✅ Fertig | Track-Stacks auf/zuklappen, Inspector Auto-Fokus |
+| **Audio-FX Plugin Loading** (Sprint 8) | macOS (Swift AX) | ✅ Fertig | Rekursive AXMenu-Traversierung, freie & belegte Slots |
+| **Bus-Sends & Submixe** (Sprint 9) | macOS (Swift AX) | ✅ Fertig | Sends 1–8 verdrahten, Aux-Erzeugung, 0.1 dB CGEvent-Drag |
+| **Sidechain & Ducking-Automation** (Sprint 10) | macOS / AI-Engine | ✅ Fertig | AX Header PopUp, Bus/Audio Routing, Ducking ActionCards |
+| **Packaging & App Installation** | macOS | ✅ Fertig | Installiert unter `/Applications/Oszillation Mixing Buddy.app` |
+
+### 7.1 System-Status-Quo im Überblick
+
+| Domäne | Komponente | Status | Anmerkung |
+| :--- | :--- | :---: | :--- |
+| **Audio-Telemetrie** | `MixingBuddyMeter` (AU/VST3) | 🟢 100 % | 30 fps Stream, EBU R128 Dual-Gate, True Peak, FFT |
+| **Desktop Companion** | Tauri v2 + React 18 HUD | 🟢 100 % | RTA Dual-Graph, Card Pinning, Crossover-Modal, Sidechain-Badge |
+| **Musikalische KI** | AI Engine & Vaults | 🟢 100 % | Targets, Referenzen, Custom Skills & Wizard, Ducking-Automation |
+| **Logic Pro Steuerung** | Swift AX Bridge + MCU | 🟢 100 % | Transport, Arranger, Inserts, Sends, Sidechains (Vollautonomie) |
+| **Steinberg Nuendo / Cubase** | MIDI Remote Adapter | 🟡 40 % | VST3-Plugin läuft, JS-Script-Grundgerüst vorhanden |
+| **Ableton Live** | Remote Surface / MCU | ⚪ 15 % | MCU-Transport läuft, Deep LOM Script offen |
+
+---
+
+## 8. Ausblick: Phase 4 (Multi-DAW Readiness – Steinberg Nuendo & Cubase)
+
+Da Apple Logic Pro mit Phase 3 nun zu 100 % beherrscht wird, steht der Weg frei für die Multi-DAW-Architektur. Das Entscheidende daran: **Steinberg Nuendo und Cubase sind dank der offiziellen JavaScript MIDI Remote API wesentlich sauberer, deterministischer und schneller anzubinden als Logic Pro.**
+
+### Warum Nuendo & Cubase die nächste Stufe zünden:
+1. **Kein Fenster-Zwang:** In Nuendo müssen Plugin-Fenster für Parameter-Änderungen gar nicht geöffnet sein; Parameter werden direkt über ihre `paramId` bzw. Parameter-Bänke angesprochen.
+2. **Native 14-Bit Auflösung:** Keine Maus-Drag-Schleifen für Regler – exakte Werteübergabe in Mikrosekunden.
+3. **Plattform-Vorteil:** Unser C++20 Plugin `MixingBuddyMeter` liegt bereits als natives VST3 vor und sendet identische Telemetriedaten.
+
+### Geplanter Phasen-Ablauf für Steinberg:
+- **Sprint 11:** Steinberg Auto-Discovery & Dispatcher-Aktivierung in `lib.rs`
+- **Sprint 12:** Steinberg JavaScript MIDI Remote Script (Fader, Pan, Mute/Solo, Sends)
+- **Sprint 13:** VST3 Insert-Parameter-Steuerung via MIDI Remote Parameter-Bänke
+- **Sprint 14:** Cross-DAW Verifikation (Logic Pro ↔ Nuendo 13/14 Parallelbetrieb)
 
 ---
 
