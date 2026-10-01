@@ -229,6 +229,33 @@ async fn handle_connection(
             return;
         }
 
+        // 1d. GET /api/skills
+        if peek_str.starts_with("GET /api/skills") {
+            let body = if let Some(query_idx) = peek_str.find("?id=") {
+                let id_end = peek_str[query_idx + 4..]
+                    .find(|c: char| c.is_whitespace() || c == '&')
+                    .map(|i| query_idx + 4 + i)
+                    .unwrap_or_else(|| peek_str.len());
+                let id = &peek_str[query_idx + 4..id_end];
+                match crate::skill_vault::get_mixing_skill_sync(id.to_string()) {
+                    Ok(skill) => serde_json::to_string(&skill).unwrap_or_default(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                }
+            } else {
+                let skills = crate::skill_vault::list_mixing_skills_sync().unwrap_or_default();
+                serde_json::json!({ "skills": skills }).to_string()
+            };
+
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.flush().await;
+            return;
+        }
+
         // 2. GET /api/tracks
         if peek_str.starts_with("GET /api/tracks") {
             // Priority 1: Live MCU SysEx LCD Stream from Logic Pro
@@ -505,6 +532,64 @@ async fn handle_connection(
                         serde_json::json!({ "error": err }).to_string(),
                     ),
                 };
+                let resp = format!(
+                    "{}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
+            } else if path.contains("/api/skills/save") || path == "/api/skills" {
+                let (status_line, body) = match serde_json::from_str::<crate::skill_vault::MixingSkill>(&body_str) {
+                    Ok(skill) => {
+                        let skill_id = skill.id.clone();
+                        match crate::skill_vault::save_mixing_skill_sync(skill) {
+                            Ok(path) => {
+                                if let Ok(guard) = app_handle.lock() {
+                                    if let Some(ref handle) = *guard {
+                                        let _ = handle.emit("skill-vault-updated", &skill_id);
+                                    }
+                                }
+                                ("HTTP/1.1 200 OK", serde_json::json!({ "status": "ok", "path": path.to_string_lossy() }).to_string())
+                            }
+                            Err(e) => ("HTTP/1.1 500 Internal Server Error", serde_json::json!({ "error": e }).to_string()),
+                        }
+                    }
+                    Err(e) => ("HTTP/1.1 400 Bad Request", serde_json::json!({ "error": format!("Invalid mixing skill payload: {}", e) }).to_string()),
+                };
+
+                let resp = format!(
+                    "{}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
+            } else if path.contains("/api/skills/delete") {
+                let id = serde_json::from_str::<serde_json::Value>(&body_str)
+                    .ok()
+                    .and_then(|v| v.get("id").and_then(|w| w.as_str()).map(|s| s.to_string()))
+                    .unwrap_or_else(|| body_str.trim().to_string());
+
+                let (status_line, body) = match crate::skill_vault::delete_mixing_skill_sync(id.clone()) {
+                    Ok(_) => {
+                        if let Ok(guard) = app_handle.lock() {
+                            if let Some(ref handle) = *guard {
+                                let _ = handle.emit("skill-vault-updated", &id);
+                            }
+                        }
+                        ("HTTP/1.1 200 OK", serde_json::json!({ "status": "ok", "id": id }).to_string())
+                    }
+                    Err(err) => (
+                        "HTTP/1.1 400 Bad Request",
+                        serde_json::json!({ "error": err }).to_string(),
+                    ),
+                };
+
                 let resp = format!(
                     "{}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     status_line,

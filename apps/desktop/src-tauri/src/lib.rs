@@ -4,6 +4,7 @@ pub mod licensing;
 pub mod mcu_bridge;
 pub mod reference_vault;
 pub mod safety_guard;
+pub mod skill_vault;
 
 use daw_detector::{DAWDetector, DetectedDAW};
 use ipc_server::IPCServer;
@@ -1723,6 +1724,33 @@ async fn delete_reference_profile(id: String, app: tauri::AppHandle) -> Result<(
     Ok(())
 }
 
+#[tauri::command]
+async fn save_mixing_skill(
+    skill: skill_vault::MixingSkill,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let _ = skill_vault::save_mixing_skill_sync(skill.clone())?;
+    let _ = app.emit("skill-vault-updated", &skill.id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_mixing_skills() -> Result<Vec<skill_vault::MixingSkillSummary>, String> {
+    skill_vault::list_mixing_skills_sync()
+}
+
+#[tauri::command]
+async fn get_mixing_skill(id: String) -> Result<skill_vault::MixingSkill, String> {
+    skill_vault::get_mixing_skill_sync(id)
+}
+
+#[tauri::command]
+async fn delete_mixing_skill(id: String, app: tauri::AppHandle) -> Result<(), String> {
+    let _ = skill_vault::delete_mixing_skill_sync(id.clone())?;
+    let _ = app.emit("skill-vault-updated", &id);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -1739,6 +1767,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(app_state)
         .setup(|app| {
+            let _ = skill_vault::get_skill_vault_dir();
             let state = app.state::<AppState>();
             state.ipc_server.set_app_handle(app.handle().clone());
 
@@ -1777,7 +1806,11 @@ pub fn run() {
             save_reference_profile,
             list_reference_profiles,
             get_reference_profile,
-            delete_reference_profile
+            delete_reference_profile,
+            save_mixing_skill,
+            list_mixing_skills,
+            get_mixing_skill,
+            delete_mixing_skill
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");
