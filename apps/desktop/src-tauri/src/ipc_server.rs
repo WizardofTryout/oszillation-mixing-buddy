@@ -202,6 +202,33 @@ async fn handle_connection(
             return;
         }
 
+        // 1c. GET /api/references
+        if peek_str.starts_with("GET /api/references") {
+            let body = if let Some(query_idx) = peek_str.find("?id=") {
+                let id_end = peek_str[query_idx + 4..]
+                    .find(|c: char| c.is_whitespace() || c == '&')
+                    .map(|i| query_idx + 4 + i)
+                    .unwrap_or_else(|| peek_str.len());
+                let id = &peek_str[query_idx + 4..id_end];
+                match crate::reference_vault::get_reference_profile_sync(id) {
+                    Ok(prof) => serde_json::to_string(&prof).unwrap_or_default(),
+                    Err(e) => serde_json::json!({ "error": e }).to_string(),
+                }
+            } else {
+                let refs = crate::reference_vault::list_reference_profiles_sync().unwrap_or_default();
+                serde_json::json!({ "references": refs }).to_string()
+            };
+
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes()).await;
+            let _ = stream.flush().await;
+            return;
+        }
+
         // 2. GET /api/tracks
         if peek_str.starts_with("GET /api/tracks") {
             // Priority 1: Live MCU SysEx LCD Stream from Logic Pro
@@ -416,6 +443,63 @@ async fn handle_connection(
                     .unwrap_or_default();
                 let (status_line, body) = match crate::update_plugin_tags_sync(slug, tags) {
                     Ok(updated) => ("HTTP/1.1 200 OK", updated.to_string()),
+                    Err(err) => (
+                        "HTTP/1.1 400 Bad Request",
+                        serde_json::json!({ "error": err }).to_string(),
+                    ),
+                };
+                let resp = format!(
+                    "{}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
+            } else if path.contains("/api/references/save") || path == "/api/references" {
+                let (status_line, body) = match serde_json::from_str::<crate::reference_vault::ReferenceProfile>(&body_str) {
+                    Ok(profile) => {
+                        let prof_id = profile.id.clone();
+                        match crate::reference_vault::save_reference_profile_sync(profile) {
+                            Ok(path) => {
+                                if let Ok(guard) = app_handle.lock() {
+                                    if let Some(ref handle) = *guard {
+                                        let _ = handle.emit("reference-vault-updated", &prof_id);
+                                    }
+                                }
+                                ("HTTP/1.1 200 OK", serde_json::json!({ "status": "ok", "path": path.to_string_lossy() }).to_string())
+                            }
+                            Err(e) => ("HTTP/1.1 500 Internal Server Error", serde_json::json!({ "error": e }).to_string()),
+                        }
+                    }
+                    Err(e) => ("HTTP/1.1 400 Bad Request", serde_json::json!({ "error": format!("Invalid reference profile payload: {}", e) }).to_string()),
+                };
+
+                let resp = format!(
+                    "{}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                let _ = stream.flush().await;
+                return;
+            } else if path.contains("/api/references/delete") {
+                let id = serde_json::from_str::<serde_json::Value>(&body_str)
+                    .ok()
+                    .and_then(|v| v.get("id").and_then(|w| w.as_str()).map(|s| s.to_string()))
+                    .unwrap_or_else(|| body_str.trim().to_string());
+
+                let (status_line, body) = match crate::reference_vault::delete_reference_profile_sync(&id) {
+                    Ok(msg) => {
+                        if let Ok(guard) = app_handle.lock() {
+                            if let Some(ref handle) = *guard {
+                                let _ = handle.emit("reference-vault-updated", &id);
+                            }
+                        }
+                        ("HTTP/1.1 200 OK", serde_json::json!({ "status": "ok", "message": msg }).to_string())
+                    }
                     Err(err) => (
                         "HTTP/1.1 400 Bad Request",
                         serde_json::json!({ "error": err }).to_string(),

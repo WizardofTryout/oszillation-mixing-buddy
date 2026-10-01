@@ -10,10 +10,17 @@ import {
   Activity,
   Sparkles,
   Flame,
-  Check
+  Check,
+  Bookmark,
+  Trash2,
+  Save,
+  FolderHeart,
+  RefreshCw,
+  Music
 } from 'lucide-react';
-import type { ReferenceTrackProfile } from '@mixing-buddy/shared-types';
+import type { ReferenceTrackProfile, ReferenceProfileSummary } from '@mixing-buddy/shared-types';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { analyzeAudioBuffer, CENTER_FREQUENCIES } from '../utils/audioProfiler.js';
 
@@ -30,6 +37,13 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
   activeProfile,
   onApplyReference
 }) => {
+  // Tab Navigation: 'analyze' vs 'saved'
+  const [activeTab, setActiveTab] = useState<'analyze' | 'saved'>('analyze');
+  const [savedReferences, setSavedReferences] = useState<ReferenceProfileSummary[]>([]);
+  const [isLoadingSaved, setIsLoadingSaved] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
+
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [analysisProgress, setAnalysisProgress] = useState<string>('');
@@ -60,6 +74,96 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
       setCandidateProfile(activeProfile);
     }
   }, [isOpen, activeProfile, candidateProfile]);
+
+  // Load saved references from ~/.mixing-buddy/references/ via Tauri IPC
+  const loadSavedReferences = useCallback(async () => {
+    try {
+      setIsLoadingSaved(true);
+      const list = await invoke<ReferenceProfileSummary[]>('list_reference_profiles');
+      setSavedReferences(list || []);
+    } catch (err) {
+      console.warn('Failed to load saved reference profiles', err);
+    } finally {
+      setIsLoadingSaved(false);
+    }
+  }, []);
+
+  // Save current candidate profile to ~/.mixing-buddy/references/<slug>.json
+  const handleSaveProfile = async () => {
+    if (!candidateProfile) return;
+    try {
+      setIsSaving(true);
+      await invoke('save_reference_profile', { profile: candidateProfile });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3000);
+      await loadSavedReferences();
+    } catch (err: unknown) {
+      console.error('Failed to save reference profile', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Fehler beim Speichern der Referenz');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Load saved reference from vault into candidateProfile for inspecting 32-band curve & listening
+  const handleLoadSavedReference = async (summary: ReferenceProfileSummary) => {
+    try {
+      const fullProfile = await invoke<ReferenceTrackProfile>('get_reference_profile', { id: summary.id });
+      setCandidateProfile(fullProfile);
+      setDuration(fullProfile.durationSeconds);
+      setCurrentTime(0);
+      setActiveTab('analyze');
+    } catch (err) {
+      console.error('Failed to load saved reference', err);
+      setErrorMessage('Profil konnte nicht vollständig geladen werden.');
+    }
+  };
+
+  // Activate directly into HUD
+  const handleActivateSavedReference = async (summary: ReferenceProfileSummary) => {
+    try {
+      const fullProfile = await invoke<ReferenceTrackProfile>('get_reference_profile', { id: summary.id });
+      onApplyReference(fullProfile);
+      onClose();
+    } catch (err) {
+      console.error('Failed to activate saved reference', err);
+      setErrorMessage('Referenz konnte nicht aktiviert werden.');
+    }
+  };
+
+  // Delete saved reference from ~/.mixing-buddy/references/
+  const handleDeleteSavedReference = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await invoke('delete_reference_profile', { id });
+      await loadSavedReferences();
+    } catch (err) {
+      console.error('Failed to delete saved reference', err);
+    }
+  };
+
+  // Load saved references on modal open & listen for backend vault updates
+  useEffect(() => {
+    if (!isOpen) return;
+    loadSavedReferences();
+
+    let unlisten: (() => void) | undefined;
+    try {
+      listen('reference-vault-updated', () => {
+        loadSavedReferences();
+      }).then((cleanup) => {
+        unlisten = cleanup;
+      }).catch((err) => {
+        console.warn('listen reference-vault-updated error', err);
+      });
+    } catch (e) {
+      console.warn('listen not available', e);
+    }
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [isOpen, loadSavedReferences]);
 
   // Stop playback on modal close
   useEffect(() => {
@@ -496,13 +600,13 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
             </div>
             <div>
               <h2 className="text-base font-bold text-white tracking-wide flex items-center gap-2">
-                Referenz-Track Profiler
+                Referenz-Track Profiler & Vault
                 <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-indigo-950/80 border border-indigo-700/50 text-indigo-300">
-                  Sprint 4.1
+                  Sprint 4.2
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                Audiodatei analysieren, Metrologie berechnen und Spektrum als Zielkurve nutzen
+                Audiodatei analysieren, Metrologie berechnen und in ~/.mixing-buddy/references/ speichern
               </p>
             </div>
           </div>
@@ -514,42 +618,78 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
           </button>
         </div>
 
-        {/* Modal Body */}
-        <div className="p-6 overflow-y-auto space-y-5">
-          {/* Dropzone */}
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setIsDragging(true);
-            }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-200 flex flex-col items-center justify-center gap-2.5 ${
-              isDragging
-                ? 'border-indigo-400 bg-indigo-950/30 scale-[0.99]'
-                : 'border-slate-700 hover:border-slate-500 bg-slate-900/40 hover:bg-slate-900/60'
+        {/* Navigation Tabs */}
+        <div className="flex border-b border-slate-800 bg-[#14171f] px-6 pt-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab('analyze')}
+            className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold border-b-2 transition cursor-pointer ${
+              activeTab === 'analyze'
+                ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
             }`}
           >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="audio/*,.wav,.mp3,.aiff,.aif,.flac"
-              onChange={handleFileSelect}
-              className="hidden"
-            />
-            <div className="w-12 h-12 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
-              <UploadCloud className="w-6 h-6 animate-pulse" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-slate-200">
-                Referenz-Track hier ablegen oder <span className="text-indigo-400 underline">auswählen</span>
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                WAV, MP3, AIFF, FLAC • Direkte Offline-Analyse via Web Audio API
-              </p>
-            </div>
-          </div>
+            <UploadCloud className="w-4 h-4" />
+            <span>Referenz analysieren</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('saved')}
+            className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold border-b-2 transition cursor-pointer ${
+              activeTab === 'saved'
+                ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5'
+                : 'border-transparent text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Bookmark className="w-4 h-4" />
+            <span>Gespeicherte Referenzen</span>
+            {savedReferences.length > 0 && (
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-indigo-900/80 text-indigo-300 font-mono">
+                {savedReferences.length}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Modal Body */}
+        <div className="p-6 overflow-y-auto space-y-5">
+          {/* TAB 1: Analyse & Dropzone */}
+          {activeTab === 'analyze' && (
+            <>
+              {/* Dropzone */}
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-200 flex flex-col items-center justify-center gap-2.5 ${
+                  isDragging
+                    ? 'border-indigo-400 bg-indigo-950/30 scale-[0.99]'
+                    : 'border-slate-700 hover:border-slate-500 bg-slate-900/40 hover:bg-slate-900/60'
+                }`}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="audio/*,.wav,.mp3,.aiff,.aif,.flac"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+                <div className="w-12 h-12 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
+                  <UploadCloud className="w-6 h-6 animate-pulse" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-200">
+                    Referenz-Track hier ablegen oder <span className="text-indigo-400 underline">auswählen</span>
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    WAV, MP3, AIFF, FLAC • Direkte Offline-Analyse via Web Audio API
+                  </p>
+                </div>
+              </div>
 
           {/* Loading / Status */}
           {isAnalyzing && (
@@ -601,12 +741,34 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
                   </div>
                 </div>
 
-                {activeProfile?.id === candidateProfile.id && (
-                  <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-semibold bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded shrink-0">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    Aktiv
-                  </span>
-                )}
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleSaveProfile}
+                    disabled={isSaving}
+                    className="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg bg-indigo-950/70 hover:bg-indigo-900/80 border border-indigo-500/40 text-indigo-300 hover:text-white transition disabled:opacity-50 cursor-pointer shadow-sm"
+                    title="Referenz-Profil dauerhaft in ~/.mixing-buddy/references speichern"
+                  >
+                    {saveSuccess ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-emerald-400">Gespeichert</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>{isSaving ? 'Speichern...' : 'In Vault sichern'}</span>
+                      </>
+                    )}
+                  </button>
+
+                  {activeProfile?.id === candidateProfile.id && (
+                    <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-semibold bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded shrink-0">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Aktiv
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Metrology Badges Grid */}
@@ -707,7 +869,144 @@ export const ReferenceTrackModal: React.FC<ReferenceTrackModalProps> = ({
               </div>
             </div>
           )}
+        </>
+      )}
+
+      {/* TAB 2: Gespeicherte Referenzen aus ~/.mixing-buddy/references/ */}
+      {activeTab === 'saved' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Bookmark className="w-4 h-4 text-indigo-400" />
+                Persistente Referenz-Bibliothek
+              </h3>
+              <p className="text-xs text-slate-400">
+                Gespeicherte Profile in <code className="text-indigo-300 font-mono text-[11px]">~/.mixing-buddy/references/</code>
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={loadSavedReferences}
+              disabled={isLoadingSaved}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 transition cursor-pointer"
+              title="Bibliothek neu laden"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingSaved ? 'animate-spin' : ''}`} />
+              <span>Aktualisieren</span>
+            </button>
+          </div>
+
+          {savedReferences.length === 0 ? (
+            <div className="bg-[#171a21] border border-slate-800/90 rounded-xl p-8 text-center flex flex-col items-center justify-center gap-3">
+              <div className="w-12 h-12 rounded-full bg-slate-800/80 border border-slate-700/60 flex items-center justify-center text-slate-500">
+                <FolderHeart className="w-6 h-6" />
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-slate-300">Noch keine Referenzen gespeichert</h4>
+                <p className="text-xs text-slate-500 mt-1 max-w-sm">
+                  Wechsle auf den Tab "Referenz analysieren", lege einen Track ab und klicke auf "In Vault sichern", um ihn dauerhaft zu speichern.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('analyze')}
+                className="mt-1 px-3 py-1.5 text-xs font-semibold text-indigo-300 bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/50 rounded-lg transition cursor-pointer"
+              >
+                Track analysieren
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-2.5 max-h-[50vh] overflow-y-auto pr-1">
+              {savedReferences.map((item) => {
+                const isCurrentActive = activeProfile?.id === item.id;
+                const isCandidate = candidateProfile?.id === item.id;
+
+                return (
+                  <div
+                    key={item.id}
+                    className={`bg-[#171a21] border rounded-xl p-4 transition-all duration-200 flex items-center justify-between gap-4 ${
+                      isCurrentActive
+                        ? 'border-emerald-500/60 bg-emerald-950/20 shadow-md'
+                        : isCandidate
+                        ? 'border-indigo-500/50 bg-indigo-950/10'
+                        : 'border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    {/* Track Info */}
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <div className={`p-2.5 rounded-lg border shrink-0 ${
+                        isCurrentActive
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                          : 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400'
+                      }`}>
+                        <Music className="w-5 h-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-sm font-bold text-white truncate" title={item.name}>
+                            {item.name}
+                          </h4>
+                          <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-[10px] font-mono text-slate-300 uppercase">
+                            {item.fileFormat}
+                          </span>
+                          {isCurrentActive && (
+                            <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-semibold bg-emerald-950/80 border border-emerald-500/40 px-1.5 py-0.5 rounded">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Aktiv
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-slate-400 mt-1">
+                          <span className="font-mono text-cyan-400">{item.integratedLufs.toFixed(1)} LUFS</span>
+                          <span>•</span>
+                          <span className="font-mono text-emerald-400">{item.truePeakDb.toFixed(1)} dBTP</span>
+                          <span>•</span>
+                          <span className="font-mono text-amber-400">CF {item.crestFactorDb.toFixed(1)} dB</span>
+                          <span>•</span>
+                          <span>{formatTime(item.durationSeconds)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleLoadSavedReference(item)}
+                        className="px-2.5 py-1 text-xs font-medium text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700/80 transition cursor-pointer"
+                        title="32-Band Spektrum im Profiler laden"
+                      >
+                        Hüllkurve
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleActivateSavedReference(item)}
+                        className="flex items-center gap-1 px-3 py-1 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition shadow-sm cursor-pointer"
+                        title="Direkt als HUD-Referenzziel aktivieren"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        Aktivieren
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteSavedReference(item.id, e)}
+                        className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg transition cursor-pointer"
+                        title="Aus Festplatten-Vault löschen"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
+      )}
+    </div>
 
         {/* Footer Actions */}
         <div className="px-6 py-3.5 border-t border-slate-800 bg-[#171a21] flex items-center justify-between">

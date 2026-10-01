@@ -70,6 +70,19 @@ export interface ReferenceTrackProfile {
   timestamp: number;
 }
 
+export interface ReferenceProfileSummary {
+  id: string;
+  name: string;
+  fileName: string;
+  fileFormat: string;
+  durationSeconds: number;
+  integratedLufs: number;
+  truePeakDb: number;
+  crestFactorDb: number;
+  timestamp: number;
+  filePath?: string;
+}
+
 export const STANDARD_GENRE_PROFILES: Record<string, TargetProfile> = {
   pop_radio: {
     id: 'pop_radio',

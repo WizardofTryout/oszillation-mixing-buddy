@@ -2,6 +2,7 @@ pub mod daw_detector;
 pub mod ipc_server;
 pub mod licensing;
 pub mod mcu_bridge;
+pub mod reference_vault;
 pub mod safety_guard;
 
 use daw_detector::{DAWDetector, DetectedDAW};
@@ -1695,6 +1696,33 @@ async fn read_audio_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| format!("Failed to read audio file '{}': {}", path, e))
 }
 
+#[tauri::command]
+async fn save_reference_profile(
+    profile: reference_vault::ReferenceProfile,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let _ = reference_vault::save_reference_profile_sync(profile.clone())?;
+    let _ = app.emit("reference-vault-updated", &profile.id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn list_reference_profiles() -> Result<Vec<reference_vault::ReferenceProfileSummary>, String> {
+    reference_vault::list_reference_profiles_sync()
+}
+
+#[tauri::command]
+async fn get_reference_profile(id: String) -> Result<reference_vault::ReferenceProfile, String> {
+    reference_vault::get_reference_profile_sync(&id)
+}
+
+#[tauri::command]
+async fn delete_reference_profile(id: String, app: tauri::AppHandle) -> Result<(), String> {
+    let _ = reference_vault::delete_reference_profile_sync(&id)?;
+    let _ = app.emit("reference-vault-updated", &id);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -1745,7 +1773,11 @@ pub fn run() {
             delete_learned_plugin,
             update_plugin_tags,
             list_channel_strips,
-            read_audio_file
+            read_audio_file,
+            save_reference_profile,
+            list_reference_profiles,
+            get_reference_profile,
+            delete_reference_profile
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");
