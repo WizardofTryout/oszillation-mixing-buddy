@@ -115,6 +115,12 @@ export const App: React.FC = () => {
       pluginName?: string | null;
       slotIndex?: number | null;
     }>;
+    /** Optional: Sidechain-Routing-Undo. Falls gefüllt, wird beim Rückgängig-Machen
+     *  set_sidechain mit source='None' aufgerufen, um das Routing wieder aufzuheben. */
+    sidechainUndo?: {
+      track: string;
+      slot: number;
+    };
   }>>([]);
 
   // Accordion UI state for cleaner layout
@@ -696,14 +702,17 @@ export const App: React.FC = () => {
     }));
 
     try {
+      // 1. Physisches Sidechain-Routing (vor den Parameteränderungen verdrahten)
       if (proposal.sidechainRoute) {
         await invoke('set_sidechain', {
           track: proposal.sidechainRoute.trackName,
           slot: proposal.sidechainRoute.slotIndex,
           source: proposal.sidechainRoute.sourcePath
         });
+        setChatLog(`🔗 Sidechain verdrahtet: ${proposal.sidechainRoute.sourcePath} → ${proposal.sidechainRoute.trackName} Slot ${proposal.sidechainRoute.slotIndex}`);
       }
 
+      // 2. Parameter-Änderungen an die DAW senden
       for (const delta of deltasToApply) {
         await invoke('apply_daw_action', {
           trackName: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
@@ -718,12 +727,21 @@ export const App: React.FC = () => {
         });
       }
 
-      // Add to Undo Stack
+      // 3. Undo-Stack-Eintrag (inkl. optionalem Sidechain-Undo)
       const historyItem = {
         id: `hist_${Date.now()}`,
         timestamp: Date.now(),
         description: proposal.title,
-        snapshot
+        snapshot,
+        // Sidechain-Undo: source wird auf 'None' gesetzt, um Routing aufzuheben
+        ...(proposal.sidechainRoute
+          ? {
+              sidechainUndo: {
+                track: proposal.sidechainRoute.trackName,
+                slot: proposal.sidechainRoute.slotIndex
+              }
+            }
+          : {})
       };
       setHistoryStack((prev) => [historyItem, ...prev]);
 
@@ -773,6 +791,8 @@ export const App: React.FC = () => {
 
     try {
       setChatLog(`↩ Rückgängig: "${actionToUndo.description}" wird in ${dawLabel} zurückgesetzt...`);
+
+      // Parameter-Rollback
       for (const item of actionToUndo.snapshot) {
         await invoke('apply_daw_action', {
           trackName: item.track,
@@ -785,6 +805,20 @@ export const App: React.FC = () => {
           pluginName: item.pluginName ?? null,
           slotIndex: item.slotIndex ?? null
         });
+      }
+
+      // Sidechain-Routing aufheben (source='None' trennt die Verdrahtung)
+      if (actionToUndo.sidechainUndo) {
+        try {
+          await invoke('set_sidechain', {
+            track: actionToUndo.sidechainUndo.track,
+            slot: actionToUndo.sidechainUndo.slot,
+            source: 'None'
+          });
+          setChatLog(`🔗 Sidechain-Routing aufgehoben: ${actionToUndo.sidechainUndo.track} Slot ${actionToUndo.sidechainUndo.slot} → None`);
+        } catch (scErr) {
+          console.warn('Sidechain-Undo fehlgeschlagen:', scErr);
+        }
       }
 
       setHistoryStack(remainingStack);
@@ -833,13 +867,26 @@ export const App: React.FC = () => {
     const dawLabel = isLogic ? 'Logic Pro' : 'Nuendo';
     const previousStatus = prop.status;
 
+    // Startposition aus dem Proposal oder Fallback auf Bar 1
+    const startBar: number = (prop as any).startBar ?? 1;
+
     setProposals((prev) =>
       prev.map((p) => (p.id === id ? { ...p, status: 'auditioning' } : p))
     );
 
     try {
       if (previousStatus === 'applied') {
-        setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}". Plugin-Bypass in ${dawLabel} umgeschaltet...`);
+        // ── A/B via Plugin-Bypass (bereits angewendete Karte) ──────────────
+        setChatLog(`🎧 A/B Audition: "${prop.title}" – Plugin-Bypass in ${dawLabel} umgeschaltet...`);
+
+        // 1. Playhead setzen & Playback starten
+        try {
+          await invoke('daw_locate_bar', { bar: startBar });
+          await invoke('daw_play');
+        } catch (playErr) {
+          console.warn('[A/B] Playback-Start fehlgeschlagen:', playErr);
+        }
+
         for (const delta of prop.deltas) {
           const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
           await invoke('toggle_plugin_bypass', {
@@ -848,7 +895,31 @@ export const App: React.FC = () => {
           });
         }
       } else {
-        setChatLog(`🎧 A/B Audition aktiv für: "${prop.title}" (${prop.deltas.length} Änderungen) für 6s in ${dawLabel} aktiviert...`);
+        // ── A/B via Parameter-Preview (noch nicht angewendete Karte) ───────
+        setChatLog(`🎧 A/B Audition: "${prop.title}" (${prop.deltas.length} Änderungen) – 6s Vorschau in ${dawLabel}...`);
+
+        // 1. Playhead setzen & Playback starten
+        try {
+          await invoke('daw_locate_bar', { bar: startBar });
+          await invoke('daw_play');
+        } catch (playErr) {
+          console.warn('[A/B] Playback-Start fehlgeschlagen:', playErr);
+        }
+
+        // 2. Temporäres Sidechain-Routing (falls vorhanden)
+        if (prop.sidechainRoute) {
+          try {
+            await invoke('set_sidechain', {
+              track: prop.sidechainRoute.trackName,
+              slot: prop.sidechainRoute.slotIndex,
+              source: prop.sidechainRoute.sourcePath
+            });
+          } catch (scErr) {
+            console.warn('[A/B] Temporäres Sidechain-Routing fehlgeschlagen:', scErr);
+          }
+        }
+
+        // 3. Testwerte in die DAW schreiben
         for (const delta of prop.deltas) {
           const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
           await invoke('apply_daw_action', {
@@ -865,6 +936,8 @@ export const App: React.FC = () => {
         }
       }
     } catch (err: unknown) {
+      // Playback sicherheitshalber stoppen bei Fehler
+      invoke('daw_stop').catch(() => {});
       setProposals((prev) =>
         prev.map((p) => (p.id === id ? { ...p, status: previousStatus } : p))
       );
@@ -872,10 +945,18 @@ export const App: React.FC = () => {
       return;
     }
 
-    // Auto-restore after 6 seconds of audition
+    // Auto-Restore nach 6 Sekunden
     setTimeout(async () => {
       try {
+        // 1. Playback stoppen (A/B Restore Garantie: isRestore=true, darf NIEMALS blockiert werden)
+        try {
+          await invoke('daw_stop');
+        } catch (stopErr) {
+          console.warn('[A/B] daw_stop fehlgeschlagen:', stopErr);
+        }
+
         if (previousStatus === 'applied') {
+          // Bypass wieder zurückschalten
           for (const delta of prop.deltas) {
             const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
             await invoke('toggle_plugin_bypass', {
@@ -884,13 +965,14 @@ export const App: React.FC = () => {
             });
           }
         } else {
+          // 2. Testwerte zurückrollen (isRestore: true)
           for (const delta of prop.deltas) {
             const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
             await invoke('apply_daw_action', {
               trackName: targetTrack,
               parameter: delta.parameterName || 'EQ',
               value: delta.currentValue ?? 0.0,
-              currentValue: delta.currentValue ?? 0.0,
+              currentValue: delta.proposedValue ?? 0.0,
               isRestore: true,
               unit: delta.unit ?? 'dB',
               isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo'),
@@ -898,7 +980,21 @@ export const App: React.FC = () => {
               slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
             });
           }
+
+          // 3. Temporäres Sidechain-Routing wieder aufheben
+          if (prop.sidechainRoute) {
+            try {
+              await invoke('set_sidechain', {
+                track: prop.sidechainRoute.trackName,
+                slot: prop.sidechainRoute.slotIndex,
+                source: 'None'
+              });
+            } catch (scErr) {
+              console.warn('[A/B] Sidechain-Restore fehlgeschlagen:', scErr);
+            }
+          }
         }
+
         setChatLog(`🎧 A/B Audition beendet. Vorheriger Zustand in ${dawLabel} wiederhergestellt.`);
       } catch (err: unknown) {
         setChatLog(`❌ Fehler beim Wiederherstellen nach A/B Audition: ${String(err)}`);
