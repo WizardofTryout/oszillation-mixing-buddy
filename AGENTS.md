@@ -107,16 +107,16 @@ In Tonstudios arbeiten Nutzer mit hohen Abhörlautstärken. Falsche Pegelsprüng
 
 ---
 
-## 🔏 macOS TCC Permission & Ad-hoc Codesign Rule (Mandatory for Desktop Builds)
+## 🔏 macOS TCC Permission & Permanent Codesign Rule (Mandatory for Desktop Builds)
 
-* **Problem:** Unsignierte Tauri-Bundles (`--no-sign`) verändern bei jedem Neubau ihren binären Hash. macOS TCC (Transparency, Consent, and Control) entzieht der App dadurch die Accessibility-Berechtigung (Bedienungshilfen) und fordert den Benutzer bei jedem Start erneut auf.
-* **Regel:** Nach jedem Erstellen des Release-Bundles und dem Kopieren nach `/Applications/` **MUSS** die App zwingend ad-hoc signiert werden:
+* **Problem:** Unsignierte Tauri-Bundles (`--no-sign`) oder flüchtige Ad-hoc-Signaturen verändern bei jedem Neubau ihren binären Hash. macOS TCC (Transparency, Consent, and Control) entzieht der App dadurch die Accessibility-Berechtigung (Bedienungshilfen) und fordert den Benutzer bei jedem Start erneut auf.
+* **Regel:** Nach jedem Erstellen des Release-Bundles und dem Kopieren nach `/Applications/` **MUSS** die App zwingend mit dem permanenten Entwickler-Zertifikat `MixingBuddyDev` signiert werden:
   ```bash
-  codesign --force --deep -s - "/Applications/Oszillation Mixing Buddy.app"
+  codesign --force --deep -s "MixingBuddyDev" "/Applications/Oszillation Mixing Buddy.app"
   ```
 * **Build-Kette:**
   ```bash
-  pnpm --filter desktop tauri build --bundles app --no-sign && rm -rf "/Applications/Oszillation Mixing Buddy.app" && cp -R "target/release/bundle/macos/Oszillation Mixing Buddy.app" /Applications/ && mkdir -p "/Applications/Oszillation Mixing Buddy.app/Contents/Resources" && cp packages/daw-adapters/bin/logic-ax-bridge "/Applications/Oszillation Mixing Buddy.app/Contents/Resources/" && codesign --force --deep -s - "/Applications/Oszillation Mixing Buddy.app"
+  pnpm --filter desktop tauri build --bundles app --no-sign && rm -rf "/Applications/Oszillation Mixing Buddy.app" && cp -R "target/release/bundle/macos/Oszillation Mixing Buddy.app" /Applications/ && mkdir -p "/Applications/Oszillation Mixing Buddy.app/Contents/Resources" && cp packages/daw-adapters/bin/logic-ax-bridge "/Applications/Oszillation Mixing Buddy.app/Contents/Resources/" && codesign --force --deep -s "MixingBuddyDev" "/Applications/Oszillation Mixing Buddy.app"
   ```
 
 ---
