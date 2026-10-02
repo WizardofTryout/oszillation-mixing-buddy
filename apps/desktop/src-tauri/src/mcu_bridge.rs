@@ -130,6 +130,12 @@ impl Default for McuLcdState {
 }
 
 impl McuLcdState {
+    /// Clears both lines of the LCD buffer to spaces
+    pub fn clear(&mut self) {
+        self.line1 = [b' '; 56];
+        self.line2 = [b' '; 56];
+    }
+
     /// Updates the LCD buffer from an incoming MCU SysEx payload
     pub fn update_from_sysex(&mut self, payload: &[u8]) -> bool {
         // Minimum SysEx: F0 00 00 66 14 12 <offset> <at least 1 char> F7 (length >= 8)
@@ -147,6 +153,13 @@ impl McuLcdState {
         } else {
             &payload[7..]
         };
+
+        // When starting from offset 0, reset line1 so old ghost tracks from previous projects are purged
+        if offset == 0 {
+            self.line1 = [b' '; 56];
+        } else if offset == 56 {
+            self.line2 = [b' '; 56];
+        }
 
         for (i, &byte) in data.iter().enumerate() {
             if byte == 0xF7 {
@@ -270,7 +283,7 @@ impl McuBridge {
                                 i += 3;
                             } else if status == 0xF0 {
                                 if lcd.update_from_sysex(&data[i..]) {
-                                    let track_names = lcd.extract_track_names();
+                                    let mut track_names = lcd.extract_track_names();
                                     if !track_names.is_empty() {
                                         println!(
                                             "🎛️ [MCU Bridge] Live tracks from Logic LCD: {:?}",
@@ -279,6 +292,11 @@ impl McuBridge {
                                         let updated = build_track_list(&track_names);
                                         if let Ok(mut tr) = tracks_ref.lock() {
                                             *tr = updated;
+                                        }
+                                    } else {
+                                        track_names.clear();
+                                        if let Ok(mut tr) = tracks_ref.lock() {
+                                            tr.clear();
                                         }
                                     }
                                 }
@@ -323,6 +341,17 @@ impl McuBridge {
             .lock()
             .map(|g| g.clone())
             .unwrap_or_default()
+    }
+
+    /// Explicitly clears the track buffer and resets LCD state to purge ghost tracks.
+    pub fn clear_tracks(&self) {
+        if let Ok(mut tr) = self.discovered_tracks.lock() {
+            tr.clear();
+        }
+        if let Ok(mut lcd) = self.lcd_state.lock() {
+            lcd.clear();
+        }
+        println!("🧹 [MCU Bridge] Discovered tracks and LCD buffer purged");
     }
 
     /// Sends raw MIDI bytes to Logic Pro via the virtual source port.
@@ -837,9 +866,9 @@ mod tests {
         let mut lcd = McuLcdState::default();
 
         // Simulate Logic Pro broadcasting 8 track names on Line 1
-        // Each slot is exactly 7 chars: "SimpleF", "Drums  ", "Bass   ", …
+        // Each slot is exactly 7 chars: "Audio 1", "Drums  ", "Bass   ", …
         let mut sysex = vec![0xF0, 0x00, 0x00, 0x66, 0x14, 0x12, 0x00];
-        let text = b"SimpleFDrums  Bass   Guitar Keys   Vox    Pad    StereoO";
+        let text = b"Audio 1Drums  Bass   Guitar Keys   Vox    Pad    StereoO";
         sysex.extend_from_slice(text);
         sysex.push(0xF7);
 
@@ -847,7 +876,7 @@ mod tests {
         let tracks = lcd.extract_track_names();
 
         assert_eq!(tracks.len(), 8);
-        assert_eq!(tracks[0], "SimpleF");
+        assert_eq!(tracks[0], "Audio 1");
         assert_eq!(tracks[1], "Drums");
         assert_eq!(tracks[2], "Bass");
         assert_eq!(tracks[7], "StereoO");
@@ -869,7 +898,7 @@ mod tests {
 
     #[test]
     fn test_build_track_list_adds_master_if_missing() {
-        let names = vec!["SimpleF".to_string(), "Bass".to_string()];
+        let names = vec!["Audio 1".to_string(), "Bass".to_string()];
         let tracks = build_track_list(&names);
         assert!(tracks
             .iter()
@@ -878,7 +907,7 @@ mod tests {
 
     #[test]
     fn test_build_track_list_no_duplicate_master() {
-        let names = vec!["SimpleF".to_string(), "Stereo Out".to_string()];
+        let names = vec!["Audio 1".to_string(), "Stereo Out".to_string()];
         let tracks = build_track_list(&names);
         let master_count = tracks
             .iter()

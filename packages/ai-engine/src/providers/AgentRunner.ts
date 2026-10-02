@@ -269,19 +269,19 @@ export class AgentRunner {
 
   /**
    * Proaktive Rotation bei JEDEM Request + 80% Quota-Deckelung (max 4 Anfragen/60s)
-   * + Mindestabstand (Pacing) von mindestens 1.200 ms.
+   * + Mindestabstand (Pacing) von mindestens 1.500 ms.
    */
   private async getNextKeyWithPacing(signal?: AbortSignal): Promise<string> {
     if (this.apiKeys.length === 0) {
       throw new Error('Kein gültiger API-Key im Pool konfiguriert.');
     }
 
-    // 1. Mindestabstand (Pacing): mind. 1.200 ms zwischen zwei API-Aufrufen
+    // 1. Mindestabstand (Pacing): mind. 1.500 ms zwischen zwei API-Aufrufen
     const now = Date.now();
     const elapsed = now - AgentRunner.lastGlobalApiCallTime;
-    if (elapsed < 1200) {
-      const waitMs = 1200 - elapsed;
-      await agentDelay(waitMs, signal);
+    if (elapsed < 1500) {
+      const waitMs = 1500 - elapsed;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
     this.checkAborted(signal);
 
@@ -857,6 +857,9 @@ export class AgentRunner {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       this.checkAborted(signal);
 
+      // Pacing-Bremse zwischen Turns: Vor JEDEM API-Aufruf an das Modell MUSS ein Mindestabstand von 1.500 ms eingehalten werden
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
       // Proaktives Multi-Key Round-Robin & Pacing
       const key = await this.getNextKeyWithPacing(signal);
 
@@ -1035,9 +1038,9 @@ export class AgentRunner {
     let lastText = '';
     let finalProposal: MixActionProposal | undefined;
     const allWarnings: string[] = [];
-    const MAX_ITERATIONS = 3;
+    const maxTurns = 4;
     let totalToolCalls = 0;
-    const MAX_TOOL_CALLS = 3;
+    const MAX_TOOL_CALLS = 4;
     let isSilentPlayback = false;
 
     let promptTokens = 0;
@@ -1046,7 +1049,7 @@ export class AgentRunner {
     let turnsCount = 0;
 
     try {
-      for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+      for (let iteration = 0; iteration < maxTurns; iteration++) {
         this.checkAborted(activeSignal);
 
         const response = await this.generateContentWithRetry(
@@ -1170,7 +1173,7 @@ export class AgentRunner {
             if (!lastText && finalProposal) {
               lastText = finalProposal.rationale || finalProposal.title || 'Vorschlag erfolgreich generiert.';
             }
-            // Single-Pass 1-Turn Garantie: Vorschlag validiert, keine weiteren API-Turns notwendig
+            // Nach 'propose_mix_adjustment' wird die Schleife SOFORT beendet
             break;
           } else {
             toolResult = JSON.stringify({ error: `Unknown tool: ${call.name}` });
@@ -1185,6 +1188,11 @@ export class AgentRunner {
 
           // 300 ms inter-tool pause to spread quota load across the free tier
           await agentDelay(300, activeSignal);
+        }
+
+        if (finalProposal) {
+          // Nach 'propose_mix_adjustment' wird die Schleife SOFORT beendet
+          break;
         }
 
         // Turn 3 (Tool-Ergebnisse vom User):
@@ -1308,12 +1316,15 @@ function agentDelay(ms: number, signal?: AbortSignal): Promise<void> {
 function buildAgentSystemPrompt(): string {
   return (
     MIXING_BUDDY_SYSTEM_PROMPT +
-    `\n\n## AGENTIC SINGLE-PASS RULES (STRICTLY ENFORCED)\n\n` +
-    `1. ZERO-TURN PREFETCH: Session context (tracks, faders, pans, inserts, measured metrology) is already attached in the prompt. Do NOT call \`list_tracks\` or \`audition_region\`!\n` +
-    `2. SINGLE-PASS GUARANTEE: Audition has ALREADY been completed locally. You MUST respond directly with \`propose_mix_adjustment\` in this single response!\n` +
-    `3. Always use the exact track names from the attached session context (NEVER invent or abbreviate names).\n` +
-    `4. NEVER propose a plugin that is not listed in the attached fx array for that track.\n` +
-    `5. Provide a clear, professional musical rationale in \`rationale\` inside \`propose_mix_adjustment\`.\n`
+    `\n\n## AGENTIC GOVERNOR & TURN RULES (STRICTLY ENFORCED)\n\n` +
+    `1. TURN-BUDGET: You have a strict budget of maximum 4 turns (maxTurns = 4).\n` +
+    `2. RECOMMENDED TURN SEQUENCE:\n` +
+    `   - Turn 1: Capture session context & execute audition (if requested by user)\n` +
+    `   - Turn 2: Inspect inserts/routing of target tracks\n` +
+    `   - Turn 3: Generate final 'propose_mix_adjustment'\n` +
+    `3. IMMEDIATELY TERMINATE: Once 'propose_mix_adjustment' is submitted, execution stops immediately.\n` +
+    `4. Always use exact track names directly from the DAW UI (e.g. 'Studio Grand', 'Motown Revisited'). NEVER invent or abbreviate names.\n` +
+    `5. Provide a clear, professional musical rationale in 'rationale' inside 'propose_mix_adjustment'.\n`
   );
 }
 

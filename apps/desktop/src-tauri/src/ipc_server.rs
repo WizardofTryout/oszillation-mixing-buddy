@@ -269,20 +269,20 @@ async fn handle_connection(
             let track_list = if !explicitly_synced.is_empty() {
                 explicitly_synced
             } else {
-                // Priority 1: Live MCU SysEx LCD Stream from Logic Pro
-                let mcu_tracks = mcu_bridge.get_tracks();
-                if !mcu_tracks.is_empty() {
-                    mcu_tracks
+                // Priority 1: Native Swift Bridge Ground-Truth (list-channel-strips)
+                let mut detector = DAWDetector::new();
+                let daw = detector.detect_active_daw();
+                let mut scanned = Vec::new();
+                if daw == DetectedDAW::LogicPro {
+                    scanned = detector.scan_logic_pro_tracks();
+                }
+                if !scanned.is_empty() {
+                    scanned
                 } else {
-                    let mut detector = DAWDetector::new();
-                    let daw = detector.detect_active_daw();
-                    if daw == DetectedDAW::LogicPro {
-                        let scanned = detector.scan_logic_pro_tracks();
-                        if !scanned.is_empty() {
-                            scanned
-                        } else {
-                            Vec::new()
-                        }
+                    // Secondary Fallback: Live MCU SysEx LCD Stream
+                    let mcu_tracks = mcu_bridge.get_tracks();
+                    if !mcu_tracks.is_empty() {
+                        mcu_tracks
                     } else {
                         Vec::new()
                     }

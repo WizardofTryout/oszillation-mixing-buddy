@@ -175,19 +175,19 @@ mod tests {
     fn test_ab_audition_drop_and_restore_flow() {
         let mut guard = SafetyGuard::new();
         // Track starts at 0.0 dB (nominal)
-        guard.register_baseline("Simple Foundation", 0.0);
+        guard.register_baseline("Lead Vocals", 0.0);
 
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         // Audition start: Fader drop to -8.0 dB
-        let dropped = guard.sanitize_volume_with_restore("Simple Foundation", false, -8.0, false);
+        let dropped = guard.sanitize_volume_with_restore("Lead Vocals", false, -8.0, false);
         assert!(dropped.is_ok());
         assert_eq!(dropped.unwrap(), -8.0);
 
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         // Audition restore: Fader returns to 0.0 dB (+8.0 dB jump) with is_restore = true
-        let restored = guard.sanitize_volume_with_restore("Simple Foundation", false, 0.0, true);
+        let restored = guard.sanitize_volume_with_restore("Lead Vocals", false, 0.0, true);
         assert!(restored.is_ok());
         assert_eq!(restored.unwrap(), 0.0);
     }

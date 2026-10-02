@@ -809,7 +809,7 @@ fn is_subsequence(sub: &str, full: &str) -> bool {
 }
 
 /// Fuzzy track name matching mirroring the Swift `matchesTrackName` logic.
-/// Supports CamelCase acronyms like "MoReKi" -> "Motown Revisited Kit", "SimFou" -> "Simple Foundation", "StdGrn" -> "Studio Grand".
+/// Supports CamelCase acronyms like "MoReKi" -> "Motown Revisited Kit", "StdGrn" -> "Studio Grand".
 fn matches_track_fuzzy(strip_name: &str, query: &str) -> bool {
     let s = strip_name.to_lowercase();
     let q = query.to_lowercase();
@@ -825,7 +825,6 @@ fn matches_track_fuzzy(strip_name: &str, query: &str) -> bool {
     // Explicit MCU LCD abbreviations
     let mcu_map: &[(&str, &str)] = &[
         ("moreki", "motown revisited kit"),
-        ("simfou", "simple foundation"),
         ("stdgrn", "studio grand"),
         ("stout", "stereo out"),
         ("st_out", "stereo out"),
@@ -837,7 +836,7 @@ fn matches_track_fuzzy(strip_name: &str, query: &str) -> bool {
         }
     }
 
-    // Subsequence matching (e.g. "stdgrn" in "studiogrand", "moreki" in "motownrevisitedkit", "simfou" in "simplefoundation")
+    // Subsequence matching (e.g. "stdgrn" in "studiogrand", "moreki" in "motownrevisitedkit")
     if q_clean.len() >= 2 && s_clean.chars().next() == q_clean.chars().next() && is_subsequence(&q_clean, &s_clean) {
         return true;
     }
@@ -973,26 +972,7 @@ async fn apply_daw_action(
         {
             8
         } else {
-            let mcu_tracks = state.ipc_server.mcu_bridge.get_tracks();
-            let matched_idx = mcu_tracks.iter().position(|t| {
-                let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                matches_track_fuzzy(name, &track_name)
-            });
-            match matched_idx {
-                Some(idx) => (idx as u8).min(7),
-                None => {
-                    let num_in_name = track_name
-                        .chars()
-                        .filter(|c| c.is_ascii_digit())
-                        .collect::<String>()
-                        .parse::<u8>()
-                        .ok();
-                    match num_in_name {
-                        Some(n) if n >= 1 && n <= 8 => n - 1,
-                        _ => 0,
-                    }
-                }
-            }
+            resolve_track_channel_index(&track_name, &state)
         };
 
         // Primary execution path: MCU Pitchbend (0xE0 + ch_idx)
@@ -1932,15 +1912,30 @@ async fn daw_locate_bar(bar: u32, state: State<'_, AppState>) -> Result<(), Stri
     }
 }
 
+pub fn log_mb_desktop(msg: &str) {
+    use std::io::Write;
+    let ts = chrono::Utc::now().to_rfc3339();
+    let line = format!("[{}] {}\n", ts, msg);
+    eprint!("{}", line);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/mb_desktop.log")
+    {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
 #[tauri::command]
 async fn audition_region(
     start_bar: u32,
     end_bar: Option<u32>,
     duration_seconds: Option<f64>,
-    state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     if start_bar < 1 {
-        return Err("start_bar must be >= 1".to_string());
+        let err = "start_bar must be >= 1".to_string();
+        log_mb_desktop(&format!("❌ [audition_region] Error: {}", err));
+        return Err(err);
     }
     let effective_duration = match (end_bar, duration_seconds) {
         (Some(e), _) if e > start_bar => {
@@ -1953,17 +1948,23 @@ async fn audition_region(
     };
     let dur_ms = (effective_duration * 1000.0) as u64;
 
+    log_mb_desktop(&format!(
+        "▶️ [audition_region] Start audition: start_bar={}, end_bar={:?}, duration={:.1}s",
+        start_bar, end_bar, effective_duration
+    ));
+
     #[cfg(target_os = "macos")]
     {
         let bridge_path = resolve_bridge_binary();
         if !bridge_path.exists() {
             let err_msg = format!("logic-ax-bridge sidecar nicht gefunden unter {:?}", bridge_path);
-            eprintln!("{}", err_msg);
+            log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
             return Err(err_msg);
         }
 
         // 1. Swift: Setze Cycle-Bereich auf start..end bzw. stelle sicher, dass Cycle aus ist
         if let Some(end) = end_bar {
+            log_mb_desktop(&format!("🔄 [audition_region] set-cycle-region {}..{}", start_bar, end));
             let cycle_args = vec![
                 "set-cycle-region".to_string(),
                 "--start".to_string(),
@@ -1971,52 +1972,80 @@ async fn audition_region(
                 "--end".to_string(),
                 end.to_string(),
             ];
-            let _ = execute_logic_ax_bridge(&bridge_path, &cycle_args);
+            let cycle_res = execute_logic_ax_bridge(&bridge_path, &cycle_args)?;
+            if cycle_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
+                let err_msg = format!("set-cycle-region fehlgeschlagen: {:?}", cycle_res.get("error"));
+                log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
+                return Err(err_msg);
+            }
         } else {
+            log_mb_desktop("🔄 [audition_region] ensure-cycle-off");
             let cycle_args = vec!["ensure-cycle-off".to_string()];
-            let _ = execute_logic_ax_bridge(&bridge_path, &cycle_args);
-        }
-        let _ = state.ipc_server.mcu_bridge.ensure_cycle_off();
-
-        // 2. Exaktes Bar-Locate via native Swift Bridge (mit MCU Fallback)
-        let args = vec!["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()];
-        if let Err(e) = execute_logic_ax_bridge(&bridge_path, &args) {
-            eprintln!("⚠️ [audition_region] Bridge locate failed ({}), falling back to MCU locate", e);
-            let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
+            let cycle_res = execute_logic_ax_bridge(&bridge_path, &cycle_args)?;
+            if cycle_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
+                let err_msg = format!("ensure-cycle-off fehlgeschlagen: {:?}", cycle_res.get("error"));
+                log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
+                return Err(err_msg);
+            }
         }
 
-        // 3. Warte 200 ms
+        // 2. Exaktes Bar-Locate via native Swift Bridge
+        log_mb_desktop(&format!("🎯 [audition_region] transport-locate bar {}", start_bar));
+        let locate_args = vec!["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()];
+        let locate_res = execute_logic_ax_bridge(&bridge_path, &locate_args)
+            .map_err(|e| {
+                let err_msg = format!("transport-locate fehlgeschlagen: {}", e);
+                log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
+                err_msg
+            })?;
+        if locate_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
+            let err_msg = format!("transport-locate fehlgeschlagen: {:?}", locate_res.get("error"));
+            log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
+            return Err(err_msg);
+        }
+
+        // 3. Warte 200 ms Einschwingzeit
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // 4. Starte Playback via Swift Bridge ('transport-play')
+        log_mb_desktop("▶️ [audition_region] transport-play");
         let play_args = vec!["transport-play".to_string()];
-        let play_result = execute_logic_ax_bridge(&bridge_path, &play_args);
-        let play_started = match &play_result {
-            Ok(_) => true,
-            Err(e) => {
-                eprintln!("⚠️ [audition_region] Bridge play failed ({}), falling back to MCU note pulse", e);
-                state.ipc_server.mcu_bridge.send_note_pulse(94, 50).is_ok()
-            }
-        };
-
-        if !play_started {
-            let err_msg = format!(
-                "Playback konnte nicht gestartet werden: logic-ax-bridge fehlgeschlagen ({:?}) und MCU Fallback nicht verfügbar",
-                play_result.err()
-            );
-            eprintln!("{}", err_msg);
+        let play_res = execute_logic_ax_bridge(&bridge_path, &play_args)
+            .map_err(|e| {
+                let err_msg = format!("transport-play fehlgeschlagen: {}", e);
+                log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
+                err_msg
+            })?;
+        if play_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
+            let err_msg = format!("transport-play fehlgeschlagen: {:?}", play_res.get("error"));
+            log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
             return Err(err_msg);
         }
 
         // 5. Warte die berechnete Dauer
+        log_mb_desktop(&format!("⏱️ [audition_region] Playing for {} ms...", dur_ms));
         tokio::time::sleep(std::time::Duration::from_millis(dur_ms)).await;
 
         // 6. Stoppe Playback via Swift Bridge ('transport-stop')
+        log_mb_desktop("⏹️ [audition_region] transport-stop");
         let stop_args = vec!["transport-stop".to_string()];
-        if let Err(e) = execute_logic_ax_bridge(&bridge_path, &stop_args) {
-            eprintln!("⚠️ [audition_region] Bridge stop failed ({}), falling back to MCU note pulse", e);
-            let _ = state.ipc_server.mcu_bridge.send_note_pulse(93, 50);
+        let stop_res = execute_logic_ax_bridge(&bridge_path, &stop_args)
+            .map_err(|e| {
+                let err_msg = format!("transport-stop fehlgeschlagen: {}", e);
+                log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
+                err_msg
+            })?;
+        if stop_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
+            let err_msg = format!("transport-stop fehlgeschlagen: {:?}", stop_res.get("error"));
+            log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
+            return Err(err_msg);
         }
+
+        log_mb_desktop(&format!(
+            "✅ [audition_region] Audition abgeschlossen (start={}, end={:?}, duration={:.1}s)",
+            start_bar, end_bar, effective_duration
+        ));
+
         Ok(serde_json::json!({
             "success": true,
             "startBar": start_bar,
@@ -2026,7 +2055,8 @@ async fn audition_region(
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (start_bar, dur_ms, state);
+        let _ = (start_bar, dur_ms);
+        log_mb_desktop("ℹ️ [audition_region] Non-macOS platform — stubbed playback");
         Ok(serde_json::json!({
             "success": true,
             "startBar": start_bar,
@@ -2050,6 +2080,32 @@ fn resolve_track_channel_index(track_name: &str, state: &AppState) -> u8 {
         return 8;
     }
 
+    // 1. PRIMARY GROUND TRUTH: Query Swift AX Bridge (list-channel-strips)
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_binary();
+        if bridge_path.exists() {
+            if let Ok(strips_val) = execute_logic_ax_bridge(&bridge_path, &["list-channel-strips".to_string()]) {
+                if let Some(strips) = strips_val
+                    .get("channelStrips")
+                    .or_else(|| strips_val.get("channel_strips"))
+                    .and_then(|cs| cs.as_array())
+                {
+                    for (idx, s) in strips.iter().enumerate() {
+                        let name = s.get("trackName")
+                            .or_else(|| s.get("name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if matches_track_fuzzy(name, track_name) {
+                            return (idx as u8).min(7);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Secondary fallback: MCU LCD Stream
     let mcu_tracks = state.ipc_server.mcu_bridge.get_tracks();
     if let Some(idx) = mcu_tracks.iter().position(|t| {
         let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("");
