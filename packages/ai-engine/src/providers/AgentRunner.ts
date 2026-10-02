@@ -200,8 +200,60 @@ export class AgentRunner {
   private async executeListTracks(): Promise<string> {
     const step = this.addStep('📋', 'Live-Spuren & Channel Strips laden');
     try {
-      const result = await this.cfg.invokeTauri<{ channelStrips?: ChannelStrip[] }>('list_channel_strips');
-      const strips: ChannelStrip[] = result.channelStrips ?? [];
+      let rawResult: any = null;
+      try {
+        rawResult = await this.cfg.invokeTauri<any>('list_channel_strips');
+      } catch (err) {
+        console.warn('list_channel_strips invoke error:', err);
+      }
+
+      let rawList: any[] =
+        rawResult?.channelStrips ??
+        rawResult?.channel_strips ??
+        (Array.isArray(rawResult) ? rawResult : []);
+
+      // Fallback 1: get_channel_strips
+      if (!rawList || rawList.length === 0) {
+        try {
+          const fallback = await this.cfg.invokeTauri<any>('get_channel_strips');
+          rawList =
+            fallback?.channelStrips ??
+            fallback?.channel_strips ??
+            (Array.isArray(fallback) ? fallback : []);
+        } catch {}
+      }
+
+      // Fallback 2: get_tracks
+      if (!rawList || rawList.length === 0) {
+        try {
+          const fallbackTracks = await this.cfg.invokeTauri<any>('get_tracks');
+          rawList =
+            fallbackTracks?.tracks ??
+            fallbackTracks?.channelStrips ??
+            fallbackTracks?.channel_strips ??
+            (Array.isArray(fallbackTracks) ? fallbackTracks : []);
+        } catch {}
+      }
+
+      // Fallback 3: Live telemetry HTTP endpoint on port 48123
+      if (!rawList || rawList.length === 0) {
+        try {
+          const res = await fetch('http://127.0.0.1:48123/api/tracks');
+          if (res.ok) {
+            const json = await res.json();
+            rawList = Array.isArray(json.tracks) ? json.tracks : Array.isArray(json) ? json : [];
+          }
+        } catch {}
+      }
+
+      const strips: ChannelStrip[] = (rawList || []).map((item: any) => ({
+        trackName: item.trackName || item.track_name || item.name || 'Track',
+        inserts: (item.inserts || item.insertSlots || []).map((ins: any, idx: number) => ({
+          slot: typeof ins.slot === 'number' ? ins.slot : typeof ins.slotIndex === 'number' ? ins.slotIndex : idx,
+          name: ins.name || ins.pluginName || ins.plugin_name || 'Plugin'
+        }))
+      }));
+
       this.fetchedStrips = strips;
       const summary = strips.map((s) => ({
         name: s.trackName,
@@ -218,25 +270,24 @@ export class AgentRunner {
   private async executeGetTrackDetails(trackName: string): Promise<string> {
     const step = this.addStep('🔍', `Inserts auf „${trackName}" prüfen`);
     try {
-      const strips: ChannelStrip[] = this.fetchedStrips ?? [];
-      const match = strips.find(
+      let strips: ChannelStrip[] = this.fetchedStrips ?? [];
+      let match = strips.find(
         (s) =>
           s.trackName.toLowerCase().includes(trackName.toLowerCase()) ||
           trackName.toLowerCase().includes(s.trackName.toLowerCase())
       );
       if (!match) {
-        const result = await this.cfg.invokeTauri<{ channelStrips?: ChannelStrip[] }>('list_channel_strips');
-        const fresh = (result.channelStrips ?? []).find(
+        await this.executeListTracks();
+        strips = this.fetchedStrips ?? [];
+        match = strips.find(
           (s) =>
             s.trackName.toLowerCase().includes(trackName.toLowerCase()) ||
             trackName.toLowerCase().includes(s.trackName.toLowerCase())
         );
-        if (!fresh) {
+        if (!match) {
           this.resolveStep(step, 'Spur nicht gefunden');
           return JSON.stringify({ error: `Track '${trackName}' not found`, inserts: [] });
         }
-        this.resolveStep(step, `${(fresh.inserts ?? []).length} Inserts`);
-        return JSON.stringify(fresh);
       }
       this.resolveStep(step, `${(match.inserts ?? []).length} Inserts auf „${match.trackName}"`);
       return JSON.stringify(match);
@@ -250,12 +301,28 @@ export class AgentRunner {
     const dur = Math.max(2, Math.min(30, durationSeconds));
     const step = this.addStep('👂', `Wiedergabe Takt ${startBar} · ${dur}s`);
     try {
-      await this.cfg.invokeTauri('daw_locate_bar', { bar: startBar });
-      // Transport-Stabilisierung: mindestens 400 ms warten vor Playback
-      await agentDelay(400);
-      await this.cfg.invokeTauri('daw_play', {});
-      await agentDelay(dur * 1000);
-      await this.cfg.invokeTauri('daw_stop', {});
+      let atomicSuccess = false;
+      try {
+        const atomicRes = await this.cfg.invokeTauri<any>('audition_region', {
+          startBar,
+          durationSeconds: dur
+        });
+        if (atomicRes && atomicRes.success !== false) {
+          atomicSuccess = true;
+        }
+      } catch (err) {
+        console.warn('audition_region atomic invoke failed, falling back to sequential transport:', err);
+      }
+
+      if (!atomicSuccess) {
+        await this.cfg.invokeTauri('daw_locate_bar', { bar: startBar });
+        // Transport-Stabilisierung: mindestens 400 ms warten vor Playback
+        await agentDelay(400);
+        await this.cfg.invokeTauri('daw_play', {});
+        await agentDelay(dur * 1000);
+        await this.cfg.invokeTauri('daw_stop', {});
+      }
+
       this.resolveStep(step, `Takt ${startBar} abgespielt`);
       return JSON.stringify({ success: true, bar: startBar, durationSeconds: dur });
     } catch (err) {
@@ -397,9 +464,15 @@ export class AgentRunner {
           msg.includes('RESOURCE_EXHAUSTED');
 
         if (isQuotaError && this.keyPool.length > 1) {
+          const quotaStep = this.addStep('⏳', 'API-Quota erreicht · Wechsle Key & warte 2.5s...');
           this.rotateKey();
-          // Brief back-off before retrying with next key
-          await agentDelay(800);
+          await agentDelay(2500);
+          this.resolveStep(quotaStep, 'Weiter mit neuem Key');
+          continue;
+        } else if (isQuotaError && this.keyPool.length === 1) {
+          const quotaStep = this.addStep('⏳', 'API-Quota erreicht · Warte 2.5s Cooldown...');
+          await agentDelay(2500);
+          this.resolveStep(quotaStep, 'Erneuter Versuch');
           continue;
         }
         throw err;
@@ -442,9 +515,7 @@ export class AgentRunner {
 
     const initialUserText =
       `Engineer request: "${userPrompt}"\n\nLive telemetry:\n${telemetrySummary}\n\n` +
-      `Instructions: First call list_tracks to inspect the DAW session, then optionally ` +
-      `audition_region to listen to a section, then propose_mix_adjustment with ONLY plugins ` +
-      `that actually exist on the tracks.`;
+      `Instructions: Complete your work efficiently in 2-3 turns! First call list_tracks to inspect the session (and audition_region if requested), then immediately submit propose_mix_adjustment with verified plugins!`;
 
     // Turn 1 (User): initial user request with live telemetry
     const contents: GeminiContent[] = [
@@ -457,7 +528,7 @@ export class AgentRunner {
     let lastText = '';
     let finalProposal: MixActionProposal | undefined;
     const allWarnings: string[] = [];
-    const MAX_ITERATIONS = 8;
+    const MAX_ITERATIONS = 4;
 
     try {
       for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
@@ -579,7 +650,8 @@ function buildAgentSystemPrompt(tracks: TrackDescriptor[]): string {
     `2. NEVER propose a plugin that is not listed in list_tracks results for that track.\n` +
     `3. Use exact slot indices returned by list_tracks (e.g., Compressor at Slot 5).\n` +
     `4. If the engineer says "listen" or specifies a bar number, call audition_region first.\n` +
-    `5. Only call propose_mix_adjustment as the FINAL step, after all inspection is complete.\n\n` +
+    `5. Only call propose_mix_adjustment as the FINAL step, after all inspection is complete.\n` +
+    `6. Be efficient: complete your recommendations within at most 3 tool turns.\n\n` +
     `## CURRENT TRACKS (may be stale – always call list_tracks to verify)\n` +
     trackList
   );

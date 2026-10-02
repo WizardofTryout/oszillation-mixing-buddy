@@ -1902,7 +1902,7 @@ async fn audition_region(
         } else {
             let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
         }
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::thread::sleep(std::time::Duration::from_millis(400));
         // 2. Play
         if bridge_path.exists() {
             if let Ok(v) = execute_logic_ax_bridge(&bridge_path, &["transport-play".to_string()]) {

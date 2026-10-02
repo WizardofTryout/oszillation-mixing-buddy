@@ -52,17 +52,30 @@ func findLogicApplicationElement() -> AXUIElement? {
     return nil
 }
 
-func getLogicPID() -> pid_t? {
+func getLogicRunningApp() -> NSRunningApplication? {
     let bundleApps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.logic10")
     if let app = bundleApps.first {
-        return app.processIdentifier
+        return app
     }
     for app in NSWorkspace.shared.runningApplications {
         if app.localizedName == "Logic Pro" || app.bundleIdentifier == "com.apple.logic10" {
-            return app.processIdentifier
+            return app
         }
     }
     return nil
+}
+
+func getLogicPID() -> pid_t? {
+    return getLogicRunningApp()?.processIdentifier
+}
+
+func sendReturnKeyToLogic() {
+    guard let pid = getLogicPID() else { return }
+    let src = CGEventSource(stateID: .hidSystemState)
+    let keyDown = CGEvent(keyboardEventSource: src, virtualKey: 36, keyDown: true)
+    let keyUp = CGEvent(keyboardEventSource: src, virtualKey: 36, keyDown: false)
+    keyDown?.postToPid(pid)
+    keyUp?.postToPid(pid)
 }
 
 func sendSpacebarToLogic() -> Bool {
@@ -2377,6 +2390,10 @@ case "list-insert-menu":
 // MARK: - SPRINT 6: Transport Control Commands
 
 case "transport-play":
+    if let app = getLogicRunningApp() {
+        app.activate(options: .activateIgnoringOtherApps)
+        usleep(100_000) // 100ms für macOS WindowServer
+    }
     var played = false
 
     // 1. Try AXUIElement in Steuerungsleiste (AXCheckBox/AXButton desc="Wiedergabe" / "Play")
@@ -2464,6 +2481,11 @@ case "transport-locate":
         exit(0)
     }
 
+    if let app = getLogicRunningApp() {
+        app.activate(options: .activateIgnoringOtherApps)
+        usleep(100_000) // 100ms für macOS WindowServer
+    }
+
     var located = false
 
     let allWindows = getLogicWindows(appElement)
@@ -2480,6 +2502,8 @@ case "transport-locate":
         }) {
             let setErr = AXUIElementSetAttributeValue(taktSlider, kAXValueAttribute as CFString, barNum as CFTypeRef)
             if setErr == .success || setErr == .cannotComplete {
+                sendReturnKeyToLogic()
+                usleep(200_000)
                 located = true
                 break
             }
@@ -2498,6 +2522,8 @@ case "transport-locate":
                 let setErr = AXUIElementSetAttributeValue(posField, kAXValueAttribute as CFString, posString)
                 if setErr == .success {
                     let _ = AXUIElementPerformAction(posField, kAXConfirmAction as CFString)
+                    sendReturnKeyToLogic()
+                    usleep(200_000)
                     located = true
                 }
                 break

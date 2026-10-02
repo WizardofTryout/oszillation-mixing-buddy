@@ -447,7 +447,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   };
 
   return (
-    <div className="bg-darkSurface border border-darkBorder rounded-lg flex flex-col min-h-[280px] h-[330px] resize-y overflow-hidden shadow-md">
+    <div className="flex flex-col bg-slate-900/90 border border-slate-800 rounded-xl min-h-[260px] max-h-[80vh] resize-y overflow-auto relative shadow-md">
       {/* Console Header */}
       <div className="px-3 py-2 border-b border-darkBorder/70 bg-[#16181d] flex flex-wrap items-center justify-between text-xs gap-2">
         <div className="flex items-center gap-1.5 font-semibold text-slate-200">
@@ -490,7 +490,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
       </div>
 
       {/* Messages Scroll Area */}
-      <div ref={scrollRef} className="flex-1 min-h-[180px] overflow-y-auto p-3 flex flex-col gap-2.5 text-xs">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[140px] text-xs">
         {messages.map((m) => (
           <div
             key={m.id}
