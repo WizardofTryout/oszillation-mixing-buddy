@@ -141,8 +141,8 @@ func detectPluginName(in window: AXUIElement, windowTitle: String) -> String {
     return windowTitle
 }
 
-// Locate target plugin window by title, child static text, or dialog fallback
-func findTargetWindow(_ appElement: AXUIElement, query: String) -> AXUIElement? {
+// Locate target plugin window by title, child static text, or dialog fallback (with retry)
+func findTargetWindowOnce(_ appElement: AXUIElement, query: String) -> AXUIElement? {
     let windows = getLogicWindows(appElement)
     let lowerQuery = query.lowercased()
 
@@ -192,6 +192,16 @@ func findTargetWindow(_ appElement: AXUIElement, query: String) -> AXUIElement? 
 
     return nil
 }
+
+func findPluginWindow(_ appElement: AXUIElement, query: String) -> AXUIElement? {
+    for attempt in 0..<4 {
+        if let win = findTargetWindowOnce(appElement, query: query) { return win }
+        if attempt < 3 { usleep(100_000) }
+    }
+    return nil
+}
+
+func findTargetWindow(_ appElement: AXUIElement, query: String) -> AXUIElement? { findPluginWindow(appElement, query: query) }
 
 func buildWindowError(_ appElement: AXUIElement, query: String) -> String {
     let windows = getLogicWindows(appElement)
@@ -2112,11 +2122,14 @@ case "open-insert":
         exit(0)
     }
 
+    // Warte mindestens 200 ms, damit macOS WindowServer das Fenster im AX-Baum registriert
+    usleep(200_000)
+
     var openedWin: AXUIElement? = nil
     var openedTitle = targetPlugin.name
-    let deadline = Date().addingTimeInterval(0.4)
+    let deadline = Date().addingTimeInterval(0.6)
     while Date() < deadline {
-        Thread.sleep(forTimeInterval: 0.04)
+        Thread.sleep(forTimeInterval: 0.05)
         for w in getLogicWindows(appElement) {
             let sr = getAXString(w, kAXSubroleAttribute as String) ?? ""
             let t = getAXString(w, kAXTitleAttribute as String) ?? ""
@@ -2127,20 +2140,6 @@ case "open-insert":
             }
         }
         if openedWin != nil { break }
-    }
-
-    let expected = !pluginQuery.isEmpty ? pluginQuery : targetPlugin.name.lowercased()
-    if !expected.isEmpty && !openedTitle.lowercased().contains(expected) {
-        if let w = openedWin {
-            for c in getAXChildren(w) where getAXString(c, kAXSubroleAttribute as String) == "AXCloseButton" {
-                _ = AXUIElementPerformAction(c, kAXPressAction as CFString)
-            }
-        }
-        if let match = strip.pluginGroups.first(where: { $0.name.lowercased().contains(expected) }) {
-            targetPlugin = match
-            _ = clickBtn(targetPlugin.group)
-            openedTitle = targetPlugin.name
-        }
     }
 
     printJSON(["success": true, "track": strip.trackName, "pluginName": targetPlugin.name, "openedWindow": openedTitle])
@@ -2643,7 +2642,8 @@ case "transport-locate":
         printJSON(["success": false, "error": "Missing or invalid --bar argument (must be >= 1)"])
         exit(0)
     }
-    _ = ensureCycleOff(appElement: appElement)
+    let keepCycle = (getArg("--keep-cycle") ?? "false") == "true"
+    if !keepCycle { _ = ensureCycleOff(appElement: appElement) }
     let res = performTransportLocate(appElement: appElement, barNum: barNum)
     printJSON(["success": true, "action": "locate", "bar": barNum, "dialogOpened": res.dialogOpened, "windowFound": res.windowFound, "pid": res.pid, "isTrusted": AXIsProcessTrusted()])
 

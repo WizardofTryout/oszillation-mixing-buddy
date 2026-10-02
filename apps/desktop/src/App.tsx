@@ -103,6 +103,7 @@ export const App: React.FC = () => {
   const [cardFilter, setCardFilter] = useState<'all' | 'pinned'>('all');
   const [historyStack, setHistoryStack] = useState<Array<{
     id: string;
+    proposalId?: string;
     timestamp: number;
     description: string;
     snapshot: Array<{
@@ -730,6 +731,7 @@ export const App: React.FC = () => {
       // 3. Undo-Stack-Eintrag (inkl. optionalem Sidechain-Undo)
       const historyItem = {
         id: `hist_${Date.now()}`,
+        proposalId: id,
         timestamp: Date.now(),
         description: proposal.title,
         snapshot,
@@ -822,6 +824,18 @@ export const App: React.FC = () => {
       }
 
       setHistoryStack(remainingStack);
+      // Status der Karte zurücksetzen auf 'pending'
+      setProposals((prev) =>
+        prev.map((p) => {
+          if (actionToUndo.proposalId && p.id === actionToUndo.proposalId) {
+            return { ...p, status: 'pending' };
+          }
+          if (p.title === actionToUndo.description && p.status === 'applied') {
+            return { ...p, status: 'pending' };
+          }
+          return p;
+        })
+      );
       setChatLog(`✅ Rückgängig erfolgreich: "${actionToUndo.description}" auf Ausgangswerte zurückgesetzt.`);
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Rückgängig-Machen: ${String(err)}`);
@@ -867,8 +881,9 @@ export const App: React.FC = () => {
     const dawLabel = isLogic ? 'Logic Pro' : 'Nuendo';
     const previousStatus = prop.status;
 
-    // Startposition aus dem Proposal oder Fallback auf Bar 1
-    const startBar: number = (prop as any).startBar ?? 1;
+    // Startposition aus dem Proposal oder Fallback auf Bar 9 (musikalisch relevanter Start)
+    const startBar: number = (prop as any).startBar ?? 9;
+    const endBar: number = (prop as any).endBar ?? (startBar + 4);
 
     setProposals((prev) =>
       prev.map((p) => (p.id === id ? { ...p, status: 'auditioning' } : p))
@@ -879,9 +894,12 @@ export const App: React.FC = () => {
         // ── A/B via Plugin-Bypass (bereits angewendete Karte) ──────────────
         setChatLog(`🎧 A/B Audition: "${prop.title}" – Plugin-Bypass in ${dawLabel} umgeschaltet...`);
 
-        // 1. Playhead setzen & Playback starten
+        // 1. Cycle-Bereich auf den Ziel-Takt setzen, Playhead positionieren und abspielen:
         try {
-          await invoke('daw_locate_bar', { bar: startBar });
+          await invoke('daw_set_cycle_region', { start: startBar, end: endBar });
+        } catch (_) {}
+        try {
+          await invoke('daw_locate_bar', { bar: startBar, keepCycle: true });
           await invoke('daw_play');
         } catch (playErr) {
           console.warn('[A/B] Playback-Start fehlgeschlagen:', playErr);
@@ -898,9 +916,12 @@ export const App: React.FC = () => {
         // ── A/B via Parameter-Preview (noch nicht angewendete Karte) ───────
         setChatLog(`🎧 A/B Audition: "${prop.title}" (${prop.deltas.length} Änderungen) – 6s Vorschau in ${dawLabel}...`);
 
-        // 1. Playhead setzen & Playback starten
+        // 1. Cycle-Bereich auf den Ziel-Takt setzen, Playhead positionieren und abspielen:
         try {
-          await invoke('daw_locate_bar', { bar: startBar });
+          await invoke('daw_set_cycle_region', { start: startBar, end: endBar });
+        } catch (_) {}
+        try {
+          await invoke('daw_locate_bar', { bar: startBar, keepCycle: true });
           await invoke('daw_play');
         } catch (playErr) {
           console.warn('[A/B] Playback-Start fehlgeschlagen:', playErr);

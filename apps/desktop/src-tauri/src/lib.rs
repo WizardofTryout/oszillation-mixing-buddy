@@ -1253,8 +1253,8 @@ async fn apply_daw_action(
                     .to_string();
 
                 if open_result.get("success").and_then(|v| v.as_bool()) == Some(true) {
-                    // Small yield to let macOS Accessibility register the newly opened window
-                    std::thread::sleep(std::time::Duration::from_millis(150));
+                    // Warte mindestens 250 ms, BEVOR der nachfolgende set_param-Befehl abgesetzt wird.
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
 
                     // 3. Retry set-param with the now-open window
                     let mut retry_args = cmd_args.clone();
@@ -1885,18 +1885,58 @@ async fn daw_stop(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn daw_locate_bar(bar: u32, state: State<'_, AppState>) -> Result<(), String> {
+async fn daw_set_cycle_region(
+    start: u32,
+    end: u32,
+    _state: State<'_, AppState>,
+) -> Result<(), String> {
+    if start < 1 || end <= start {
+        return Err("Ungültiger Cycle-Bereich (start >= 1 und end > start erforderlich)".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_binary();
+        if bridge_path.exists() {
+            let cycle_args = vec![
+                "set-cycle-region".to_string(),
+                "--start".to_string(),
+                start.to_string(),
+                "--end".to_string(),
+                end.to_string(),
+            ];
+            let res = execute_logic_ax_bridge(&bridge_path, &cycle_args)?;
+            if res.get("success").and_then(|v| v.as_bool()) == Some(false) {
+                let err = res.get("error").and_then(|v| v.as_str()).unwrap_or("set-cycle-region fehlgeschlagen");
+                return Err(err.to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn daw_locate_bar(
+    bar: u32,
+    keep_cycle: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     if bar < 1 {
         return Err("Bar number must be >= 1".to_string());
     }
     #[cfg(target_os = "macos")]
     {
-        // 1. Zwingend Cycle-Modus ausschalten
-        let _ = state.ipc_server.mcu_bridge.ensure_cycle_off();
+        let keep = keep_cycle.unwrap_or(false);
+        if !keep {
+            let _ = state.ipc_server.mcu_bridge.ensure_cycle_off();
+        }
 
         // 2. Exaktes Bar-Locate via native Swift Bridge (Gehe zu Position ...)
         let bridge_path = resolve_bridge_binary();
-        let args = vec!["transport-locate".to_string(), "--bar".to_string(), bar.to_string()];
+        let mut args = vec!["transport-locate".to_string(), "--bar".to_string(), bar.to_string()];
+        if keep {
+            args.push("--keep-cycle".to_string());
+            args.push("true".to_string());
+        }
         match execute_logic_ax_bridge(&bridge_path, &args) {
             Ok(_) => Ok(()),
             Err(e) => {
@@ -1907,7 +1947,7 @@ async fn daw_locate_bar(bar: u32, state: State<'_, AppState>) -> Result<(), Stri
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (bar, state);
+        let _ = (bar, keep_cycle, state);
         Ok(())
     }
 }
@@ -2643,6 +2683,7 @@ pub fn run() {
             daw_play,
             daw_stop,
             daw_locate_bar,
+            daw_set_cycle_region,
             audition_region,
             set_folder_expanded,
             select_track,
