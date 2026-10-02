@@ -33,6 +33,17 @@ export interface AgentStep {
   detail?: string;
 }
 
+export interface AgentUsageStats {
+  promptTokenCount: number;
+  candidatesTokenCount: number;
+  totalTokenCount: number;
+  durationMs: number;
+  turnsCount: number;
+  model: string;
+  activeKeyCount: number;
+  estimatedCostUsd: number;
+}
+
 export interface AgentRunnerConfig {
   /**
    * Single key (backwards compat) – converted internally to a single-element pool.
@@ -48,12 +59,15 @@ export interface AgentRunnerConfig {
   onStep: (step: AgentStep) => void;
   /** Optional accessor for live telemetry frame from audio meter plugin */
   getTelemetry?: () => MetrologyTelemetryFrame | null;
+  /** Optional callback for token usage, latency and key pool telemetry */
+  onUsageUpdate?: (stats: AgentUsageStats) => void;
 }
 
 export interface AgentRunResult {
   assistantText: string;
   proposal?: MixActionProposal;
   steps: AgentStep[];
+  usage?: AgentUsageStats;
 }
 
 // --------------------------------------------------------------------------
@@ -218,24 +232,19 @@ export class AgentRunner {
     this.cfg.onStep({ ...step });
   }
 
-  // ── Tool Implementations ──────────────────────────────────────────────────
+  // ── Zero-Turn Local Prefetching ──────────────────────────────────────────
 
-  private async executeListTracks(): Promise<string> {
-    const step = this.addStep('📋', 'Live-Spuren & Channel Strips laden');
+  private async prefetchChannelStrips(fallbackTracks: TrackDescriptor[]): Promise<ChannelStrip[]> {
     try {
-      let rawResult: any = null;
+      let rawList: any[] = [];
       try {
-        rawResult = await this.cfg.invokeTauri<any>('list_channel_strips');
-      } catch (err) {
-        console.warn('list_channel_strips invoke error:', err);
-      }
+        const rawResult = await this.cfg.invokeTauri<any>('list_channel_strips');
+        rawList =
+          rawResult?.channelStrips ??
+          rawResult?.channel_strips ??
+          (Array.isArray(rawResult) ? rawResult : []);
+      } catch {}
 
-      let rawList: any[] =
-        rawResult?.channelStrips ??
-        rawResult?.channel_strips ??
-        (Array.isArray(rawResult) ? rawResult : []);
-
-      // Fallback 1: get_channel_strips
       if (!rawList || rawList.length === 0) {
         try {
           const fallback = await this.cfg.invokeTauri<any>('get_channel_strips');
@@ -246,19 +255,17 @@ export class AgentRunner {
         } catch {}
       }
 
-      // Fallback 2: get_tracks
       if (!rawList || rawList.length === 0) {
         try {
-          const fallbackTracks = await this.cfg.invokeTauri<any>('get_tracks');
+          const fallbackTracksRes = await this.cfg.invokeTauri<any>('get_tracks');
           rawList =
-            fallbackTracks?.tracks ??
-            fallbackTracks?.channelStrips ??
-            fallbackTracks?.channel_strips ??
-            (Array.isArray(fallbackTracks) ? fallbackTracks : []);
+            fallbackTracksRes?.tracks ??
+            fallbackTracksRes?.channelStrips ??
+            fallbackTracksRes?.channel_strips ??
+            (Array.isArray(fallbackTracksRes) ? fallbackTracksRes : []);
         } catch {}
       }
 
-      // Fallback 3: Live telemetry HTTP endpoint on port 48123
       if (!rawList || rawList.length === 0) {
         try {
           const res = await fetch('http://127.0.0.1:48123/api/tracks');
@@ -269,14 +276,48 @@ export class AgentRunner {
         } catch {}
       }
 
-      const strips: ChannelStrip[] = (rawList || []).map((item: any) => ({
-        trackName: item.trackName || item.track_name || item.name || 'Track',
-        inserts: (item.inserts || item.insertSlots || []).map((ins: any, idx: number) => ({
-          slot: typeof ins.slot === 'number' ? ins.slot : typeof ins.slotIndex === 'number' ? ins.slotIndex : idx,
-          name: ins.name || ins.pluginName || ins.plugin_name || 'Plugin'
-        }))
-      }));
+      if (rawList && rawList.length > 0) {
+        return rawList.map((item: any) => ({
+          trackName: item.trackName || item.track_name || item.name || 'Track',
+          faderDb: typeof item.faderDb === 'number' ? item.faderDb : typeof item.volume === 'number' ? item.volume : 0.0,
+          pan: typeof item.pan === 'number' ? item.pan : 0,
+          inserts: (item.inserts || item.insertSlots || []).map((ins: any, idx: number) => ({
+            slot: typeof ins.slot === 'number' ? ins.slot : typeof ins.slotIndex === 'number' ? ins.slotIndex : idx,
+            name: ins.name || ins.pluginName || ins.plugin_name || 'Plugin'
+          }))
+        }));
+      }
+    } catch (err) {
+      console.warn('Prefetch error:', err);
+    }
 
+    // Fallback: convert passed-in TrackDescriptor[]
+    return (fallbackTracks || []).map((t) => ({
+      trackName: t.name,
+      faderDb: 0.0,
+      pan: 0,
+      inserts: t.insertSlots.filter(Boolean).map((s, idx) => ({
+        slot: s!.slotIndex ?? idx,
+        name: s!.pluginName
+      }))
+    }));
+  }
+
+  // ── Tool Implementations ──────────────────────────────────────────────────
+
+  private async executeListTracks(): Promise<string> {
+    const step = this.addStep('📋', 'Live-Spuren & Channel Strips laden');
+    try {
+      if (this.fetchedStrips && this.fetchedStrips.length > 0) {
+        const summary = this.fetchedStrips.map((s) => ({
+          name: s.trackName,
+          inserts: (s.inserts ?? []).map((ins) => `Slot ${ins.slot}: ${ins.name}`)
+        }));
+        this.resolveStep(step, `${this.fetchedStrips.length} Spuren (aus Cache)`);
+        return JSON.stringify(summary);
+      }
+
+      const strips = await this.prefetchChannelStrips([]);
       this.fetchedStrips = strips;
       const summary = strips.map((s) => ({
         name: s.trackName,
@@ -538,7 +579,7 @@ export class AgentRunner {
     contents: GeminiContent[],
     signal?: AbortSignal
   ): Promise<any> {
-    const maxAttempts = Math.min(2, Math.max(1, this.keyPool.length));
+    const maxAttempts = Math.min(3, Math.max(1, this.keyPool.length));
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       this.checkAborted(signal);
@@ -572,30 +613,38 @@ export class AgentRunner {
         }
 
         const msg = String(err);
-        const isQuotaError =
+        const is503 = msg.includes('503') || msg.includes('overloaded') || msg.includes('Service Unavailable');
+        const is429 =
           msg.includes('429') ||
-          msg.includes('503') ||
           msg.includes('ResourceExhausted') ||
           msg.includes('high demand') ||
-          msg.includes('RESOURCE_EXHAUSTED');
+          msg.includes('RESOURCE_EXHAUSTED') ||
+          msg.includes('quota');
+        const isQuotaOrOverload = is503 || is429;
 
-        if (isQuotaError && attempt === 0) {
+        if (isQuotaOrOverload && attempt < maxAttempts - 1) {
+          // Sofortigen Key-Wechsel im Pool veranlassen
           if (this.keyPool.length > 1) {
-            const quotaStep = this.addStep('⏳', 'API-Quota erreicht · Wechsle Key & warte 2.5s...');
             this.rotateKey();
-            await agentDelay(2500, signal);
-            this.resolveStep(quotaStep, 'Weiter mit neuem Key');
-            continue;
-          } else {
-            const quotaStep = this.addStep('⏳', 'API-Quota erreicht · Warte 2.5s Cooldown...');
-            await agentDelay(2500, signal);
-            this.resolveStep(quotaStep, 'Erneuter Versuch');
-            continue;
           }
+
+          // Bei 503: Exponentieller Jitter-Backoff zwischen 1.5s und 2.5s zufällig
+          const waitMs = is503
+            ? Math.floor(Math.random() * 1000) + 1500
+            : (attempt === 0 ? 2500 : 3500);
+
+          const stepLabel = is503
+            ? `Model überlastet (503) · Jitter (${(waitMs / 1000).toFixed(1)}s) & Key-Wechsel...`
+            : `API-Quota erreicht (429) · Wechsle Key & Cooldown (${(waitMs / 1000).toFixed(1)}s)...`;
+
+          const quotaStep = this.addStep('⏳', stepLabel);
+          await agentDelay(waitMs, signal);
+          this.resolveStep(quotaStep, 'Weiter mit neuem Key');
+          continue;
         }
 
-        if (isQuotaError) {
-          throw new Error('API-Quota für alle konfigurierten Keys erschöpft. Bitte warte kurz vor der nächsten Anfrage.');
+        if (isQuotaOrOverload) {
+          throw new Error('API-Quota oder Modell-Kapazität erschöpft (503/429). Bitte warte kurz vor der nächsten Anfrage.');
         }
 
         throw err;
@@ -614,6 +663,7 @@ export class AgentRunner {
     context?: MixAnalysisContext,
     signal?: AbortSignal
   ): Promise<AgentRunResult> {
+    const startTime = performance.now();
     const activeSignal = signal ?? (context as any)?.signal;
     this.checkAborted(activeSignal);
 
@@ -629,20 +679,58 @@ export class AgentRunner {
     }
 
     const modelName = this.cfg.modelName || 'gemini-2.5-flash';
-    const systemInstruction = buildAgentSystemPrompt(tracks);
+    const systemInstruction = buildAgentSystemPrompt();
 
-    const telemetrySummary = telemetry
-      ? JSON.stringify({
-          lufs: telemetry.loudness.momentaryLufs,
-          truePeak: telemetry.loudness.truePeakDb,
-          correlation: telemetry.dynamics.stereoCorrelation,
-          frequencyBands32: telemetry.spectrum.frequencyBands
-        })
-      : 'No live telemetry.';
+    // ── Zero-Turn Local Prefetching (0 API tokens, 0ms latency) ──────────────
+    const prefetchStep = this.addStep('⚡', 'Session-Kontext & Spuren lokal vorbereiten');
+    const rawStrips = await this.prefetchChannelStrips(tracks);
+    this.fetchedStrips = rawStrips;
+
+    // Striktes Pruning des Session-Kontexts (Token-Diät: < 1.200 Tokens)
+    const compactStrips = rawStrips.map((s) => ({
+      t: s.trackName,
+      db: typeof s.faderDb === 'number' ? Math.round(s.faderDb * 10) / 10 : 0.0,
+      pan: typeof s.pan === 'number' ? s.pan : 0,
+      fx: (s.inserts || []).map((i) => i.name).filter(Boolean)
+    }));
+
+    const liveTelem = this.cfg.getTelemetry?.() ?? telemetry;
+    const compactTelemetry = liveTelem
+      ? {
+          lufs: Math.round((liveTelem.loudness?.momentaryLufs ?? -70.0) * 10) / 10,
+          tp: Math.round(
+            ((typeof liveTelem.loudness?.truePeakDb === 'number'
+              ? liveTelem.loudness.truePeakDb
+              : liveTelem.loudness?.truePeakDb?.left) ?? -1.0) * 10
+          ) / 10,
+          corr: Math.round((liveTelem.dynamics?.stereoCorrelation ?? 1.0) * 100) / 100,
+          crest: Math.round((liveTelem.dynamics?.crestFactorDb ?? 10.0) * 10) / 10
+        }
+      : null;
+
+    this.resolveStep(prefetchStep, `${compactStrips.length} Spuren ultra-kompakt bereitgestellt`);
+
+    const lowerPrompt = userPrompt.toLowerCase();
+    const wantsAudition =
+      lowerPrompt.includes('h\u00f6re') ||
+      lowerPrompt.includes('listen') ||
+      lowerPrompt.includes('audition') ||
+      lowerPrompt.includes('takt') ||
+      lowerPrompt.includes('bar');
+
+    const barMatch = userPrompt.match(/(?:takt|bar)\s*(\d+)/i);
+    const suggestedBar = barMatch ? parseInt(barMatch[1], 10) : undefined;
 
     const initialUserText =
-      `Engineer request: "${userPrompt}"\n\nLive telemetry:\n${telemetrySummary}\n\n` +
-      `Instructions: Complete your work efficiently in 2 turns! Call list_tracks to inspect the session (and audition_region if requested), then immediately submit propose_mix_adjustment with verified plugins!`;
+      `Engineer request: "${userPrompt}"\n\n` +
+      `SESSION CONTEXT (PREFETCHED):\n` +
+      `- Tracks & Inserts: ${JSON.stringify(compactStrips)}\n` +
+      `- Live Metrology: ${compactTelemetry ? JSON.stringify(compactTelemetry) : 'Standby / Low Signal'}\n\n` +
+      `STRICT DIRECTIVE:\n` +
+      `SESSION CONTEXT ALREADY ATTACHED. Do NOT call \`list_tracks\`. ` +
+      (wantsAudition
+        ? `User requested auditioning${suggestedBar ? ` around bar ${suggestedBar}` : ''}. Call \`audition_region\` once, then immediately generate \`propose_mix_adjustment\`! (Max 2 turns total)`
+        : `Generate \`propose_mix_adjustment\` immediately in this turn!`);
 
     // Turn 1 (User): initial user request with live telemetry
     const contents: GeminiContent[] = [
@@ -661,6 +749,11 @@ export class AgentRunner {
     let auditionExecuted = false;
     let isSilentPlayback = false;
 
+    let promptTokens = 0;
+    let candidatesTokens = 0;
+    let totalTokens = 0;
+    let turnsCount = 0;
+
     try {
       for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
         this.checkAborted(activeSignal);
@@ -673,6 +766,14 @@ export class AgentRunner {
         );
 
         this.checkAborted(activeSignal);
+
+        // Track token usage
+        turnsCount++;
+        if (response.usageMetadata) {
+          promptTokens += response.usageMetadata.promptTokenCount ?? 0;
+          candidatesTokens += response.usageMetadata.candidatesTokenCount ?? 0;
+          totalTokens = promptTokens + candidatesTokens;
+        }
 
         // Turn 2 (Model): Append candidate parts to contents
         const candidateContent = response.candidates?.[0]?.content;
@@ -807,10 +908,31 @@ export class AgentRunner {
     const warningText = allWarnings.length > 0 ? '\n\n' + allWarnings.join('\n') : '';
     const assistantText = (lastText.trim() || 'Agent hat die Analyse abgeschlossen.') + warningText;
 
+    const durationMs = Math.round(performance.now() - startTime);
+    const estimatedCostUsd = (promptTokens * 0.000000075) + (candidatesTokens * 0.0000003);
+
+    const usageStats: AgentUsageStats = {
+      promptTokenCount: promptTokens,
+      candidatesTokenCount: candidatesTokens,
+      totalTokenCount: totalTokens,
+      durationMs,
+      turnsCount,
+      model: modelName,
+      activeKeyCount: this.keyPool.length,
+      estimatedCostUsd
+    };
+
+    try {
+      this.cfg.onUsageUpdate?.(usageStats);
+    } catch (e) {
+      console.warn('onUsageUpdate error:', e);
+    }
+
     return {
       assistantText,
       proposal: finalProposal,
-      steps: this.steps
+      steps: this.steps,
+      usage: usageStats
     };
   }
 }
@@ -842,28 +964,16 @@ function agentDelay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-function buildAgentSystemPrompt(tracks: TrackDescriptor[]): string {
-  const trackList = tracks
-    .map(
-      (t) =>
-        `- "${t.name}" (${t.type}): ${
-          t.insertSlots.filter(Boolean).map((s) => s!.pluginName).join(', ') || 'no inserts'
-        }`
-    )
-    .join('\n');
-
+function buildAgentSystemPrompt(): string {
   return (
     MIXING_BUDDY_SYSTEM_PROMPT +
     `\n\n## AGENTIC TOOL USE RULES (STRICTLY ENFORCED)\n\n` +
-    `1. ALWAYS call list_tracks first to discover real plugin slots.\n` +
-    `2. list_tracks provides ALL tracks and their insert plugins directly. NEVER invent short names or abbreviations (like "MoReKi", "SimFou", "StdGrn"). Always use the exact track names returned by list_tracks.\n` +
-    `3. NEVER propose a plugin that is not listed in list_tracks results for that track.\n` +
-    `4. Use exact slot indices returned by list_tracks (e.g., Compressor at Slot 5).\n` +
-    `5. If the engineer says "listen", "höre", or specifies a bar number, call audition_region.\n` +
-    `6. Only call propose_mix_adjustment as the FINAL step, after inspection is complete.\n` +
-    `7. Be efficient: complete your recommendations within at most 2-3 tool turns.\n\n` +
-    `## CURRENT TRACKS (may be stale – always call list_tracks to verify)\n` +
-    trackList
+    `1. ZERO-TURN PREFETCH: Session context (tracks, faders, pans, inserts, metrology) is already attached in the prompt. Do NOT call \`list_tracks\`!\n` +
+    `2. If user requested listening/auditioning (e.g. mentions "höre", "listen", or a bar number), call \`audition_region\` once, then immediately generate \`propose_mix_adjustment\`.\n` +
+    `3. Always use the exact track names from the attached session context (NEVER invent or abbreviate names).\n` +
+    `4. NEVER propose a plugin that is not listed in the attached fx array for that track.\n` +
+    `5. Immediately submit \`propose_mix_adjustment\` with verified plugins as your final proposal.\n` +
+    `6. MAX 2 TURNS: Complete in at most 2 turns (Turn 1: audition_region if requested -> Turn 2: propose_mix_adjustment). If no audition is requested, output propose_mix_adjustment in Turn 1!`
   );
 }
 
@@ -878,6 +988,8 @@ interface InsertInfo {
 
 interface ChannelStrip {
   trackName: string;
+  faderDb?: number;
+  pan?: number;
   inserts?: InsertInfo[];
 }
 

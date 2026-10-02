@@ -9,7 +9,8 @@ import type {
   MixingSkill,
   MixingSkillSummary
 } from '@mixing-buddy/shared-types';
-import { AgentRunner, type AgentStep } from '@mixing-buddy/ai-engine';
+import { AgentRunner, type AgentStep, type AgentUsageStats } from '@mixing-buddy/ai-engine';
+import { TokenUsageBadge } from './TokenUsageBadge.js';
 import { invoke } from '@tauri-apps/api/core';
 import type { ProviderMode } from './ProviderSettings.js';
 
@@ -77,6 +78,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [agentSteps, setAgentSteps] = useState<AgentStep[]>([]);
+  const [usageStats, setUsageStats] = useState<AgentUsageStats | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const telemetryRef = useRef(telemetry);
@@ -222,6 +224,9 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
             apiKeys: keyList,
             modelName: modelName.trim() || 'gemini-2.5-flash',
             invokeTauri: (command, args) => invoke(command, args),
+            onUsageUpdate: (stats) => {
+              setUsageStats(stats);
+            },
             onStep: (step) => {
               setAgentSteps((prev) => {
                 const idx = prev.findIndex((s) => s.id === step.id);
@@ -252,6 +257,10 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
 
           if (controller.signal.aborted) {
             return;
+          }
+
+          if (res.usage) {
+            setUsageStats(res.usage);
           }
 
           const finalSteps = res.steps && res.steps.length > 0 ? [...res.steps] : undefined;
@@ -509,6 +518,14 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Token Usage & Quota Monitor Badge */}
+          <TokenUsageBadge
+            usage={usageStats}
+            activeKeysCount={apiKey ? apiKey.split(/[\n,;]+/).map((k) => k.trim()).filter(Boolean).length : 1}
+            modelName={modelName.trim() || 'gemini-2.5-flash'}
+            onReset={() => setUsageStats(null)}
+          />
+
           {/* Skill Selector Dropdown */}
           <div className="flex items-center bg-slate-800/90 border border-amber-500/40 rounded px-2 py-0.5 text-xs text-amber-300 font-medium shadow-sm">
             <span className="text-amber-400 mr-1.5 text-[11px]">🎛️</span>

@@ -61,6 +61,12 @@ Core Psychoacoustic Principles:
      * Mixer:
        - 'fader_db', 'pan'
 
+11. ZERO-TURN PREFETCH & EFFICIENCY:
+    - Session context (compact track list, faders, pans, inserts, live metrology) is pre-fetched and attached directly to the user prompt.
+    - NEVER call 'list_tracks' if session context is already provided.
+    - If user requests auditioning ("höre", "listen", bar number), call 'audition_region' once, then immediately submit 'propose_mix_adjustment'.
+    - If no audition is requested, immediately submit 'propose_mix_adjustment' in Turn 1.
+
 Always structure your suggestions into the 'mcp__propose_mix_adjustment' tool call format.
 `.trim();
 
