@@ -1917,6 +1917,284 @@ async fn audition_region(
     }
 }
 
+// ── Sprint 7: High-Level MCU Macros ──────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FaderPoint {
+    pub bar: f64,
+    pub db: f64,
+}
+
+fn resolve_track_channel_index(track_name: &str, state: &AppState) -> u8 {
+    let lower = track_name.to_lowercase();
+    if lower.contains("stereo") || lower.contains("master") {
+        return 8;
+    }
+
+    let mcu_tracks = state.ipc_server.mcu_bridge.get_tracks();
+    if let Some(idx) = mcu_tracks.iter().position(|t| {
+        let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("");
+        matches_track_fuzzy(name, track_name)
+    }) {
+        return (idx as u8).min(7);
+    }
+
+    let num_in_name = track_name
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse::<u8>()
+        .ok();
+    match num_in_name {
+        Some(n) if n >= 1 && n <= 8 => n - 1,
+        _ => 0,
+    }
+}
+
+fn interpolate_curve_db(curve: &[FaderPoint], bar: f64) -> f64 {
+    if curve.is_empty() {
+        return 0.0;
+    }
+    if curve.len() == 1 || bar <= curve[0].bar {
+        return curve[0].db;
+    }
+    if bar >= curve[curve.len() - 1].bar {
+        return curve[curve.len() - 1].db;
+    }
+
+    for i in 0..curve.len() - 1 {
+        let p0 = &curve[i];
+        let p1 = &curve[i + 1];
+        if bar >= p0.bar && bar <= p1.bar {
+            let span = p1.bar - p0.bar;
+            if span <= 0.0 {
+                return p0.db;
+            }
+            let ratio = (bar - p0.bar) / span;
+            return p0.db + ratio * (p1.db - p0.db);
+        }
+    }
+
+    curve[curve.len() - 1].db
+}
+
+#[tauri::command]
+async fn set_track_state(
+    track_name: String,
+    fader_db: Option<f64>,
+    pan: Option<i32>,
+    mute: Option<bool>,
+    solo: Option<bool>,
+    automation_mode: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // 1. Channel Index ermitteln
+        let mut ch_idx = resolve_track_channel_index(&track_name, &state);
+
+        // Fallback über list_channel_strips (AX Bridge), falls MCU noch nicht synchronisiert
+        if ch_idx == 0 && !track_name.to_lowercase().contains("1") {
+            if let Ok(strips_val) = list_channel_strips().await {
+                let strips = strips_val
+                    .get("channelStrips")
+                    .or_else(|| strips_val.get("channel_strips"))
+                    .and_then(|v| v.as_array());
+                if let Some(strips) = strips {
+                    for (idx, s) in strips.iter().enumerate() {
+                        let name = s
+                            .get("trackName")
+                            .or_else(|| s.get("name"))
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("");
+                        if matches_track_fuzzy(name, &track_name) {
+                            ch_idx = (idx as u8).min(7);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Spur anwählen via Note 24..31 (Select)
+        if ch_idx <= 7 {
+            let _ = state.ipc_server.mcu_bridge.select_channel(ch_idx);
+        }
+
+        // 3. Automationsmodus setzen (z. B. "touch", "read", "latch")
+        if let Some(ref mode) = automation_mode {
+            let _ = state.ipc_server.mcu_bridge.set_automation_mode(mode);
+        }
+
+        // 4. Fader via Pitchbend 0xE0 + ch_idx
+        if let Some(db) = fader_db {
+            let vol = (db as f32).clamp(-96.0, 6.0);
+            let _ = state
+                .ipc_server
+                .mcu_bridge
+                .apply_fader_delta_with_automation(ch_idx, vol);
+        }
+
+        // 5. Panning via CC 16..23 (V-Pot Sign-Magnitude)
+        if let Some(p) = pan {
+            if ch_idx <= 7 {
+                let delta = p.clamp(-63, 63) as i8;
+                let _ = state.ipc_server.mcu_bridge.send_vpot_turn(ch_idx, delta);
+            }
+        }
+
+        // 6. Mute via Note 16..23
+        if let Some(_) = mute {
+            if ch_idx <= 7 {
+                let _ = state.ipc_server.mcu_bridge.set_channel_mute(ch_idx);
+            }
+        }
+
+        // 7. Solo via Note 8..15
+        if let Some(_) = solo {
+            if ch_idx <= 7 {
+                let _ = state.ipc_server.mcu_bridge.set_channel_solo(ch_idx);
+            }
+        }
+
+        Ok(serde_json::json!({
+            "success": true,
+            "trackName": track_name,
+            "channelIndex": ch_idx,
+            "faderDb": fader_db,
+            "pan": pan,
+            "mute": mute,
+            "solo": solo,
+            "automationMode": automation_mode
+        }))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (
+            track_name,
+            fader_db,
+            pan,
+            mute,
+            solo,
+            automation_mode,
+            state,
+        );
+        Ok(serde_json::json!({ "success": true, "stub": true }))
+    }
+}
+
+#[tauri::command]
+async fn record_fader_ride(
+    track_name: String,
+    start_bar: u32,
+    end_bar: u32,
+    mode: String,
+    curve: Vec<FaderPoint>,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    if start_bar < 1 {
+        return Err("start_bar muss >= 1 sein".to_string());
+    }
+    if end_bar <= start_bar {
+        return Err("end_bar muss größer als start_bar sein".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut ch_idx = resolve_track_channel_index(&track_name, &state);
+        if ch_idx == 0 && !track_name.to_lowercase().contains("1") {
+            if let Ok(strips_val) = list_channel_strips().await {
+                let strips = strips_val
+                    .get("channelStrips")
+                    .or_else(|| strips_val.get("channel_strips"))
+                    .and_then(|v| v.as_array());
+                if let Some(strips) = strips {
+                    for (idx, s) in strips.iter().enumerate() {
+                        let name = s
+                            .get("trackName")
+                            .or_else(|| s.get("name"))
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("");
+                        if matches_track_fuzzy(name, &track_name) {
+                            ch_idx = (idx as u8).min(7);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1. Wählt Spur an (Select-Note 24..31)
+        if ch_idx <= 7 {
+            let _ = state.ipc_server.mcu_bridge.select_channel(ch_idx);
+        }
+
+        // 2. Schaltet Automationsmodus auf "touch" (Note 77) oder "latch" (Note 78)
+        let auto_mode = if mode.to_lowercase().contains("latch") {
+            "latch"
+        } else {
+            "touch"
+        };
+        let _ = state.ipc_server.mcu_bridge.set_automation_mode(auto_mode);
+
+        // 3. Springt auf start_bar (Locate)
+        let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+
+        // 4. Setzt Fader-Touch aktiv (Note 104 + index, Velocity 127)
+        let _ = state.ipc_server.mcu_bridge.set_fader_touch(ch_idx, true);
+
+        // 5. Startet Playback (Note 94)
+        let _ = state.ipc_server.mcu_bridge.send_note_pulse(94, 50);
+
+        // 6. Streamt Pitchbend-Werte interpoliert entlang der Kurve
+        let total_bars = (end_bar - start_bar) as f64;
+        // Tempo-Heuristik: ~2.0 Sekunden pro Takt (120 BPM 4/4)
+        let total_duration_ms = (total_bars * 2000.0) as u64;
+
+        let mut sorted_curve = curve.clone();
+        sorted_curve.sort_by(|a, b| {
+            a.bar
+                .partial_cmp(&b.bar)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let interval_ms = 50u64;
+        let mut elapsed_ms = 0u64;
+        while elapsed_ms < total_duration_ms {
+            let current_bar =
+                start_bar as f64 + (elapsed_ms as f64 / total_duration_ms as f64) * total_bars;
+            let target_db = interpolate_curve_db(&sorted_curve, current_bar);
+            let _ = state
+                .ipc_server
+                .mcu_bridge
+                .set_fader_volume(ch_idx, target_db as f32);
+            tokio::time::sleep(std::time::Duration::from_millis(interval_ms)).await;
+            elapsed_ms += interval_ms;
+        }
+
+        // 7. Bei end_bar: Stoppt Playback, setzt Touch frei und schaltet Spur zurück auf "read"
+        let _ = state.ipc_server.mcu_bridge.send_note_pulse(93, 50); // Stop
+        let _ = state.ipc_server.mcu_bridge.set_fader_touch(ch_idx, false); // Touch off
+        let _ = state.ipc_server.mcu_bridge.set_automation_mode("read"); // Read mode
+
+        Ok(serde_json::json!({
+            "success": true,
+            "trackName": track_name,
+            "channelIndex": ch_idx,
+            "startBar": start_bar,
+            "endBar": end_bar,
+            "mode": auto_mode,
+            "pointsStreamed": curve.len()
+        }))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (track_name, start_bar, end_bar, mode, curve, state);
+        Ok(serde_json::json!({ "success": true, "stub": true }))
+    }
+}
+
 #[tauri::command]
 async fn restore_fader(
     track_name: String,
@@ -2191,7 +2469,9 @@ pub fn run() {
             set_send_bus,
             set_send_level,
             set_sidechain,
-            restore_fader
+            restore_fader,
+            set_track_state,
+            record_fader_ride
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

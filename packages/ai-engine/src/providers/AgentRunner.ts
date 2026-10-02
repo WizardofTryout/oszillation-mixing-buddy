@@ -71,18 +71,6 @@ const TOOL_LIST_TRACKS: FunctionDeclaration = {
   }
 };
 
-const TOOL_GET_TRACK_DETAILS: FunctionDeclaration = {
-  name: 'get_track_details',
-  description: 'Get detailed plugin/insert information for a specific track by name.',
-  parameters: {
-    type: SchemaType.OBJECT,
-    properties: {
-      trackName: { type: SchemaType.STRING, description: 'Exact or fuzzy track name' }
-    },
-    required: ['trackName']
-  }
-};
-
 const TOOL_AUDITION_REGION: FunctionDeclaration = {
   name: 'audition_region',
   description:
@@ -97,11 +85,44 @@ const TOOL_AUDITION_REGION: FunctionDeclaration = {
   }
 };
 
+const TOOL_SET_TRACK_STATE: FunctionDeclaration = {
+  name: 'set_track_state',
+  description:
+    'Directly adjust a track state in the DAW session: set fader volume (dB), pan (-63..+63), mute/solo toggle, or automation mode ("touch", "latch", "read", "write").',
+  parameters: {
+    type: SchemaType.OBJECT,
+    properties: {
+      trackName: { type: SchemaType.STRING, description: 'Exact or fuzzy name of the track' },
+      faderDb: { type: SchemaType.NUMBER, description: 'Target volume in dB (-96.0 to +6.0)' },
+      pan: { type: SchemaType.INTEGER, description: 'Pan balance from -63 (hard left) to +63 (hard right)' },
+      mute: { type: SchemaType.BOOLEAN, description: 'Mute state' },
+      solo: { type: SchemaType.BOOLEAN, description: 'Solo state' },
+      automationMode: {
+        type: SchemaType.STRING,
+        description: 'Automation mode: "read", "touch", "latch", "write", "trim", "off"'
+      }
+    },
+    required: ['trackName']
+  }
+};
+
+const TOOL_GET_TRACK_DETAILS: FunctionDeclaration = {
+  name: 'get_track_details',
+  description: 'Get detailed plugin/insert information for a specific track by name.',
+  parameters: {
+    type: SchemaType.OBJECT,
+    properties: {
+      trackName: { type: SchemaType.STRING, description: 'Exact or fuzzy track name' }
+    },
+    required: ['trackName']
+  }
+};
+
 const TOOL_PROPOSE: FunctionDeclaration = {
   name: 'propose_mix_adjustment',
   description:
     'Submit the final, validated mix adjustment proposal. ' +
-    'Only call this AFTER you have verified plugin slots with list_tracks or get_track_details.',
+    'Only call this AFTER you have verified plugin slots with list_tracks.',
   parameters: {
     type: SchemaType.OBJECT,
     properties: {
@@ -359,6 +380,42 @@ export class AgentRunner {
     }
   }
 
+  private async executeSetTrackState(
+    args: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<string> {
+    const trackName = String(args.trackName ?? '');
+    const step = this.addStep('🎛️', `Spur anpassen: ${trackName}`);
+    try {
+      this.checkAborted(signal);
+      const res = await this.cfg.invokeTauri<any>('set_track_state', {
+        trackName,
+        faderDb: typeof args.faderDb === 'number' ? args.faderDb : undefined,
+        pan: typeof args.pan === 'number' ? args.pan : undefined,
+        mute: typeof args.mute === 'boolean' ? args.mute : undefined,
+        solo: typeof args.solo === 'boolean' ? args.solo : undefined,
+        automationMode: typeof args.automationMode === 'string' ? args.automationMode : undefined
+      });
+
+      const details: string[] = [];
+      if (typeof args.faderDb === 'number') details.push(`${args.faderDb.toFixed(1)} dB`);
+      if (typeof args.pan === 'number') details.push(`Pan: ${args.pan}`);
+      if (typeof args.mute === 'boolean') details.push(args.mute ? 'Muted' : 'Unmuted');
+      if (typeof args.solo === 'boolean') details.push(args.solo ? 'Soloed' : 'Unsoloed');
+      if (typeof args.automationMode === 'string') details.push(`Auto: ${args.automationMode}`);
+
+      this.resolveStep(step, details.join(' · ') || 'Spur aktualisiert');
+      return JSON.stringify(res ?? { success: true, trackName });
+    } catch (err) {
+      if (signal?.aborted) {
+        this.errorStep(step, 'Abgebrochen');
+        throw err;
+      }
+      this.errorStep(step, String(err));
+      return JSON.stringify({ success: false, error: String(err) });
+    }
+  }
+
   // ── Anti-Hallucination Guard ──────────────────────────────────────────────
 
   private validateProposalAgainstStrips(
@@ -499,6 +556,7 @@ export class AgentRunner {
               functionDeclarations: [
                 TOOL_LIST_TRACKS,
                 TOOL_AUDITION_REGION,
+                TOOL_SET_TRACK_STATE,
                 TOOL_PROPOSE
               ]
             }
@@ -661,6 +719,8 @@ export class AgentRunner {
           let toolResult: string;
           if (call.name === 'list_tracks') {
             toolResult = await this.executeListTracks();
+          } else if (call.name === 'set_track_state') {
+            toolResult = await this.executeSetTrackState(args, activeSignal);
           } else if (call.name === 'get_track_details') {
             toolResult = await this.executeGetTrackDetails(String(args.trackName ?? ''));
           } else if (call.name === 'audition_region') {
