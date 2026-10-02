@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, AlertCircle, Copy, Check, MessageSquarePlus, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { Send, Bot, User, Sparkles, AlertCircle, Copy, Check, MessageSquarePlus, Loader2, CheckCircle2, XCircle, Square } from 'lucide-react';
 import type {
   MetrologyTelemetryFrame,
   MixActionProposal,
@@ -78,6 +78,30 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [agentSteps, setAgentSteps] = useState<AgentStep[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleCancel = async () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    try {
+      await invoke('daw_stop');
+    } catch (e) {
+      console.warn('Failed to stop DAW on cancel:', e);
+    }
+    setIsAnalyzing(false);
+    setAgentSteps([]);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `msg_cancel_${Date.now()}`,
+        sender: 'system',
+        text: '⏹ Vorgang vom Benutzer abgebrochen. DAW-Wiedergabe gestoppt.',
+        timestamp: Date.now()
+      }
+    ]);
+  };
 
   const handleCopyMessage = (id: string, text: string) => {
     const copyFallback = () => {
@@ -158,6 +182,9 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
     setInput('');
     setIsAnalyzing(true);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const lower = query.toLowerCase();
 
@@ -197,13 +224,23 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
             }
           });
 
-          const res = await runner.run(query, telemetry, tracks, {
-            dawName: dawLabel,
-            userPrompt: query,
-            targetScope,
-            targetProfile,
-            activeSkill: activeSkill || undefined
-          });
+          const res = await runner.run(
+            query,
+            telemetry,
+            tracks,
+            {
+              dawName: dawLabel,
+              userPrompt: query,
+              targetScope,
+              targetProfile,
+              activeSkill: activeSkill || undefined
+            },
+            controller.signal
+          );
+
+          if (controller.signal.aborted) {
+            return;
+          }
 
           const finalSteps = res.steps && res.steps.length > 0 ? [...res.steps] : undefined;
           setMessages((prev) => [
@@ -426,6 +463,9 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
         onProposalGenerated(generatedProposal);
       }
     } catch (err: unknown) {
+      if (abortControllerRef.current?.signal.aborted) {
+        return;
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -437,6 +477,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
       ]);
     } finally {
       setIsAnalyzing(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -642,14 +683,26 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
             placeholder={`Frag den Mixing Buddy (z. B. 'Hebe die Höhen an' oder 'Räume das Low-End auf')...`}
             className="flex-1 bg-[#1a1c22] border border-darkBorder px-3 py-1.5 rounded text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
           />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || isAnalyzing}
-            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white px-3 py-1.5 rounded flex items-center gap-1.5 text-xs font-semibold transition-colors"
-          >
-            <Send className="w-3.5 h-3.5" />
-            <span>Senden</span>
-          </button>
+          {isAnalyzing ? (
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded flex items-center gap-1.5 text-xs font-semibold transition-colors shrink-0 shadow-sm"
+              title="Laufende Analyse und DAW-Wiedergabe sofort stoppen"
+            >
+              <Square className="w-3.5 h-3.5 fill-current" />
+              <span>Abbrechen</span>
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white px-3 py-1.5 rounded flex items-center gap-1.5 text-xs font-semibold transition-colors shrink-0"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>Senden</span>
+            </button>
+          )}
         </div>
       )}
     </div>

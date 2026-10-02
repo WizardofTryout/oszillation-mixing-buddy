@@ -2390,25 +2390,18 @@ case "list-insert-menu":
 // MARK: - SPRINT 6: Transport Control Commands
 
 case "transport-play":
-    if let app = getLogicRunningApp() {
-        app.activate(options: .activateIgnoringOtherApps)
-        usleep(100_000) // 100ms für macOS WindowServer
-    }
     var played = false
 
-    // 1. Try AXUIElement in Steuerungsleiste (AXCheckBox/AXButton desc="Wiedergabe" / "Play")
+    // 1. Try native AXUIElement in Steuerungsleiste (AXCheckBox/AXButton desc="Wiedergabe" / "Play")
     let allWindows = getLogicWindows(appElement)
     for w in allWindows {
-        let title = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
-        let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
-        guard subrole == "AXStandardWindow" || title.contains("spuren") || title.contains("tracks") else { continue }
-
-        if let playBtn = findElementDFS(root: w, roleFilter: nil, predicate: { el in
+        if let playBtn = findElementDFS(root: w, roleFilter: nil, maxDepth: 12, predicate: { el in
             let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
             let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
             let role = getAXString(el, kAXRoleAttribute as String) ?? ""
             return (role == "AXCheckBox" || role == "AXButton") &&
-                   (desc == "wiedergabe" || desc == "play" || t == "wiedergabe" || t == "play")
+                   (desc == "wiedergabe" || desc == "play" || t == "wiedergabe" || t == "play" ||
+                    desc.contains("wiedergabe") || desc.contains("play"))
         }) {
             var val: AnyObject?
             AXUIElementCopyAttributeValue(playBtn, kAXValueAttribute as CFString, &val)
@@ -2423,7 +2416,7 @@ case "transport-play":
         }
     }
 
-    // 2. Direct / Fallback: Send Spacebar (KeyCode 49) via CGEvent to Logic PID
+    // 2. Fallback only if no AX element was found in any window
     if !played {
         played = sendSpacebarToLogic()
     }
@@ -2435,12 +2428,8 @@ case "transport-stop":
 
     let allWindows = getLogicWindows(appElement)
     for w in allWindows {
-        let title = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
-        let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
-        guard subrole == "AXStandardWindow" || title.contains("spuren") || title.contains("tracks") else { continue }
-
         // Try Stoppen button in Steuerungsleiste
-        if let stopBtn = findElementDFS(root: w, roleFilter: nil, predicate: { el in
+        if let stopBtn = findElementDFS(root: w, roleFilter: nil, maxDepth: 12, predicate: { el in
             let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
             let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
             return desc.contains("stopp") || desc.contains("stop") || t.contains("stopp") || t.contains("stop")
@@ -2452,9 +2441,12 @@ case "transport-stop":
 
         // Check if Wiedergabe checkbox is active (value == 1) and toggle it
         if !stopped {
-            if let playBtn = findElementDFS(root: w, roleFilter: nil, predicate: { el in
+            if let playBtn = findElementDFS(root: w, roleFilter: nil, maxDepth: 12, predicate: { el in
                 let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-                return desc == "wiedergabe" || desc == "play"
+                let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+                let role = getAXString(el, kAXRoleAttribute as String) ?? ""
+                return (role == "AXCheckBox" || role == "AXButton") &&
+                       (desc == "wiedergabe" || desc == "play" || t == "wiedergabe" || t == "play")
             }) {
                 var val: AnyObject?
                 AXUIElementCopyAttributeValue(playBtn, kAXValueAttribute as CFString, &val)
@@ -2481,29 +2473,19 @@ case "transport-locate":
         exit(0)
     }
 
-    if let app = getLogicRunningApp() {
-        app.activate(options: .activateIgnoringOtherApps)
-        usleep(100_000) // 100ms für macOS WindowServer
-    }
-
     var located = false
 
     let allWindows = getLogicWindows(appElement)
     for w in allWindows {
-        let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
-        let title = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
-        guard subrole == "AXStandardWindow" || title.contains("spuren") || title.contains("tracks") else { continue }
-
         // 1. Direct LCD Takt Slider in Steuerungsleiste ("Position der Abspielposition" -> AXSlider "Takt")
-        if let taktSlider = findElementDFS(root: w, roleFilter: "AXSlider", predicate: { el in
+        if let taktSlider = findElementDFS(root: w, roleFilter: "AXSlider", maxDepth: 12, predicate: { el in
             let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
             let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
-            return desc == "takt" || desc == "bar" || t == "takt" || t == "bar"
+            return desc == "takt" || desc == "bar" || t == "takt" || t == "bar" || desc.contains("takt") || desc.contains("bar")
         }) {
             let setErr = AXUIElementSetAttributeValue(taktSlider, kAXValueAttribute as CFString, barNum as CFTypeRef)
             if setErr == .success || setErr == .cannotComplete {
-                sendReturnKeyToLogic()
-                usleep(200_000)
+                let _ = AXUIElementPerformAction(taktSlider, kAXConfirmAction as CFString)
                 located = true
                 break
             }
@@ -2511,7 +2493,7 @@ case "transport-locate":
 
         // 2. Fallback: AXTextField in transport LCD
         if !located {
-            if let posField = findElementDFS(root: w, roleFilter: "AXTextField", predicate: { el in
+            if let posField = findElementDFS(root: w, roleFilter: "AXTextField", maxDepth: 12, predicate: { el in
                 let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
                 let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
                 return desc.contains("position") || t.contains("position") ||
@@ -2520,10 +2502,8 @@ case "transport-locate":
             }) {
                 let posString = "\(barNum) 1 1 1" as CFString
                 let setErr = AXUIElementSetAttributeValue(posField, kAXValueAttribute as CFString, posString)
-                if setErr == .success {
+                if setErr == .success || setErr == .cannotComplete {
                     let _ = AXUIElementPerformAction(posField, kAXConfirmAction as CFString)
-                    sendReturnKeyToLogic()
-                    usleep(200_000)
                     located = true
                 }
                 break

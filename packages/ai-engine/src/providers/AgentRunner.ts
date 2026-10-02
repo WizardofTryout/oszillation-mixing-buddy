@@ -297,10 +297,24 @@ export class AgentRunner {
     }
   }
 
-  private async executeAuditionRegion(startBar: number, durationSeconds: number): Promise<string> {
+  // ── Abort and Delay helpers ───────────────────────────────────────────────
+
+  private checkAborted(signal?: AbortSignal): void {
+    if (signal?.aborted) {
+      throw new Error('Vom Benutzer abgebrochen.');
+    }
+  }
+
+  private async executeAuditionRegion(
+    startBar: number,
+    durationSeconds: number,
+    signal?: AbortSignal
+  ): Promise<string> {
     const dur = Math.max(2, Math.min(30, durationSeconds));
     const step = this.addStep('👂', `Wiedergabe Takt ${startBar} · ${dur}s`);
     try {
+      this.checkAborted(signal);
+
       let atomicSuccess = false;
       try {
         const atomicRes = await this.cfg.invokeTauri<any>('audition_region', {
@@ -315,17 +329,29 @@ export class AgentRunner {
       }
 
       if (!atomicSuccess) {
+        this.checkAborted(signal);
         await this.cfg.invokeTauri('daw_locate_bar', { bar: startBar });
         // Transport-Stabilisierung: mindestens 400 ms warten vor Playback
-        await agentDelay(400);
+        await agentDelay(400, signal);
+        this.checkAborted(signal);
         await this.cfg.invokeTauri('daw_play', {});
-        await agentDelay(dur * 1000);
-        await this.cfg.invokeTauri('daw_stop', {});
+        try {
+          await agentDelay(dur * 1000, signal);
+        } finally {
+          await this.cfg.invokeTauri('daw_stop', {});
+        }
       }
 
       this.resolveStep(step, `Takt ${startBar} abgespielt`);
       return JSON.stringify({ success: true, bar: startBar, durationSeconds: dur });
     } catch (err) {
+      if (signal?.aborted) {
+        try {
+          await this.cfg.invokeTauri('daw_stop', {});
+        } catch {}
+        this.errorStep(step, 'Abgebrochen');
+        throw err;
+      }
       this.errorStep(step, String(err));
       return JSON.stringify({ success: false, error: String(err) });
     }
@@ -422,16 +448,19 @@ export class AgentRunner {
 
   /**
    * Calls model.generateContent({ contents }) with the current key.
-   * On 429 / 503 it rotates to the next key and retries once per available key.
+   * On 429 / 503 it rotates to the next key and retries once.
    */
   private async generateContentWithRetry(
     modelName: string,
     systemInstruction: string,
-    contents: GeminiContent[]
+    contents: GeminiContent[],
+    signal?: AbortSignal
   ): Promise<any> {
-    const maxAttempts = Math.max(1, this.keyPool.length);
+    const maxAttempts = Math.min(2, Math.max(1, this.keyPool.length));
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      this.checkAborted(signal);
+
       const key = this.currentKey();
       if (!key) throw new Error('Kein gültiger API-Key vorhanden.');
 
@@ -444,7 +473,6 @@ export class AgentRunner {
             {
               functionDeclarations: [
                 TOOL_LIST_TRACKS,
-                TOOL_GET_TRACK_DETAILS,
                 TOOL_AUDITION_REGION,
                 TOOL_PROPOSE
               ]
@@ -453,8 +481,13 @@ export class AgentRunner {
         });
 
         const result = await model.generateContent({ contents: contents as any });
+        this.checkAborted(signal);
         return result.response;
       } catch (err) {
+        if (signal?.aborted || String(err).includes('Vom Benutzer abgebrochen')) {
+          throw new Error('Vom Benutzer abgebrochen.');
+        }
+
         const msg = String(err);
         const isQuotaError =
           msg.includes('429') ||
@@ -463,23 +496,30 @@ export class AgentRunner {
           msg.includes('high demand') ||
           msg.includes('RESOURCE_EXHAUSTED');
 
-        if (isQuotaError && this.keyPool.length > 1) {
-          const quotaStep = this.addStep('⏳', 'API-Quota erreicht · Wechsle Key & warte 2.5s...');
-          this.rotateKey();
-          await agentDelay(2500);
-          this.resolveStep(quotaStep, 'Weiter mit neuem Key');
-          continue;
-        } else if (isQuotaError && this.keyPool.length === 1) {
-          const quotaStep = this.addStep('⏳', 'API-Quota erreicht · Warte 2.5s Cooldown...');
-          await agentDelay(2500);
-          this.resolveStep(quotaStep, 'Erneuter Versuch');
-          continue;
+        if (isQuotaError && attempt === 0) {
+          if (this.keyPool.length > 1) {
+            const quotaStep = this.addStep('⏳', 'API-Quota erreicht · Wechsle Key & warte 2.5s...');
+            this.rotateKey();
+            await agentDelay(2500, signal);
+            this.resolveStep(quotaStep, 'Weiter mit neuem Key');
+            continue;
+          } else {
+            const quotaStep = this.addStep('⏳', 'API-Quota erreicht · Warte 2.5s Cooldown...');
+            await agentDelay(2500, signal);
+            this.resolveStep(quotaStep, 'Erneuter Versuch');
+            continue;
+          }
         }
+
+        if (isQuotaError) {
+          throw new Error('API-Quota für alle konfigurierten Keys erschöpft. Bitte warte kurz vor der nächsten Anfrage.');
+        }
+
         throw err;
       }
     }
 
-    throw new Error('Alle API-Keys haben Quota-Fehler zurückgegeben. Bitte warte kurz und versuche es erneut.');
+    throw new Error('API-Quota für alle konfigurierten Keys erschöpft. Bitte warte kurz vor der nächsten Anfrage.');
   }
 
   // ── Main Run Loop ─────────────────────────────────────────────────────────
@@ -488,8 +528,12 @@ export class AgentRunner {
     userPrompt: string,
     telemetry: MetrologyTelemetryFrame | null,
     tracks: TrackDescriptor[],
-    context?: MixAnalysisContext
+    context?: MixAnalysisContext,
+    signal?: AbortSignal
   ): Promise<AgentRunResult> {
+    const activeSignal = signal ?? (context as any)?.signal;
+    this.checkAborted(activeSignal);
+
     this.steps = [];
     this.fetchedStrips = null;
     this.keyIndex = 0;
@@ -515,7 +559,7 @@ export class AgentRunner {
 
     const initialUserText =
       `Engineer request: "${userPrompt}"\n\nLive telemetry:\n${telemetrySummary}\n\n` +
-      `Instructions: Complete your work efficiently in 2-3 turns! First call list_tracks to inspect the session (and audition_region if requested), then immediately submit propose_mix_adjustment with verified plugins!`;
+      `Instructions: Complete your work efficiently in 2 turns! Call list_tracks to inspect the session (and audition_region if requested), then immediately submit propose_mix_adjustment with verified plugins!`;
 
     // Turn 1 (User): initial user request with live telemetry
     const contents: GeminiContent[] = [
@@ -528,15 +572,22 @@ export class AgentRunner {
     let lastText = '';
     let finalProposal: MixActionProposal | undefined;
     const allWarnings: string[] = [];
-    const MAX_ITERATIONS = 4;
+    const MAX_ITERATIONS = 3;
+    let totalToolCalls = 0;
+    const MAX_TOOL_CALLS = 3;
 
     try {
       for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+        this.checkAborted(activeSignal);
+
         const response = await this.generateContentWithRetry(
           modelName,
           systemInstruction,
-          contents
+          contents,
+          activeSignal
         );
+
+        this.checkAborted(activeSignal);
 
         // Turn 2 (Model): Append candidate parts to contents
         const candidateContent = response.candidates?.[0]?.content;
@@ -565,6 +616,19 @@ export class AgentRunner {
         const functionResponses: Array<{ name: string; result: any }> = [];
 
         for (const call of calls) {
+          this.checkAborted(activeSignal);
+
+          if (totalToolCalls >= MAX_TOOL_CALLS) {
+            functionResponses.push({
+              name: call.name,
+              result: JSON.stringify({
+                notice: 'Tool-Limit erreicht. Bitte schließe deine Analyse ab und reiche den finalen Vorschlag ein.'
+              })
+            });
+            continue;
+          }
+          totalToolCalls++;
+
           const args = (call.args ?? {}) as Record<string, unknown>;
 
           let toolResult: string;
@@ -575,7 +639,8 @@ export class AgentRunner {
           } else if (call.name === 'audition_region') {
             toolResult = await this.executeAuditionRegion(
               Number(args.startBar ?? 1),
-              Number(args.durationSeconds ?? 8)
+              Number(args.durationSeconds ?? 8),
+              activeSignal
             );
           } else if (call.name === 'propose_mix_adjustment') {
             const { proposal, warnings } = this.validateProposalAgainstStrips(args, tracks);
@@ -587,13 +652,15 @@ export class AgentRunner {
             toolResult = JSON.stringify({ error: `Unknown tool: ${call.name}` });
           }
 
+          this.checkAborted(activeSignal);
+
           functionResponses.push({
             name: call.name,
             result: toolResult
           });
 
           // 300 ms inter-tool pause to spread quota load across the free tier
-          await agentDelay(300);
+          await agentDelay(300, activeSignal);
         }
 
         // Turn 3 (Tool-Ergebnisse vom User):
@@ -608,6 +675,12 @@ export class AgentRunner {
         });
       }
     } catch (err) {
+      if (activeSignal?.aborted || String(err).includes('Vom Benutzer abgebrochen')) {
+        return {
+          assistantText: '⏹ Vorgang vom Benutzer abgebrochen.',
+          steps: this.steps
+        };
+      }
       return {
         assistantText: `⚠️ Agent-Fehler: ${String(err)}`,
         steps: this.steps
@@ -629,8 +702,27 @@ export class AgentRunner {
 // Helpers
 // --------------------------------------------------------------------------
 
-function agentDelay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function agentDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      return reject(new Error('Vom Benutzer abgebrochen.'));
+    }
+    const timer = setTimeout(() => {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('Vom Benutzer abgebrochen.'));
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
 }
 
 function buildAgentSystemPrompt(tracks: TrackDescriptor[]): string {
@@ -647,11 +739,12 @@ function buildAgentSystemPrompt(tracks: TrackDescriptor[]): string {
     MIXING_BUDDY_SYSTEM_PROMPT +
     `\n\n## AGENTIC TOOL USE RULES (STRICTLY ENFORCED)\n\n` +
     `1. ALWAYS call list_tracks first to discover real plugin slots.\n` +
-    `2. NEVER propose a plugin that is not listed in list_tracks results for that track.\n` +
-    `3. Use exact slot indices returned by list_tracks (e.g., Compressor at Slot 5).\n` +
-    `4. If the engineer says "listen" or specifies a bar number, call audition_region first.\n` +
-    `5. Only call propose_mix_adjustment as the FINAL step, after all inspection is complete.\n` +
-    `6. Be efficient: complete your recommendations within at most 3 tool turns.\n\n` +
+    `2. list_tracks provides ALL tracks and their insert plugins directly. NEVER invent short names or abbreviations (like "MoReKi", "SimFou", "StdGrn"). Always use the exact track names returned by list_tracks.\n` +
+    `3. NEVER propose a plugin that is not listed in list_tracks results for that track.\n` +
+    `4. Use exact slot indices returned by list_tracks (e.g., Compressor at Slot 5).\n` +
+    `5. If the engineer says "listen", "höre", or specifies a bar number, call audition_region.\n` +
+    `6. Only call propose_mix_adjustment as the FINAL step, after inspection is complete.\n` +
+    `7. Be efficient: complete your recommendations within at most 2-3 tool turns.\n\n` +
     `## CURRENT TRACKS (may be stale – always call list_tracks to verify)\n` +
     trackList
   );
