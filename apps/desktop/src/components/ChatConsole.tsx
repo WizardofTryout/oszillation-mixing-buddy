@@ -18,6 +18,7 @@ export interface ChatMessage {
   sender: 'user' | 'assistant' | 'system';
   text: string;
   timestamp: number;
+  steps?: AgentStep[];
 }
 
 interface ChatConsoleProps {
@@ -204,21 +205,23 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
             activeSkill: activeSkill || undefined
           });
 
+          const finalSteps = res.steps && res.steps.length > 0 ? [...res.steps] : undefined;
           setMessages((prev) => [
             ...prev,
             {
               id: `msg_ai_${Date.now()}`,
               sender: 'assistant',
               text: res.assistantText,
-              timestamp: Date.now()
+              timestamp: Date.now(),
+              steps: finalSteps
             }
           ]);
 
           if (res.proposal) {
             onProposalGenerated(res.proposal);
           }
-          // Keep final steps visible for 4 seconds, then clear
-          setTimeout(() => setAgentSteps([]), 4000);
+          // Schritte dauerhaft in der Nachricht gespeichert; Live-Indikator leeren
+          setAgentSteps([]);
           setIsAnalyzing(false);
           return;
         } else {
@@ -444,7 +447,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   };
 
   return (
-    <div className="bg-darkSurface border border-darkBorder rounded-lg flex flex-col h-64 shadow-md overflow-hidden">
+    <div className="bg-darkSurface border border-darkBorder rounded-lg flex flex-col min-h-[280px] h-[330px] resize-y overflow-hidden shadow-md">
       {/* Console Header */}
       <div className="px-3 py-2 border-b border-darkBorder/70 bg-[#16181d] flex flex-wrap items-center justify-between text-xs gap-2">
         <div className="flex items-center gap-1.5 font-semibold text-slate-200">
@@ -487,7 +490,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
       </div>
 
       {/* Messages Scroll Area */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 flex flex-col gap-2.5 text-xs">
+      <div ref={scrollRef} className="flex-1 min-h-[180px] overflow-y-auto p-3 flex flex-col gap-2.5 text-xs">
         {messages.map((m) => (
           <div
             key={m.id}
@@ -522,6 +525,34 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
                   : 'bg-[#181a20] border border-darkBorder/60 text-slate-200 rounded-bl-none'
               }`}
             >
+              {/* Persistent Step Tokens attached to this message */}
+              {m.steps && m.steps.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2 pb-2 border-b border-darkBorder/50">
+                  {m.steps.map((step) => (
+                    <div
+                      key={step.id}
+                      className={`flex items-center gap-1.5 text-[10px] font-mono rounded px-2 py-0.5 border ${
+                        step.status === 'done'
+                          ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
+                          : step.status === 'error'
+                          ? 'bg-red-950/60 border-red-500/40 text-red-300'
+                          : 'bg-blue-950/60 border-blue-500/40 text-blue-200'
+                      }`}
+                    >
+                      <span>{step.icon}</span>
+                      <span className="font-semibold">{step.label}</span>
+                      {step.status === 'done' ? (
+                        <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                      ) : step.status === 'error' ? (
+                        <XCircle className="w-3 h-3 text-red-400 shrink-0" />
+                      ) : (
+                        <Loader2 className="w-3 h-3 animate-spin text-blue-400 shrink-0" />
+                      )}
+                      {step.detail && <span className="opacity-60 text-[9px] ml-0.5">{step.detail}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
               <span>{m.text}</span>
               <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
                 {m.sender === 'system' && (

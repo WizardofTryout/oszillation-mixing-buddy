@@ -251,7 +251,8 @@ export class AgentRunner {
     const step = this.addStep('👂', `Wiedergabe Takt ${startBar} · ${dur}s`);
     try {
       await this.cfg.invokeTauri('daw_locate_bar', { bar: startBar });
-      await agentDelay(200);
+      // Transport-Stabilisierung: mindestens 400 ms warten vor Playback
+      await agentDelay(400);
       await this.cfg.invokeTauri('daw_play', {});
       await agentDelay(dur * 1000);
       await this.cfg.invokeTauri('daw_stop', {});
@@ -353,15 +354,14 @@ export class AgentRunner {
   // ── Gemini call with key-rotation retry ──────────────────────────────────
 
   /**
-   * Sends a message to the model using the current key.
+   * Calls model.generateContent({ contents }) with the current key.
    * On 429 / 503 it rotates to the next key and retries once per available key.
    */
-  private async sendWithRetry(
+  private async generateContentWithRetry(
     modelName: string,
     systemInstruction: string,
-    history: HistoryTurn[],
-    newParts: PartUnion[]
-  ): Promise<{ response: any; history: HistoryTurn[] }> {
+    contents: GeminiContent[]
+  ): Promise<any> {
     const maxAttempts = Math.max(1, this.keyPool.length);
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -385,21 +385,8 @@ export class AgentRunner {
           ]
         });
 
-        // Replay the full conversation history in this new session
-        const chat = model.startChat({ history: history as any });
-        const result = await chat.sendMessage(newParts as any);
-
-        // Append turns to history for subsequent calls
-        const updatedHistory: HistoryTurn[] = [
-          ...history,
-          { role: 'user' as const, parts: newParts as any[] },
-          {
-            role: 'model' as const,
-            parts: (result.response.candidates?.[0]?.content?.parts ?? []) as any[]
-          }
-        ];
-
-        return { response: result.response, history: updatedHistory };
+        const result = await model.generateContent({ contents: contents as any });
+        return result.response;
       } catch (err) {
         const msg = String(err);
         const isQuotaError =
@@ -459,29 +446,39 @@ export class AgentRunner {
       `audition_region to listen to a section, then propose_mix_adjustment with ONLY plugins ` +
       `that actually exist on the tracks.`;
 
-    let history: HistoryTurn[] = [];
+    // Turn 1 (User): initial user request with live telemetry
+    const contents: GeminiContent[] = [
+      {
+        role: 'user',
+        parts: [{ text: initialUserText }]
+      }
+    ];
+
     let lastText = '';
     let finalProposal: MixActionProposal | undefined;
     const allWarnings: string[] = [];
     const MAX_ITERATIONS = 8;
 
     try {
-      // ── First turn: user prompt ────────────────────────────────────────────
-      const firstParts: PartUnion[] = [{ text: initialUserText }];
-      let { response, history: h } = await this.sendWithRetry(
-        modelName,
-        systemInstruction,
-        history,
-        firstParts
-      );
-      history = h;
-
       for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
+        const response = await this.generateContentWithRetry(
+          modelName,
+          systemInstruction,
+          contents
+        );
+
+        // Turn 2 (Model): Append candidate parts to contents
+        const candidateContent = response.candidates?.[0]?.content;
+        const modelParts = candidateContent?.parts ?? [];
+        contents.push({
+          role: 'model',
+          parts: modelParts
+        });
+
         // Collect text output from this model turn
-        const textParts =
-          response.candidates?.[0]?.content?.parts?.filter(
-            (p: { text?: string }) => typeof p.text === 'string' && p.text.trim().length > 0
-          ) ?? [];
+        const textParts = modelParts.filter(
+          (p: { text?: string }) => typeof p.text === 'string' && p.text.trim().length > 0
+        );
         if (textParts.length > 0) {
           lastText = textParts.map((p: { text?: string }) => p.text ?? '').join('');
         }
@@ -489,12 +486,12 @@ export class AgentRunner {
         // Check for function calls
         const calls = response.functionCalls?.() ?? [];
         if (!calls || calls.length === 0) {
-          // No tool calls – model is done
+          // No more tool calls – model is finished
           break;
         }
 
         // ── Execute tools ──────────────────────────────────────────────────
-        const functionResponseParts: PartUnion[] = [];
+        const functionResponses: Array<{ name: string; result: any }> = [];
 
         for (const call of calls) {
           const args = (call.args ?? {}) as Record<string, unknown>;
@@ -519,39 +516,25 @@ export class AgentRunner {
             toolResult = JSON.stringify({ error: `Unknown tool: ${call.name}` });
           }
 
-          // Role-Fix: inject as { functionResponse } part inside a USER turn
-          functionResponseParts.push({
-            functionResponse: {
-              name: call.name,
-              response: { result: toolResult }
-            }
-          } as PartUnion);
+          functionResponses.push({
+            name: call.name,
+            result: toolResult
+          });
 
           // 300 ms inter-tool pause to spread quota load across the free tier
           await agentDelay(300);
         }
 
-        // ── Send function responses back to Gemini as a USER turn ──────────
-        const { response: nextResponse, history: nextHistory } = await this.sendWithRetry(
-          modelName,
-          systemInstruction,
-          history,
-          functionResponseParts
-        );
-        response = nextResponse;
-        history = nextHistory;
-
-        // If we have a final proposal, collect the last explanatory text and stop
-        if (finalProposal) {
-          const finalParts =
-            response.candidates?.[0]?.content?.parts?.filter(
-              (p: { text?: string }) => typeof p.text === 'string' && p.text.trim().length > 0
-            ) ?? [];
-          if (finalParts.length > 0) {
-            lastText = finalParts.map((p: { text?: string }) => p.text ?? '').join('');
-          }
-          break;
-        }
+        // Turn 3 (Tool-Ergebnisse vom User):
+        contents.push({
+          role: 'user',
+          parts: functionResponses.map((fr) => ({
+            functionResponse: {
+              name: fr.name,
+              response: { result: fr.result }
+            }
+          }))
+        });
       }
     } catch (err) {
       return {
@@ -616,14 +599,7 @@ interface ChannelStrip {
   inserts?: InsertInfo[];
 }
 
-/** Minimal history turn type that mirrors the Gemini SDK's Content */
-interface HistoryTurn {
+export interface GeminiContent {
   role: 'user' | 'model';
-  parts: PartUnion[];
+  parts: any[];
 }
-
-/** Union of all Part variants used by the SDK */
-type PartUnion =
-  | { text: string }
-  | { functionCall: { name: string; args: Record<string, unknown> } }
-  | { functionResponse: { name: string; response: unknown } };

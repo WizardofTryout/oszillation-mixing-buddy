@@ -28,7 +28,7 @@ import {
 } from './components/PluginVaultModal.js';
 import { SkillManagerModal } from './components/SkillManagerModal.js';
 import { SkillWizardModal } from './components/SkillWizardModal.js';
-import { Sliders, Headphones, Inbox, Sparkles, Database, Target, BarChart2, Star } from 'lucide-react';
+import { Sliders, Headphones, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<MetrologyTelemetryFrame | null>(null);
@@ -47,6 +47,10 @@ export const App: React.FC = () => {
   const [chatLog, setChatLog] = useState<string | null>(null);
   const [mcpClientsCount, setMcpClientsCount] = useState<number>(0);
   const [cardFilter, setCardFilter] = useState<'all' | 'pinned'>('all');
+
+  // Accordion UI state for cleaner layout
+  const [isAiConfigOpen, setIsAiConfigOpen] = useState<boolean>(false);
+  const [isRecommendationsOpen, setIsRecommendationsOpen] = useState<boolean>(true);
 
   // Sprint 3: Target Bus & Genre Profile State (DAW Session Persistent)
   const [targetScope, setTargetScope] = useState<TargetScope>('mix_bus');
@@ -935,7 +939,7 @@ export const App: React.FC = () => {
             OMB
           </div>
           <span className="font-bold text-sm tracking-wide text-slate-100">OSZILLATION MIXING BUDDY</span>
-          <span className="text-xs text-blue-400 font-mono ml-2">v0.1.0</span>
+          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.0</span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -1107,19 +1111,64 @@ export const App: React.FC = () => {
 
       {/* Main Studio Workspace */}
       <main className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
-        {/* System Settings & Provider Status */}
-        <ProviderSettings
-          currentMode={providerMode}
-          onSelectMode={setProviderMode}
-          activeDaw={activeDaw}
-          isAudioConnected={isAudioConnected}
-          isLicenseActive={true}
-          mcpClientsCount={mcpClientsCount}
-          modelName={modelName}
-          onModelNameChange={setModelName}
-          apiKey={apiKey}
-          onApiKeyChange={handleApiKeyChange}
-        />
+        {/* System Settings & Provider Status (Collapsible Accordion) */}
+        {!isAiConfigOpen ? (
+          <div className="bg-[#14161a] border border-darkBorder/70 rounded-lg px-3.5 py-2 flex items-center justify-between shadow-sm transition-all">
+            <div className="flex items-center gap-2.5">
+              <Cpu className="w-4 h-4 text-blue-400" />
+              <span className="text-xs font-semibold text-slate-300">Provider:</span>
+              <span className="text-xs text-blue-300 font-mono bg-blue-950/50 border border-blue-500/30 px-2 py-0.5 rounded">
+                {providerMode === 'byok_gemini'
+                  ? `Google AI Multi-Key (${apiKey ? apiKey.split(/[\n,;]+/).map((k) => k.trim()).filter(Boolean).length : 0} Keys aktiv) · ${modelName}`
+                  : providerMode === 'managed'
+                  ? 'Managed Studio Buddy Cloud'
+                  : providerMode === 'mcp_external'
+                  ? `Externer MCP-Server (:48124) · ${mcpClientsCount} Clients`
+                  : providerMode}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsAiConfigOpen(true)}
+              className="flex items-center gap-1.5 text-xs text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-darkBorder px-2.5 py-1 rounded transition-colors shadow-sm"
+              title="Reasoning Engine & Provider-Einstellungen aufklappen"
+            >
+              <span>⚙️ Reasoning Engine & Provider</span>
+              <ChevronDown className="w-3.5 h-3.5 text-blue-400" />
+              <span className="text-[11px] text-blue-400 underline font-medium ml-0.5">[Bearbeiten]</span>
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2 bg-[#121418] border border-darkBorder/80 rounded-lg p-2.5 shadow-md">
+            <div className="flex items-center justify-between px-1 pb-1 border-b border-darkBorder/60">
+              <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
+                <Cpu className="w-4 h-4 text-blue-400" />
+                <span>⚙️ REASONING ENGINE & AI BACKEND</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAiConfigOpen(false)}
+                className="flex items-center gap-1.5 text-xs text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded border border-darkBorder transition-colors"
+                title="Reasoning Engine zuklappen"
+              >
+                <span>⚙️ Reasoning Engine & Provider</span>
+                <ChevronUp className="w-3.5 h-3.5 text-blue-400" />
+              </button>
+            </div>
+            <ProviderSettings
+              currentMode={providerMode}
+              onSelectMode={setProviderMode}
+              activeDaw={activeDaw}
+              isAudioConnected={isAudioConnected}
+              isLicenseActive={true}
+              mcpClientsCount={mcpClientsCount}
+              modelName={modelName}
+              onModelNameChange={setModelName}
+              apiKey={apiKey}
+              onApiKeyChange={handleApiKeyChange}
+            />
+          </div>
+        )}
 
         {/* Meters Grid: Spectrum RTA + EBU R128 HUD + Chat Console */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -1160,13 +1209,23 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Action Proposals Section */}
+        {/* Action Proposals Section (Collapsible Accordion) */}
         <section className="flex flex-col gap-2">
           <div className="flex items-center justify-between flex-wrap gap-2">
-            <h3 className="text-sm font-semibold tracking-wider text-slate-300 uppercase flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsRecommendationsOpen((prev) => !prev)}
+              className="text-sm font-semibold tracking-wider text-slate-300 uppercase flex items-center gap-2 hover:text-white transition-colors cursor-pointer group"
+              title={isRecommendationsOpen ? "Empfehlungen zuklappen" : "Empfehlungen aufklappen"}
+            >
               <Sliders className="w-4 h-4 text-blue-400" />
-              AI Mix Recommendations & Proposals
-            </h3>
+              <span>AI Mix Recommendations & Proposals ({proposals.length})</span>
+              {isRecommendationsOpen ? (
+                <ChevronUp className="w-4 h-4 text-slate-400 group-hover:text-white" />
+              ) : (
+                <ChevronDown className="w-4 h-4 text-slate-400 group-hover:text-white" />
+              )}
+            </button>
             <div className="flex items-center gap-3">
               {/* Filter Tabs */}
               <div className="flex items-center bg-slate-900 border border-slate-800 rounded p-0.5 text-xs">
@@ -1207,36 +1266,38 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          {proposals.length === 0 ? (
-            <div className="bg-[#121418] border border-darkBorder/60 rounded-lg p-6 flex flex-col items-center justify-center text-center gap-2">
-              <Inbox className="w-8 h-8 text-slate-600" />
-              <div className="text-xs font-semibold text-slate-300">Keine offenen Vorschläge in der Queue</div>
-              <p className="text-[11px] text-slate-500 max-w-md">
-                Nutze die AI-Prompt-Konsole oben (z. B. &ldquo;Räume das Low-End auf&rdquo; oder &ldquo;Master auf -14 LUFS leveln&rdquo;),
-                um neue intelligente Anpassungen basierend auf der Live-Metrology zu erzeugen.
-              </p>
-            </div>
-          ) : cardFilter === 'pinned' && proposals.filter((p) => p.isPinned).length === 0 ? (
-            <div className="bg-[#121418] border border-darkBorder/60 rounded-lg p-6 flex flex-col items-center justify-center text-center gap-2">
-              <span className="text-2xl">📌</span>
-              <div className="text-xs font-semibold text-slate-300">Keine angepinnten Karten vorhanden</div>
-              <p className="text-[11px] text-slate-500 max-w-md">
-                Klicke auf das 📌-Symbol oben rechts in einer beliebigen Karte, um sie dauerhaft für spätere Tests zu sichern.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {(cardFilter === 'pinned' ? proposals.filter((p) => p.isPinned) : proposals).map((proposal) => (
-                <ActionCard
-                  key={proposal.id}
-                  proposal={proposal}
-                  onApply={handleApplyAction}
-                  onReject={handleRejectAction}
-                  onAudition={handleAuditionAction}
-                  onTogglePin={handleTogglePin}
-                />
-              ))}
-            </div>
+          {isRecommendationsOpen && (
+            proposals.length === 0 ? (
+              <div className="bg-[#121418] border border-darkBorder/60 rounded-lg p-6 flex flex-col items-center justify-center text-center gap-2">
+                <Inbox className="w-8 h-8 text-slate-600" />
+                <div className="text-xs font-semibold text-slate-300">Keine offenen Vorschläge in der Queue</div>
+                <p className="text-[11px] text-slate-500 max-w-md">
+                  Nutze die AI-Prompt-Konsole oben (z. B. &ldquo;Räume das Low-End auf&rdquo; oder &ldquo;Master auf -14 LUFS leveln&rdquo;),
+                  um neue intelligente Anpassungen basierend auf der Live-Metrology zu erzeugen.
+                </p>
+              </div>
+            ) : cardFilter === 'pinned' && proposals.filter((p) => p.isPinned).length === 0 ? (
+              <div className="bg-[#121418] border border-darkBorder/60 rounded-lg p-6 flex flex-col items-center justify-center text-center gap-2">
+                <span className="text-2xl">📌</span>
+                <div className="text-xs font-semibold text-slate-300">Keine angepinnten Karten vorhanden</div>
+                <p className="text-[11px] text-slate-500 max-w-md">
+                  Klicke auf das 📌-Symbol oben rechts in einer beliebigen Karte, um sie dauerhaft für spätere Tests zu sichern.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {(cardFilter === 'pinned' ? proposals.filter((p) => p.isPinned) : proposals).map((proposal) => (
+                  <ActionCard
+                    key={proposal.id}
+                    proposal={proposal}
+                    onApply={handleApplyAction}
+                    onReject={handleRejectAction}
+                    onAudition={handleAuditionAction}
+                    onTogglePin={handleTogglePin}
+                  />
+                ))}
+              </div>
+            )
           )}
         </section>
       </main>
