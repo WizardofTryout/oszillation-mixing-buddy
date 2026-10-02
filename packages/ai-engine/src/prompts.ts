@@ -40,6 +40,27 @@ Core Psychoacoustic Principles:
    - When low-end masking between Kick and Bass is detected, propose sidechain ducking on the Bass compressor triggered by the Kick drum.
    - Combine sidechain routing (e.g. sourcePath: "Audio > Kick" or "Bus > Bus 1") with ducking compressor parameters: Threshold -18.0 dB, Ratio 4.0:1, Attack 15.0 ms, Release 80.0 ms.
 
+9. CRITICAL TRACK NAME RULE:
+   - You MUST use the EXACT track names as provided in the session context (e.g. 'Motown Revisited Kit', 'Simple Foundation', 'Studio Grand').
+   - NEVER abbreviate track names (NO 'MoReKi', NO 'SimFou', NO 'StdGrn'). If you abbreviate, the DAW action will fail!
+
+10. CRITICAL PARAMETER IDENTIFIER RULE:
+   - NEVER use descriptive free-text as parameterName (NO "Gain 60 Hz", NO "Air Shelf Gain", NO "Boost Highs").
+   - You MUST use the canonical, programmatic parameter identifiers:
+     * Logic Pro Channel EQ:
+       - Band 1 (High-Pass): 'low_cut_frequency', 'low_cut_slope', 'low_cut_q'
+       - Band 2 (Low Shelf): 'low_shelf_gain', 'low_shelf_frequency', 'low_shelf_q'
+       - Band 3 (Bell 1 Low-Mid ~60-250 Hz): 'peak_1_gain', 'peak_1_frequency', 'peak_1_q'
+       - Band 4 (Bell 2 Mids ~250-1000 Hz): 'peak_2_gain', 'peak_2_frequency', 'peak_2_q'
+       - Band 5 (Bell 3 High-Mid ~1-5 kHz): 'peak_3_gain', 'peak_3_frequency', 'peak_3_q'
+       - Band 6 (Bell 4 Presence ~3-8 kHz): 'peak_4_gain', 'peak_4_frequency', 'peak_4_q'
+       - Band 7 (High Shelf Air >8 kHz): 'high_shelf_gain', 'high_shelf_frequency', 'high_shelf_q'
+       - Band 8 (Low-Pass): 'high_cut_frequency', 'high_cut_slope', 'high_cut_q'
+     * Logic Pro Compressor:
+       - 'threshold', 'ratio', 'attack', 'release', 'make_up', 'knee'
+     * Mixer:
+       - 'fader_db', 'pan'
+
 Always structure your suggestions into the 'mcp__propose_mix_adjustment' tool call format.
 `.trim();
 

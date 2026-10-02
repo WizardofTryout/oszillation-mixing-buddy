@@ -361,14 +361,16 @@ export class GeminiProvider implements AIProvider {
               rationale: input.rationale,
               confidenceScore: input.confidenceScore,
               deltas: input.deltas,
-              status: 'pending'
+              status: 'pending',
+              sidechainRoute: input.sidechainRoute
             };
+            const normalized = normalizeProposal(proposal, tracks);
             return {
               assistantText:
                 plausibilityNote +
                 fallbackNote +
-                (textOutput.trim() || input.rationale || `Ich habe die Anweisung analysiert und "${proposal.title}" vorgeschlagen.`),
-              proposal
+                (textOutput.trim() || input.rationale || `Ich habe die Anweisung analysiert und "${normalized.title}" vorgeschlagen.`),
+              proposal: normalized
             };
           }
 
@@ -386,11 +388,13 @@ export class GeminiProvider implements AIProvider {
                   rationale: parsed.rationale ?? textOutput,
                   confidenceScore: parsed.confidenceScore ?? 0.9,
                   deltas: parsed.deltas ?? [],
-                  status: 'pending'
+                  status: 'pending',
+                  sidechainRoute: parsed.sidechainRoute
                 };
+                const normalized = normalizeProposal(proposal, tracks);
                 return {
                   assistantText: plausibilityNote + fallbackNote + (parsed.rationale ?? textOutput),
-                  proposal
+                  proposal: normalized
                 };
               }
             } catch {
@@ -429,3 +433,304 @@ export class GeminiProvider implements AIProvider {
     };
   }
 }
+
+/**
+ * Resolves a track query (which may be an abbreviation like 'MoReKi', 'SimFou', 'StdGrn')
+ * against the list of actual tracks in the active DAW session.
+ */
+export function resolveTrackDescriptor(
+  query: string,
+  tracks: TrackDescriptor[]
+): TrackDescriptor | undefined {
+  if (!query || tracks.length === 0) return undefined;
+  const q = query.trim().toLowerCase();
+
+  // 1. Exact match
+  const exact = tracks.find((t) => t.name.toLowerCase() === q || t.id.toLowerCase() === q);
+  if (exact) return exact;
+
+  // 2. Substring match
+  const sub = tracks.find((t) => t.name.toLowerCase().includes(q) || q.includes(t.name.toLowerCase()));
+  if (sub) return sub;
+
+  const qClean = q.replace(/[^a-z0-9]/g, '');
+  if (!qClean) return undefined;
+
+  // 3. Normalized clean alphanumeric match
+  const cleanMatch = tracks.find((t) => {
+    const tClean = t.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return tClean === qClean || tClean.includes(qClean) || qClean.includes(tClean);
+  });
+  if (cleanMatch) return cleanMatch;
+
+  // 4. Explicit MCU LCD abbreviations table
+  const mcuMap: Record<string, string> = {
+    moreki: 'motown revisited kit',
+    simfou: 'simple foundation',
+    stdgrn: 'studio grand',
+    stout: 'stereo out',
+    st_out: 'stereo out'
+  };
+  if (mcuMap[qClean]) {
+    const target = mcuMap[qClean];
+    const found = tracks.find((t) => t.name.toLowerCase().includes(target));
+    if (found) return found;
+  }
+
+  // 5. Initials / Acronym match
+  const initialsMatch = tracks.find((t) => {
+    const words = t.name.toLowerCase().split(/\s+/).filter(Boolean);
+    const inits = words.map((w) => w[0]).join('');
+    return inits === qClean || inits.includes(qClean);
+  });
+  if (initialsMatch) return initialsMatch;
+
+  // 6. Subsequence matching (acronyms / abbreviations sharing starting character)
+  if (qClean.length >= 2) {
+    for (const t of tracks) {
+      const tClean = t.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (tClean.length > 0 && tClean[0] === qClean[0]) {
+        let i = 0;
+        for (let j = 0; j < tClean.length && i < qClean.length; j++) {
+          if (tClean[j] === qClean[i]) i++;
+        }
+        if (i === qClean.length) return t;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Maps free-text / descriptive parameter names to canonical Channel EQ or Compressor parameter IDs
+ */
+export function mapParameterToCanonical(
+  rawParam: string,
+  _proposedValue: number,
+  unit?: string
+): { parameterName: string; pluginName?: string; unit?: string } {
+  const p = rawParam.trim();
+  const lower = p.toLowerCase();
+
+  const canonicalEq = [
+    'low_cut_frequency', 'low_cut_slope', 'low_cut_q',
+    'low_shelf_gain', 'low_shelf_frequency', 'low_shelf_q',
+    'peak_1_gain', 'peak_1_frequency', 'peak_1_q',
+    'peak_2_gain', 'peak_2_frequency', 'peak_2_q',
+    'peak_3_gain', 'peak_3_frequency', 'peak_3_q',
+    'peak_4_gain', 'peak_4_frequency', 'peak_4_q',
+    'high_shelf_gain', 'high_shelf_frequency', 'high_shelf_q',
+    'high_cut_frequency', 'high_cut_slope', 'high_cut_q'
+  ];
+
+  const canonicalComp = ['threshold', 'ratio', 'attack', 'release', 'make_up', 'knee'];
+
+  if (canonicalEq.includes(lower)) {
+    return {
+      parameterName: lower,
+      pluginName: 'Channel EQ',
+      unit: unit || (lower.includes('freq') ? 'Hz' : lower.includes('gain') ? 'dB' : lower.includes('q') ? 'Q' : 'dB/oct')
+    };
+  }
+
+  if (canonicalComp.includes(lower)) {
+    return {
+      parameterName: lower,
+      pluginName: 'Compressor',
+      unit: unit || (lower === 'threshold' || lower === 'make_up' ? 'dB' : lower === 'ratio' ? ':1' : 'ms')
+    };
+  }
+
+  if (lower === 'fader_db' || lower === 'volume' || lower === 'fader' || lower === 'lautstärke') {
+    return { parameterName: 'fader_db', unit: 'dB' };
+  }
+  if (lower === 'pan' || lower === 'balance' || lower === 'panorama') {
+    return { parameterName: 'pan', unit: '%' };
+  }
+
+  // Check for frequency mention (e.g. "60 Hz", "280 Hz", "3.8 kHz", "10 kHz", "Gain 60 Hz")
+  const freqMatch = lower.match(/(\d+(?:\.\d+)?)\s*(k?hz)/);
+  if (freqMatch) {
+    let freq = parseFloat(freqMatch[1]);
+    if (freqMatch[2] === 'khz') freq *= 1000;
+
+    const isCut = lower.includes('cut') || lower.includes('pass') || lower.includes('filter');
+    if (isCut) {
+      if (freq <= 500) {
+        return { parameterName: 'low_cut_frequency', pluginName: 'Channel EQ', unit: 'Hz' };
+      }
+      return { parameterName: 'high_cut_frequency', pluginName: 'Channel EQ', unit: 'Hz' };
+    }
+
+    // Gain at target frequency
+    if (freq < 100) {
+      return { parameterName: 'low_shelf_gain', pluginName: 'Channel EQ', unit: 'dB' };
+    } else if (freq < 250) {
+      return { parameterName: 'peak_1_gain', pluginName: 'Channel EQ', unit: 'dB' };
+    } else if (freq < 1000) {
+      return { parameterName: 'peak_2_gain', pluginName: 'Channel EQ', unit: 'dB' };
+    } else if (freq < 3000) {
+      return { parameterName: 'peak_3_gain', pluginName: 'Channel EQ', unit: 'dB' };
+    } else if (freq < 8000) {
+      return { parameterName: 'peak_4_gain', pluginName: 'Channel EQ', unit: 'dB' };
+    } else {
+      return { parameterName: 'high_shelf_gain', pluginName: 'Channel EQ', unit: 'dB' };
+    }
+  }
+
+  // Keyword matching without explicit frequency
+  if (lower.includes('air') || lower.includes('glanz') || lower.includes('brilliance') || lower.includes('high shelf') || lower.includes('presence')) {
+    return { parameterName: 'high_shelf_gain', pluginName: 'Channel EQ', unit: 'dB' };
+  }
+  if (lower.includes('low shelf') || lower.includes('sub bass') || lower.includes('sub-bass') || lower.includes('bass boost') || lower.includes('bass gain')) {
+    return { parameterName: 'low_shelf_gain', pluginName: 'Channel EQ', unit: 'dB' };
+  }
+  if (lower.includes('low cut') || lower.includes('high pass') || lower.includes('lowcut') || lower.includes('highpass') || lower.includes('sub rumble')) {
+    return { parameterName: 'low_cut_frequency', pluginName: 'Channel EQ', unit: 'Hz' };
+  }
+  if (lower.includes('high cut') || lower.includes('low pass') || lower.includes('highcut') || lower.includes('lowpass')) {
+    return { parameterName: 'high_cut_frequency', pluginName: 'Channel EQ', unit: 'Hz' };
+  }
+  if (lower.includes('mud') || lower.includes('boxiness') || lower.includes('low mid') || lower.includes('cardboard') || lower.includes('warmth')) {
+    return { parameterName: 'peak_2_gain', pluginName: 'Channel EQ', unit: 'dB' };
+  }
+  if (lower.includes('threshold')) {
+    return { parameterName: 'threshold', pluginName: 'Compressor', unit: 'dB' };
+  }
+  if (lower.includes('ratio')) {
+    return { parameterName: 'ratio', pluginName: 'Compressor', unit: ':1' };
+  }
+  if (lower.includes('attack')) {
+    return { parameterName: 'attack', pluginName: 'Compressor', unit: 'ms' };
+  }
+  if (lower.includes('release')) {
+    return { parameterName: 'release', pluginName: 'Compressor', unit: 'ms' };
+  }
+
+  return { parameterName: p, unit: unit || 'dB' };
+}
+
+/**
+ * Normalizes proposal deltas and sidechain routes:
+ * - Resolves abbreviated track names to canonical DAW names
+ * - Normalizes parameter names to canonical IDs
+ * - Dynamically resolves plugin slots (e.g. Compressor slot 5 on bass track)
+ */
+export function normalizeProposal(
+  proposal: MixActionProposal,
+  tracks: TrackDescriptor[]
+): MixActionProposal {
+  if (!proposal) return proposal;
+
+  const normalizedDeltas = (proposal.deltas || []).map((delta) => {
+    // 1. Resolve Track Name
+    const resolvedTrack = resolveTrackDescriptor(delta.trackName || delta.trackId, tracks);
+    const finalTrackName = resolvedTrack ? resolvedTrack.name : delta.trackName;
+    const finalTrackId = resolvedTrack ? resolvedTrack.id : delta.trackId;
+
+    // 2. Map Parameter ID
+    const mapped = mapParameterToCanonical(delta.parameterName, delta.proposedValue, delta.unit);
+    const finalParam = mapped.parameterName;
+    const finalPlugin = delta.pluginName || mapped.pluginName;
+    const finalUnit = mapped.unit || delta.unit || 'dB';
+
+    // 3. Resolve Slot Index dynamically if missing
+    let finalSlot = delta.slotIndex;
+    if (resolvedTrack && (finalSlot === undefined || finalSlot === 0)) {
+      if (finalPlugin?.toLowerCase().includes('eq')) {
+        const eqSlot = resolvedTrack.insertSlots.find((s) => s && s.pluginName?.toLowerCase().includes('eq'));
+        if (eqSlot && eqSlot.slotIndex !== undefined) {
+          finalSlot = eqSlot.slotIndex;
+        }
+      } else if (finalPlugin?.toLowerCase().includes('comp')) {
+        const compSlot = resolvedTrack.insertSlots.find((s) => s && (s.pluginName?.toLowerCase().includes('comp') || s.pluginName?.toLowerCase().includes('compressor')));
+        if (compSlot && compSlot.slotIndex !== undefined) {
+          finalSlot = compSlot.slotIndex;
+        }
+      }
+    }
+
+    return {
+      ...delta,
+      trackId: finalTrackId,
+      trackName: finalTrackName,
+      parameterName: finalParam,
+      pluginName: finalPlugin,
+      slotIndex: finalSlot,
+      unit: finalUnit
+    };
+  });
+
+  // 4. Resolve Sidechain Route dynamically
+  let sidechainRoute = proposal.sidechainRoute;
+  const isDucking =
+    proposal.category === 'dynamic_control' ||
+    proposal.title.toLowerCase().includes('duck') ||
+    proposal.rationale.toLowerCase().includes('sidechain') ||
+    proposal.rationale.toLowerCase().includes('ducking');
+
+  if (sidechainRoute || isDucking) {
+    let targetTrackName = sidechainRoute?.trackName;
+    if (!targetTrackName) {
+      // Find bass or ducking target track from deltas or tracks
+      const compDelta = normalizedDeltas.find((d) => d.pluginName?.toLowerCase().includes('comp'));
+      targetTrackName = compDelta?.trackName || tracks.find((t) => t.name.toLowerCase().includes('bass') || t.name.toLowerCase().includes('foundation'))?.name || tracks[0]?.name;
+    }
+
+    const resolvedTarget = resolveTrackDescriptor(targetTrackName || '', tracks);
+    const finalTargetName = resolvedTarget ? resolvedTarget.name : targetTrackName || 'Bass';
+
+    // Resolve source track if it's "Audio > MoReKi" etc.
+    let finalSourcePath = sidechainRoute?.sourcePath;
+    if (!finalSourcePath) {
+      const kickTrack = tracks.find((t) => t.name.toLowerCase().includes('kick') || t.name.toLowerCase().includes('motown') || t.name.toLowerCase().includes('drum'));
+      finalSourcePath = kickTrack ? `Audio > ${kickTrack.name}` : 'Bus > Bus 1';
+    } else if (finalSourcePath.includes('>')) {
+      const parts = finalSourcePath.split('>');
+      const category = parts[0].trim();
+      const rawSource = parts.slice(1).join('>').trim();
+      const resolvedSource = resolveTrackDescriptor(rawSource, tracks);
+      if (resolvedSource) {
+        finalSourcePath = `${category} > ${resolvedSource.name}`;
+      }
+    } else {
+      const resolvedSource = resolveTrackDescriptor(finalSourcePath, tracks);
+      if (resolvedSource) {
+        finalSourcePath = `Audio > ${resolvedSource.name}`;
+      }
+    }
+
+    // Dynamic slot lookup for Compressor on target track (e.g. Slot 5 on Simple Foundation)
+    let finalSlot = sidechainRoute?.slotIndex ?? 1;
+    if (resolvedTarget) {
+      const compSlot = resolvedTarget.insertSlots.find((s) =>
+        s && (s.pluginName?.toLowerCase().includes('comp') || s.pluginName?.toLowerCase().includes('compressor'))
+      );
+      if (compSlot && compSlot.slotIndex !== undefined && compSlot.slotIndex >= 1) {
+        finalSlot = compSlot.slotIndex;
+      }
+    }
+
+    sidechainRoute = {
+      trackName: finalTargetName,
+      slotIndex: finalSlot,
+      sourcePath: finalSourcePath
+    };
+
+    // Update any deltas that were targeting the compressor on this track to use the dynamic slot
+    for (const d of normalizedDeltas) {
+      if (d.trackName === finalTargetName && (d.pluginName?.toLowerCase().includes('comp') || ['threshold', 'ratio', 'attack', 'release'].includes(d.parameterName))) {
+        d.slotIndex = finalSlot;
+        d.pluginName = 'Compressor';
+      }
+    }
+  }
+
+  return {
+    ...proposal,
+    deltas: normalizedDeltas,
+    sidechainRoute
+  };
+}
+

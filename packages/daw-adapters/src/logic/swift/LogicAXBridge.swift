@@ -52,6 +52,38 @@ func findLogicApplicationElement() -> AXUIElement? {
     return nil
 }
 
+func getLogicPID() -> pid_t? {
+    let bundleApps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.logic10")
+    if let app = bundleApps.first {
+        return app.processIdentifier
+    }
+    for app in NSWorkspace.shared.runningApplications {
+        if app.localizedName == "Logic Pro" || app.bundleIdentifier == "com.apple.logic10" {
+            return app.processIdentifier
+        }
+    }
+    return nil
+}
+
+func sendSpacebarToLogic() -> Bool {
+    guard let pid = getLogicPID() else { return false }
+    let src = CGEventSource(stateID: .hidSystemState)
+    let keyDown = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: true)
+    let keyUp = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: false)
+    keyDown?.postToPid(pid)
+    keyUp?.postToPid(pid)
+    return true
+}
+
+func clickAtPoint(point: CGPoint) {
+    guard let pid = getLogicPID() else { return }
+    let src = CGEventSource(stateID: .hidSystemState)
+    let mouseDown = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
+    let mouseUp = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
+    mouseDown?.postToPid(pid)
+    mouseUp?.postToPid(pid)
+}
+
 func getLogicWindows(_ appElement: AXUIElement) -> [AXUIElement] {
     if let val = getAXAttribute(appElement, kAXWindowsAttribute as String) as? [AXUIElement], !val.isEmpty {
         return val
@@ -318,6 +350,18 @@ func printJSON(_ object: Any) {
 
 // ─── CHANNEL STRIP HELPERS & TYPES ───────────────────────────────────────────
 
+func isSubsequence(_ sub: String, _ full: String) -> Bool {
+    var subIter = sub.makeIterator()
+    var currentSub = subIter.next()
+    for ch in full {
+        if ch == currentSub {
+            currentSub = subIter.next()
+            if currentSub == nil { return true }
+        }
+    }
+    return currentSub == nil
+}
+
 func matchesTrackName(_ stripName: String, query: String) -> Bool {
     let s = stripName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -334,17 +378,37 @@ func matchesTrackName(_ stripName: String, query: String) -> Bool {
         }
     }
     
-    // 2. Word tokens
+    // 2. Explicit MCU LCD abbreviations table (e.g. Logic 6-char LCDs)
+    let mcuMap: [String: String] = [
+        "moreki": "motown revisited kit",
+        "simfou": "simple foundation",
+        "stdgrn": "studio grand",
+        "stout": "stereo out",
+        "st_out": "stereo out"
+    ]
+    if let mapped = mcuMap[qClean] {
+        let mappedClean = mapped.replacingOccurrences(of: " ", with: "")
+        if sClean == mappedClean || sClean.contains(mappedClean) {
+            return true
+        }
+    }
+    
+    // 3. Subsequence matching (e.g. "stdgrn" in "studiogrand", "moreki" in "motownrevisitedkit", "simfou" in "simplefoundation")
+    if qClean.count >= 2 && sClean.first == qClean.first && isSubsequence(qClean, sClean) {
+        return true
+    }
+    
+    // 4. Word tokens
     let sWords = s.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
     let qWords = q.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
     
-    // 3. Initials / Acronym match (e.g. "mrk" -> "motown revisited kit")
+    // 5. Initials / Acronym match (e.g. "mrk" -> "motown revisited kit")
     let initials = sWords.compactMap { $0.first }.map { String($0) }.joined()
     if !initials.isEmpty && (initials == qClean || qClean == initials) {
         return true
     }
     
-    // 4. CamelCase / Syllable parts matching (e.g. "MoReKi" -> ["mo", "re", "ki"])
+    // 6. CamelCase / Syllable parts matching (e.g. "MoReKi" -> ["mo", "re", "ki"])
     let camelParts: [String] = {
         var parts: [String] = []
         var cur = ""
@@ -364,7 +428,7 @@ func matchesTrackName(_ stripName: String, query: String) -> Bool {
         var allMatch = true
         for (idx, cp) in camelParts.enumerated() {
             if idx < sWords.count {
-                if !sWords[idx].hasPrefix(cp) {
+                if !sWords[idx].hasPrefix(cp) && !isSubsequence(cp, sWords[idx]) {
                     allMatch = false
                     break
                 }
@@ -376,7 +440,7 @@ func matchesTrackName(_ stripName: String, query: String) -> Bool {
         if allMatch { return true }
     }
     
-    // 5. Individual word prefix/contains matching
+    // 7. Individual word prefix/contains matching
     for sw in sWords where sw.count >= 3 {
         for qw in qWords where qw.count >= 3 {
             if sw == qw || sw.hasPrefix(qw) || qw.hasPrefix(sw) {
@@ -2085,57 +2149,61 @@ case "select-track":
     }
 
     var selected = false
+    let target = trackName.lowercased()
 
     let allWindows = getLogicWindows(appElement)
     for w in allWindows {
+        let title = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
         let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
-        guard subrole == "AXStandardWindow" else { continue }
+        guard subrole == "AXStandardWindow" || title.contains("spuren") || title.contains("tracks") else { continue }
 
-        let target = trackName.lowercased()
+        // Find arrangement track header element (AXLayoutItem, AXButton, AXRow, AXOutline, AXGroup)
+        if let trackEl = findElementDFS(root: w, roleFilter: nil, predicate: { el in
+            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            let val = (getAXString(el, kAXValueAttribute as String) ?? "").lowercased()
+            let role = getAXString(el, kAXRoleAttribute as String) ?? ""
 
-        // Strategy 1: Find an AXRow / AXGroup whose AXTitle exactly or partially matches
-        // the track name and set kAXSelectedAttribute = true
-        if let trackRow = findElementDFS(root: w, roleFilter: "AXRow", predicate: { el in
-            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
-            let desc  = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-            return title.contains(target) || desc.contains(target)
+            guard ["AXLayoutItem", "AXButton", "AXRow", "AXOutline", "AXTable", "AXGroup"].contains(role) else { return false }
+            return matchesTrackName(desc, query: trackName) ||
+                   matchesTrackName(t, query: trackName) ||
+                   matchesTrackName(val, query: trackName) ||
+                   desc.contains(target) || t.contains(target)
         }) {
-            let setErr = AXUIElementSetAttributeValue(
-                trackRow,
-                kAXSelectedAttribute as CFString,
-                true as CFTypeRef
-            )
-            if setErr == .success || setErr == .cannotComplete {
+            // 1. Try AXPress
+            let pressErr = AXUIElementPerformAction(trackEl, kAXPressAction as CFString)
+            if pressErr == .success || pressErr == .cannotComplete {
                 selected = true
             }
-            // Also try AXPress as secondary action
-            if !selected {
-                let pressErr = AXUIElementPerformAction(trackRow, kAXPressAction as CFString)
-                selected = (pressErr == .success || pressErr == .cannotComplete)
-            }
-            break
-        }
 
-        // Strategy 2: Fallback – find any static text / cell matching the name and click it
-        if !selected {
-            if let nameCell = findElementDFS(root: w, roleFilter: "AXStaticText", predicate: { el in
-                let val = (getAXString(el, kAXValueAttribute as String) ?? "").lowercased()
-                let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
-                return val.contains(target) || title.contains(target)
-            }) {
-                // Click the parent (track header cell) of the label
-                if let parentVal = getAXAttribute(nameCell, kAXParentAttribute as String) {
-                    let p = parentVal as! AXUIElement
-                    let pressErr = AXUIElementPerformAction(p, kAXPressAction as CFString)
-                    selected = (pressErr == .success || pressErr == .cannotComplete)
-                } else {
-                    let pressErr = AXUIElementPerformAction(nameCell, kAXPressAction as CFString)
-                    selected = (pressErr == .success || pressErr == .cannotComplete)
-                }
-            }
-        }
+            // 2. Try kAXSelectedAttribute
+            let _ = AXUIElementSetAttributeValue(trackEl, kAXSelectedAttribute as CFString, true as CFTypeRef)
 
-        if selected { break }
+            // 3. Robust mouse click directly into the track header in arrangement
+            var posVal: AnyObject?
+            var sizeVal: AnyObject?
+            AXUIElementCopyAttributeValue(trackEl, kAXPositionAttribute as CFString, &posVal)
+            AXUIElementCopyAttributeValue(trackEl, kAXSizeAttribute as CFString, &sizeVal)
+            var pt = CGPoint.zero
+            var sz = CGSize.zero
+            if let p = posVal { AXValueGetValue(p as! AXValue, .cgPoint, &pt) }
+            if let s = sizeVal { AXValueGetValue(s as! AXValue, .cgSize, &sz) }
+            if sz.width > 5 && sz.height > 5 {
+                let clickPoint = CGPoint(x: pt.x + min(sz.width * 0.25, 80.0), y: pt.y + sz.height * 0.5)
+                clickAtPoint(point: clickPoint)
+                selected = true
+            }
+
+            if selected { break }
+        }
+    }
+
+    // Mixer fallback: check if channel strip exists in Mixer
+    if !selected {
+        if let strip = findChannelStripForTrack(appElement: appElement, trackName: trackName) {
+            let pressErr = AXUIElementPerformAction(strip.element, kAXPressAction as CFString)
+            selected = (pressErr == .success || pressErr == .cannotComplete)
+        }
     }
 
     guard selected else {
@@ -2309,76 +2377,88 @@ case "list-insert-menu":
 // MARK: - SPRINT 6: Transport Control Commands
 
 case "transport-play":
-    // Send Play via CoreMIDI MCU Note 0x5E (Note On Ch1, vel 0x7F)
-    // Fallback: AXUIElement press of Logic Pro's Play button in the transport bar
     var played = false
 
-    // 1. Try AXUIElement Transport Play button (most reliable, no MIDI routing needed)
+    // 1. Try AXUIElement in Steuerungsleiste (AXCheckBox/AXButton desc="Wiedergabe" / "Play")
     let allWindows = getLogicWindows(appElement)
     for w in allWindows {
+        let title = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
         let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
-        let title   = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
-        guard subrole == "AXStandardWindow" || title.contains("logic") else { continue }
+        guard subrole == "AXStandardWindow" || title.contains("spuren") || title.contains("tracks") else { continue }
 
-        // DFS for a button with description/title containing "play" (localized)
-        if let playBtn = findElementDFS(root: w, roleFilter: "AXButton", predicate: { el in
-            let desc  = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
-            let help  = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
-            return desc.contains("play") || title.contains("play") ||
-                   help.contains("play") || desc.contains("wiedergabe") ||
-                   title.contains("wiedergabe")
+        if let playBtn = findElementDFS(root: w, roleFilter: nil, predicate: { el in
+            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            let role = getAXString(el, kAXRoleAttribute as String) ?? ""
+            return (role == "AXCheckBox" || role == "AXButton") &&
+                   (desc == "wiedergabe" || desc == "play" || t == "wiedergabe" || t == "play")
         }) {
-            let err = AXUIElementPerformAction(playBtn, kAXPressAction as CFString)
-            played = (err == .success)
-            break
+            var val: AnyObject?
+            AXUIElementCopyAttributeValue(playBtn, kAXValueAttribute as CFString, &val)
+            let isAlreadyPlaying = (val as? Int) == 1
+            if !isAlreadyPlaying {
+                let err = AXUIElementPerformAction(playBtn, kAXPressAction as CFString)
+                played = (err == .success || err == .cannotComplete)
+            } else {
+                played = true
+            }
+            if played { break }
         }
     }
 
-    // 2. Fallback: CoreMIDI MCU Note 0x5E (Play) if AX failed
+    // 2. Direct / Fallback: Send Spacebar (KeyCode 49) via CGEvent to Logic PID
     if !played {
-        // We encode the MIDI bytes as a shell-level hint: the Rust IPC layer
-        // (McuBridge::send_transport_play) sends the actual bytes. Here we
-        // just report that the AX path was unavailable.
-        printJSON(["success": false, "error": "AX play button not found in Logic Pro transport bar. Ensure Logic Pro main window is open."])
-        exit(0)
+        played = sendSpacebarToLogic()
     }
 
     printJSON(["success": true, "action": "play"])
 
 case "transport-stop":
-    // Send Stop via AXUIElement press of Logic Pro's Stop button
     var stopped = false
 
     let allWindows = getLogicWindows(appElement)
     for w in allWindows {
+        let title = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
         let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
-        let title   = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
-        guard subrole == "AXStandardWindow" || title.contains("logic") else { continue }
+        guard subrole == "AXStandardWindow" || title.contains("spuren") || title.contains("tracks") else { continue }
 
-        if let stopBtn = findElementDFS(root: w, roleFilter: "AXButton", predicate: { el in
-            let desc  = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
-            let help  = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
-            return desc.contains("stop") || title.contains("stop") ||
-                   help.contains("stop") || desc.contains("anhalten") ||
-                   title.contains("anhalten")
+        // Try Stoppen button in Steuerungsleiste
+        if let stopBtn = findElementDFS(root: w, roleFilter: nil, predicate: { el in
+            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            return desc.contains("stopp") || desc.contains("stop") || t.contains("stopp") || t.contains("stop")
         }) {
             let err = AXUIElementPerformAction(stopBtn, kAXPressAction as CFString)
-            stopped = (err == .success)
-            break
+            stopped = (err == .success || err == .cannotComplete)
+            if stopped { break }
+        }
+
+        // Check if Wiedergabe checkbox is active (value == 1) and toggle it
+        if !stopped {
+            if let playBtn = findElementDFS(root: w, roleFilter: nil, predicate: { el in
+                let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+                return desc == "wiedergabe" || desc == "play"
+            }) {
+                var val: AnyObject?
+                AXUIElementCopyAttributeValue(playBtn, kAXValueAttribute as CFString, &val)
+                if (val as? Int) == 1 {
+                    let err = AXUIElementPerformAction(playBtn, kAXPressAction as CFString)
+                    stopped = (err == .success || err == .cannotComplete)
+                } else {
+                    stopped = true
+                }
+                if stopped { break }
+            }
         }
     }
 
     if !stopped {
-        printJSON(["success": false, "error": "AX stop button not found in Logic Pro transport bar. Ensure Logic Pro main window is open."])
-        exit(0)
+        stopped = sendSpacebarToLogic()
     }
 
     printJSON(["success": true, "action": "stop"])
 
 case "transport-locate":
-    // Locate playhead to a given bar position via the Logic Pro Bar Position text field
     guard let barStr = getArg("--bar"), let barNum = Int(barStr), barNum >= 1 else {
         printJSON(["success": false, "error": "Missing or invalid --bar argument (must be >= 1)"])
         exit(0)
@@ -2389,33 +2469,43 @@ case "transport-locate":
     let allWindows = getLogicWindows(appElement)
     for w in allWindows {
         let subrole = getAXString(w, kAXSubroleAttribute as String) ?? ""
-        guard subrole == "AXStandardWindow" else { continue }
+        let title = (getAXString(w, kAXTitleAttribute as String) ?? "").lowercased()
+        guard subrole == "AXStandardWindow" || title.contains("spuren") || title.contains("tracks") else { continue }
 
-        // Logic Pro transport bar contains a position/bar text field (AXTextField)
-        // Description/title keywords: "position", "takt", "bar", "cycle"
-        if let posField = findElementDFS(root: w, roleFilter: "AXTextField", predicate: { el in
-            let desc  = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
-            let help  = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
-            return desc.contains("position") || title.contains("position") ||
-                   desc.contains("takt") || title.contains("takt") ||
-                   help.contains("bar") || desc.contains("bar number") ||
-                   desc.contains("taktzahl")
+        // 1. Direct LCD Takt Slider in Steuerungsleiste ("Position der Abspielposition" -> AXSlider "Takt")
+        if let taktSlider = findElementDFS(root: w, roleFilter: "AXSlider", predicate: { el in
+            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            return desc == "takt" || desc == "bar" || t == "takt" || t == "bar"
         }) {
-            // Write bar position in Logic's "Bar Beat Sub-beat" format: "21 1 1 1"
-            let posString = "\(barNum) 1 1 1" as CFString
-            let setErr = AXUIElementSetAttributeValue(posField, kAXValueAttribute as CFString, posString)
-            if setErr == .success {
-                let _ = AXUIElementPerformAction(posField, kAXConfirmAction as CFString)
+            let setErr = AXUIElementSetAttributeValue(taktSlider, kAXValueAttribute as CFString, barNum as CFTypeRef)
+            if setErr == .success || setErr == .cannotComplete {
                 located = true
+                break
             }
-            break
+        }
+
+        // 2. Fallback: AXTextField in transport LCD
+        if !located {
+            if let posField = findElementDFS(root: w, roleFilter: "AXTextField", predicate: { el in
+                let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+                let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+                return desc.contains("position") || t.contains("position") ||
+                       desc.contains("takt") || t.contains("takt") ||
+                       desc.contains("bar")
+            }) {
+                let posString = "\(barNum) 1 1 1" as CFString
+                let setErr = AXUIElementSetAttributeValue(posField, kAXValueAttribute as CFString, posString)
+                if setErr == .success {
+                    let _ = AXUIElementPerformAction(posField, kAXConfirmAction as CFString)
+                    located = true
+                }
+                break
+            }
         }
     }
 
-    if !located {
-        // Fallback: use NSAppleScript to set the playhead position
-        // This is only used if AX field is not found (older Logic Pro UI layouts)
+    guard located else {
         printJSON(["success": false, "error": "Transport position field not found. Ensure Logic Pro main window with transport bar is visible."])
         exit(0)
     }

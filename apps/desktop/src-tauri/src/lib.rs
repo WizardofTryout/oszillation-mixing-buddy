@@ -779,8 +779,19 @@ fn execute_logic_ax_bridge(bridge_path: &PathBuf, args: &[String]) -> Result<ser
     Ok(parsed)
 }
 
+fn is_subsequence(sub: &str, full: &str) -> bool {
+    let mut full_chars = full.chars();
+    for sub_ch in sub.chars() {
+        match full_chars.find(|&c| c == sub_ch) {
+            Some(_) => (),
+            None => return false,
+        }
+    }
+    true
+}
+
 /// Fuzzy track name matching mirroring the Swift `matchesTrackName` logic.
-/// Supports CamelCase acronyms like "MoReKi" -> "Motown Revisited Kit".
+/// Supports CamelCase acronyms like "MoReKi" -> "Motown Revisited Kit", "SimFou" -> "Simple Foundation", "StdGrn" -> "Studio Grand".
 fn matches_track_fuzzy(strip_name: &str, query: &str) -> bool {
     let s = strip_name.to_lowercase();
     let q = query.to_lowercase();
@@ -793,11 +804,31 @@ fn matches_track_fuzzy(strip_name: &str, query: &str) -> bool {
         return true;
     }
 
+    // Explicit MCU LCD abbreviations
+    let mcu_map: &[(&str, &str)] = &[
+        ("moreki", "motown revisited kit"),
+        ("simfou", "simple foundation"),
+        ("stdgrn", "studio grand"),
+        ("stout", "stereo out"),
+        ("st_out", "stereo out"),
+    ];
+    for (mcu, full) in mcu_map {
+        let full_clean: String = full.chars().filter(|c| c.is_alphanumeric()).collect();
+        if q_clean == *mcu && (s_clean == full_clean || s_clean.contains(&full_clean)) {
+            return true;
+        }
+    }
+
+    // Subsequence matching (e.g. "stdgrn" in "studiogrand", "moreki" in "motownrevisitedkit", "simfou" in "simplefoundation")
+    if q_clean.len() >= 2 && s_clean.chars().next() == q_clean.chars().next() && is_subsequence(&q_clean, &s_clean) {
+        return true;
+    }
+
     let s_words: Vec<&str> = s.split_whitespace().collect();
 
     // Initials: "motown revisited kit" -> "mrk"
     let initials: String = s_words.iter().filter_map(|w| w.chars().next()).collect();
-    if !initials.is_empty() && initials == q_clean { return true; }
+    if !initials.is_empty() && (initials == q_clean || q_clean == initials) { return true; }
 
     // CamelCase syllables: "MoReKi" -> ["mo", "re", "ki"]
     let mut camel_parts: Vec<String> = Vec::new();
@@ -814,7 +845,7 @@ fn matches_track_fuzzy(strip_name: &str, query: &str) -> bool {
 
     if camel_parts.len() > 1 && camel_parts.len() <= s_words.len() {
         if camel_parts.iter().enumerate().all(|(i, cp)| {
-            s_words.get(i).map(|w| w.starts_with(cp.as_str())).unwrap_or(false)
+            s_words.get(i).map(|w| w.starts_with(cp.as_str()) || is_subsequence(cp.as_str(), w)).unwrap_or(false)
         }) {
             return true;
         }
@@ -834,6 +865,31 @@ fn matches_track_fuzzy(strip_name: &str, query: &str) -> bool {
     false
 }
 
+fn resolve_canonical_track_name(track_query: &str) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        if bridge_path.exists() {
+            let strips_args = vec!["list-channel-strips".to_string()];
+            if let Ok(strips_result) = execute_logic_ax_bridge(&bridge_path, &strips_args) {
+                if let Some(arr) = strips_result.get("channelStrips").and_then(|s| s.as_array()) {
+                    if let Some(found) = arr.iter().find(|strip| {
+                        let name = strip.get("trackName").and_then(|n| n.as_str()).unwrap_or("");
+                        matches_track_fuzzy(name, track_query)
+                    }) {
+                        if let Some(real_name) = found.get("trackName").and_then(|n| n.as_str()) {
+                            if !real_name.is_empty() {
+                                return real_name.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    track_query.to_string()
+}
+
 fn humanize_ax_error(raw_err: &str) -> String {
     let s = raw_err.trim();
     if s.contains("AX_UNTRUSTED") {
@@ -841,7 +897,7 @@ fn humanize_ax_error(raw_err: &str) -> String {
     } else if s.contains("Mixer ist nicht geöffnet") || s.contains("Kanalzüge") {
         "Logic Pro Mixer nicht sichtbar: Bitte öffne den Mixer in Logic Pro (Taste X) oder wähle die Spur an.".to_string()
     } else if s.contains("nicht geöffnet") || s.contains("AX_NO_WINDOWS") {
-        "Plugin-Fenster nicht geöffnet: Bitte öffne das Plugin im Mixer von Logic Pro kurz per Doppelklick, damit die Regler erreichbar sind.".to_string()
+        "Plugin-Fenster konnte nicht automatisch adressiert werden. Bitte prüfen, ob das Plugin im Mixer vorhanden ist.".to_string()
     } else if s.contains("Element not found") {
         "Regler nicht gefunden: Der Parameter konnte im Plugin-Fenster nicht lokalisiert werden. Bitte Standard-Ansicht prüfen.".to_string()
     } else {
@@ -862,6 +918,7 @@ async fn apply_daw_action(
     slot_index: Option<u64>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    let track_name = resolve_canonical_track_name(&track_name);
     let active_daw = {
         let mut detector = state.daw_detector.lock().unwrap();
         detector.detect_active_daw()
@@ -1162,6 +1219,9 @@ async fn apply_daw_action(
                     .to_string();
 
                 if open_result.get("success").and_then(|v| v.as_bool()) == Some(true) {
+                    // Small yield to let macOS Accessibility register the newly opened window
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+
                     // 3. Retry set-param with the now-open window
                     let mut retry_args = cmd_args.clone();
                     // Update --window to the newly opened window title (if known)
@@ -1175,13 +1235,8 @@ async fn apply_daw_action(
                     let retry_result = execute_logic_ax_bridge(&bridge_path, &retry_args)
                         .unwrap_or_else(|_| serde_json::json!({}));
 
-                    // 4. Close the window again (cleanup)
-                    let close_args = vec![
-                        "close-plugin-window".to_string(),
-                        "--window".to_string(),
-                        opened_window.clone(),
-                    ];
-                    let _ = execute_logic_ax_bridge(&bridge_path, &close_args);
+                    // NOTE (PUNKT 2): Do NOT close the window! Keep it open so audition & apply work
+                    // seamlessly without repeated reopen/close flickering and without user interaction!
 
                     if retry_result.get("success").and_then(|v| v.as_bool()) == Some(true) {
                         let val_desc = retry_result
@@ -1880,6 +1935,7 @@ async fn load_plugin_into_slot(
     slot: u32,
     plugin_path: String,
 ) -> Result<serde_json::Value, String> {
+    let track = resolve_canonical_track_name(&track);
     #[cfg(target_os = "macos")]
     {
         let bridge_path = resolve_bridge_path();
@@ -1912,6 +1968,7 @@ async fn set_send_bus(
     slot: u32,
     bus: u32,
 ) -> Result<serde_json::Value, String> {
+    let track = resolve_canonical_track_name(&track);
     #[cfg(target_os = "macos")]
     {
         let bridge_path = resolve_bridge_path();
@@ -1944,6 +2001,7 @@ async fn set_send_level(
     slot: u32,
     db: f64,
 ) -> Result<serde_json::Value, String> {
+    let track = resolve_canonical_track_name(&track);
     #[cfg(target_os = "macos")]
     {
         let bridge_path = resolve_bridge_path();
@@ -1976,6 +2034,7 @@ async fn set_sidechain(
     slot: u32,
     source: String,
 ) -> Result<serde_json::Value, String> {
+    let track = resolve_canonical_track_name(&track);
     #[cfg(target_os = "macos")]
     {
         let bridge_path = resolve_bridge_path();

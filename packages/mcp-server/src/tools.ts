@@ -23,6 +23,12 @@ export const ParameterDeltaSchema = z.object({
   unit: z.string().describe('Measurement unit (e.g. "dB", "Hz", "Q", "%")')
 });
 
+export const SidechainRouteSchema = z.object({
+  trackName: z.string().describe('Target track name for sidechain routing'),
+  slotIndex: z.number().int().positive().optional().describe('Audio FX insert slot number (e.g. 5)'),
+  sourcePath: z.string().describe('Source path for sidechain trigger (e.g. "Audio > Motown Revisited Kit", "Bus > Bus 1")')
+});
+
 export const ProposeMixAdjustmentSchema = z.object({
   category: z.enum([
     'gain_staging',
@@ -34,7 +40,8 @@ export const ProposeMixAdjustmentSchema = z.object({
   title: z.string().describe('Short headline summarizing the proposed change (e.g. "Carve 350 Hz Mud on Bass")'),
   rationale: z.string().describe('Acoustic explanation citing measured LUFS, frequency masking, or harshness'),
   confidenceScore: z.number().min(0.0).max(1.0).describe('Confidence probability of improvement (0.0 to 1.0)'),
-  deltas: z.array(ParameterDeltaSchema).nonempty().describe('List of discrete parameter adjustments')
+  deltas: z.array(ParameterDeltaSchema).nonempty().describe('List of discrete parameter adjustments'),
+  sidechainRoute: SidechainRouteSchema.optional().describe('Optional sidechain header routing instruction')
 });
 
 export const ExecuteMixAdjustmentSchema = z.object({

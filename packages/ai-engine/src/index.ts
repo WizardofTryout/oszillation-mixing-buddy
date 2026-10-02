@@ -63,26 +63,36 @@ export class AIEngine {
 export function createDuckingProposal(
   bassTrack: TrackDescriptor,
   triggerSource: string,
-  slotIndex: number = 1
+  slotIndex?: number
 ): MixActionProposal {
+  let resolvedSlot = slotIndex ?? 1;
+  if (bassTrack.insertSlots && bassTrack.insertSlots.length > 0) {
+    const compSlot = bassTrack.insertSlots.find(
+      (s) => s && (s.pluginName?.toLowerCase().includes('comp') || s.pluginName?.toLowerCase().includes('compressor'))
+    );
+    if (compSlot && typeof compSlot.slotIndex === 'number' && compSlot.slotIndex >= 1) {
+      resolvedSlot = compSlot.slotIndex;
+    }
+  }
+
   return {
     id: `prop_${Date.now()}_sidechain_ducking`,
     timestamp: Date.now(),
     category: 'dynamic_control',
     title: `Sidechain Ducking: ${bassTrack.name} via ${triggerSource}`,
-    rationale: `Low-end masking detected between sub-bass and kick. Routing ${triggerSource} into Compressor (slot ${slotIndex}) and applying ducking envelope restores transient headroom.`,
+    rationale: `Low-end masking detected between sub-bass and kick. Routing ${triggerSource} into Compressor (slot ${resolvedSlot}) and applying ducking envelope restores transient headroom.`,
     confidenceScore: 0.96,
     status: 'pending',
     sidechainRoute: {
       trackName: bassTrack.name,
-      slotIndex,
+      slotIndex: resolvedSlot,
       sourcePath: triggerSource
     },
     deltas: [
       {
         trackId: bassTrack.id,
         trackName: bassTrack.name,
-        slotIndex,
+        slotIndex: resolvedSlot,
         pluginName: 'Compressor',
         parameterName: 'threshold',
         currentValue: 0.0,
@@ -92,7 +102,7 @@ export function createDuckingProposal(
       {
         trackId: bassTrack.id,
         trackName: bassTrack.name,
-        slotIndex,
+        slotIndex: resolvedSlot,
         pluginName: 'Compressor',
         parameterName: 'ratio',
         currentValue: 1.0,
@@ -102,7 +112,7 @@ export function createDuckingProposal(
       {
         trackId: bassTrack.id,
         trackName: bassTrack.name,
-        slotIndex,
+        slotIndex: resolvedSlot,
         pluginName: 'Compressor',
         parameterName: 'attack',
         currentValue: 50.0,
@@ -112,7 +122,7 @@ export function createDuckingProposal(
       {
         trackId: bassTrack.id,
         trackName: bassTrack.name,
-        slotIndex,
+        slotIndex: resolvedSlot,
         pluginName: 'Compressor',
         parameterName: 'release',
         currentValue: 200.0,
@@ -149,7 +159,7 @@ export class MockRuleBasedProvider implements AIProvider {
     const subBassEnergy = (telemetry.spectrum.frequencyBands[1] ?? -30) + (telemetry.spectrum.frequencyBands[2] ?? -30);
     if (bassTrack && (wantsDucking || (kickTrack && subBassEnergy > -50))) {
       const triggerSource = kickTrack ? `Audio > ${kickTrack.name}` : 'Bus > Bus 1';
-      return createDuckingProposal(bassTrack, triggerSource, 1);
+      return createDuckingProposal(bassTrack, triggerSource);
     }
 
     // Check for low-end mud in bins around 250 - 400 Hz (bands 11 to 13)

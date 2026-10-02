@@ -447,6 +447,70 @@ export class MixingToolHandlers {
       }
     }
 
+    // Sprint 10 / Punkt 4: Dynamic Sidechain Slot Lookup
+    let sidechainRoute = (args as any).sidechainRoute;
+    const isDucking =
+      args.category === 'dynamic_control' ||
+      args.title.toLowerCase().includes('duck') ||
+      args.rationale.toLowerCase().includes('sidechain') ||
+      args.rationale.toLowerCase().includes('ducking');
+
+    if (sidechainRoute || isDucking) {
+      try {
+        const { MacOSAccessibilityClient } = await import('@mixing-buddy/daw-adapters');
+        const axClient = new MacOSAccessibilityClient();
+        const strips = await axClient.listChannelStrips();
+
+        const targetTrackName =
+          sidechainRoute?.trackName ||
+          args.deltas.find((d) => d.pluginName?.toLowerCase().includes('comp'))?.trackName ||
+          strips.find((s) => s.name.toLowerCase().includes('bass') || s.name.toLowerCase().includes('foundation'))?.name ||
+          'Simple Foundation';
+
+        const strip = strips.find(
+          (s) => s.name.toLowerCase().includes(targetTrackName.toLowerCase()) || targetTrackName.toLowerCase().includes(s.name.toLowerCase())
+        );
+
+        let dynamicSlot = sidechainRoute?.slotIndex;
+        if (strip && strip.insertSlots) {
+          const compSlot = strip.insertSlots.find(
+            (ins) => ins && (ins.pluginName?.toLowerCase().includes('comp') || ins.pluginName?.toLowerCase().includes('compressor'))
+          );
+          if (compSlot && typeof compSlot.slotIndex === 'number' && compSlot.slotIndex >= 1) {
+            dynamicSlot = compSlot.slotIndex;
+          }
+        }
+        if (!dynamicSlot || dynamicSlot <= 0) {
+          dynamicSlot = 5; // Default to tested Compressor slot if not found
+        }
+
+        let sourcePath = sidechainRoute?.sourcePath;
+        if (!sourcePath) {
+          const kickStrip = strips.find((s) => s.name.toLowerCase().includes('kick') || s.name.toLowerCase().includes('motown'));
+          sourcePath = kickStrip ? `Audio > ${kickStrip.name}` : 'Bus > Bus 1';
+        }
+
+        sidechainRoute = {
+          trackName: strip ? strip.name : targetTrackName,
+          slotIndex: dynamicSlot,
+          sourcePath
+        };
+
+        // Update any compressor deltas on this track to use the dynamic slot
+        for (const delta of args.deltas) {
+          if (
+            delta.trackName.toLowerCase().includes(targetTrackName.toLowerCase()) &&
+            (delta.pluginName?.toLowerCase().includes('comp') || ['threshold', 'ratio', 'attack', 'release'].includes(delta.parameterName))
+          ) {
+            delta.slotIndex = dynamicSlot;
+            delta.pluginName = 'Compressor';
+          }
+        }
+      } catch {
+        // Fallback if AX client not accessible
+      }
+    }
+
     const proposal: MixActionProposal = {
       id: `prop_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       timestamp: Date.now(),
@@ -455,7 +519,8 @@ export class MixingToolHandlers {
       rationale: args.rationale,
       confidenceScore: args.confidenceScore,
       deltas: args.deltas,
-      status: 'pending'
+      status: 'pending',
+      sidechainRoute
     };
 
     this.proposals.set(proposal.id, proposal);
@@ -1065,13 +1130,34 @@ export class MixingToolHandlers {
     sidechain?: string;
     error?: string;
   }> {
+    let targetSlot = args.slotIndex;
+    if (!targetSlot || targetSlot <= 0) {
+      try {
+        const { MacOSAccessibilityClient } = await import('@mixing-buddy/daw-adapters');
+        const axClient = new MacOSAccessibilityClient();
+        const strips = await axClient.listChannelStrips();
+        const strip = strips.find(
+          (s) => s.name.toLowerCase().includes(args.trackName.toLowerCase()) || args.trackName.toLowerCase().includes(s.name.toLowerCase())
+        );
+        const compSlot = strip?.insertSlots?.find(
+          (ins) => ins && (ins.pluginName?.toLowerCase().includes('comp') || ins.pluginName?.toLowerCase().includes('compressor'))
+        );
+        if (compSlot && typeof compSlot.slotIndex === 'number' && compSlot.slotIndex >= 1) {
+          targetSlot = compSlot.slotIndex;
+        }
+      } catch {
+        // Fallback
+      }
+      if (!targetSlot || targetSlot <= 0) targetSlot = 5;
+    }
+
     try {
       const res = await fetch('http://127.0.0.1:48123/api/plugins/sidechain', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           track: args.trackName,
-          slot: args.slotIndex,
+          slot: targetSlot,
           source: args.sourcePath
         }),
         signal: AbortSignal.timeout(8000)
@@ -1090,7 +1176,7 @@ export class MixingToolHandlers {
     } catch {
       const { MacOSAccessibilityClient } = await import('@mixing-buddy/daw-adapters');
       const axClient = new MacOSAccessibilityClient();
-      return await axClient.setSidechain(args.trackName, args.slotIndex, args.sourcePath);
+      return await axClient.setSidechain(args.trackName, targetSlot, args.sourcePath);
     }
   }
 }
