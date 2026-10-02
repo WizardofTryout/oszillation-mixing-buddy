@@ -605,31 +605,12 @@ async fn handle_connection(
                 let _ = stream.flush().await;
                 return;
             } else if path.contains("/api/transport/play") {
-                // Sprint 6: Transport Play — try AX bridge first, fall back to MCU MIDI
                 let body = {
                     #[cfg(target_os = "macos")]
                     {
-                        let bridge_path = crate::resolve_bridge_path();
-                        if bridge_path.exists() {
-                            match crate::execute_logic_ax_bridge(&bridge_path, &["transport-play".to_string()]) {
-                                Ok(val) => {
-                                    // AX success: also send MCU MIDI as belt-and-suspenders
-                                    let _ = mcu_bridge.send_transport_play();
-                                    val.to_string()
-                                }
-                                Err(_) => {
-                                    // AX failed: try pure MIDI path
-                                    match mcu_bridge.send_transport_play() {
-                                        Ok(()) => serde_json::json!({"success": true, "action": "play", "via": "midi"}).to_string(),
-                                        Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
-                                    }
-                                }
-                            }
-                        } else {
-                            match mcu_bridge.send_transport_play() {
-                                Ok(()) => serde_json::json!({"success": true, "action": "play", "via": "midi"}).to_string(),
-                                Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
-                            }
+                        match mcu_bridge.send_note_pulse(94, 50) {
+                            Ok(()) => serde_json::json!({"success": true, "action": "play", "via": "mcu"}).to_string(),
+                            Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
                         }
                     }
                     #[cfg(not(target_os = "macos"))]
@@ -648,25 +629,9 @@ async fn handle_connection(
                 let body = {
                     #[cfg(target_os = "macos")]
                     {
-                        let bridge_path = crate::resolve_bridge_path();
-                        if bridge_path.exists() {
-                            match crate::execute_logic_ax_bridge(&bridge_path, &["transport-stop".to_string()]) {
-                                Ok(val) => {
-                                    let _ = mcu_bridge.send_transport_stop();
-                                    val.to_string()
-                                }
-                                Err(_) => {
-                                    match mcu_bridge.send_transport_stop() {
-                                        Ok(()) => serde_json::json!({"success": true, "action": "stop", "via": "midi"}).to_string(),
-                                        Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
-                                    }
-                                }
-                            }
-                        } else {
-                            match mcu_bridge.send_transport_stop() {
-                                Ok(()) => serde_json::json!({"success": true, "action": "stop", "via": "midi"}).to_string(),
-                                Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
-                            }
+                        match mcu_bridge.send_note_pulse(93, 50) {
+                            Ok(()) => serde_json::json!({"success": true, "action": "stop", "via": "mcu"}).to_string(),
+                            Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
                         }
                     }
                     #[cfg(not(target_os = "macos"))]
@@ -692,25 +657,9 @@ async fn handle_connection(
                 let body = {
                     #[cfg(target_os = "macos")]
                     {
-                        let bridge_path = crate::resolve_bridge_path();
-                        if bridge_path.exists() {
-                            match crate::execute_logic_ax_bridge(
-                                &bridge_path,
-                                &["transport-locate".to_string(), "--bar".to_string(), bar.to_string()],
-                            ) {
-                                Ok(val) => val.to_string(),
-                                Err(_) => {
-                                    match mcu_bridge.send_transport_locate(bar) {
-                                        Ok(()) => serde_json::json!({"success": true, "action": "locate", "bar": bar, "via": "midi"}).to_string(),
-                                        Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
-                                    }
-                                }
-                            }
-                        } else {
-                            match mcu_bridge.send_transport_locate(bar) {
-                                Ok(()) => serde_json::json!({"success": true, "action": "locate", "bar": bar, "via": "midi"}).to_string(),
-                                Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
-                            }
+                        match mcu_bridge.send_transport_locate(bar) {
+                            Ok(()) => serde_json::json!({"success": true, "action": "locate", "bar": bar, "via": "mcu"}).to_string(),
+                            Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
                         }
                     }
                     #[cfg(not(target_os = "macos"))]

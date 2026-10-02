@@ -46,6 +46,8 @@ export interface AgentRunnerConfig {
   invokeTauri: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
   /** Called whenever a new step starts or its status changes */
   onStep: (step: AgentStep) => void;
+  /** Optional accessor for live telemetry frame from audio meter plugin */
+  getTelemetry?: () => MetrologyTelemetryFrame | null;
 }
 
 export interface AgentRunResult {
@@ -361,12 +363,35 @@ export class AgentRunner {
 
   private validateProposalAgainstStrips(
     input: Record<string, unknown>,
-    tracks: TrackDescriptor[]
+    tracks: TrackDescriptor[],
+    isSilentPlayback?: boolean
   ): { proposal: MixActionProposal; warnings: string[] } {
     const warnings: string[] = [];
     const rawDeltas = (input.deltas as Record<string, unknown>[]) ?? [];
 
-    const sanitizedDeltas = rawDeltas.map((d) => {
+    let filteredDeltas = rawDeltas;
+    if (isSilentPlayback) {
+      filteredDeltas = rawDeltas.filter((d) => {
+        const param = String(d.parameterName ?? '').toLowerCase();
+        const isFader =
+          param.includes('volume') ||
+          param.includes('fader') ||
+          param.includes('pegel') ||
+          param.includes('gain');
+        const targetVal = Number(d.targetValue ?? 0);
+        const deltaVal = Number(d.deltaDb ?? d.delta ?? 0);
+        if (isFader && (targetVal <= -50 || deltaVal < -20 || targetVal === -100)) {
+          warnings.push(
+            `⚠️ Absenkung auf ${targetVal} dB ignoriert: Signalpegel im ausgewählten Bereich zu niedrig für Gain-Staging.`
+          );
+          return false;
+        }
+        return true;
+      });
+      warnings.push('Signalpegel im ausgewählten Bereich zu niedrig für Gain-Staging.');
+    }
+
+    const sanitizedDeltas = filteredDeltas.map((d) => {
       const delta = { ...(d as any) } as any;
 
       if (delta.pluginName && delta.trackName && this.fetchedStrips) {
@@ -575,6 +600,8 @@ export class AgentRunner {
     const MAX_ITERATIONS = 3;
     let totalToolCalls = 0;
     const MAX_TOOL_CALLS = 3;
+    let auditionExecuted = false;
+    let isSilentPlayback = false;
 
     try {
       for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
@@ -637,13 +664,28 @@ export class AgentRunner {
           } else if (call.name === 'get_track_details') {
             toolResult = await this.executeGetTrackDetails(String(args.trackName ?? ''));
           } else if (call.name === 'audition_region') {
+            auditionExecuted = true;
             toolResult = await this.executeAuditionRegion(
               Number(args.startBar ?? 1),
               Number(args.durationSeconds ?? 8),
               activeSignal
             );
+            const liveTelem = this.cfg.getTelemetry?.() ?? telemetry;
+            const currentLufs = liveTelem?.loudness?.momentaryLufs ?? -70.0;
+            if (currentLufs <= -70.0) {
+              isSilentPlayback = true;
+              toolResult = JSON.stringify({
+                success: true,
+                momentaryLufs: currentLufs,
+                notice: 'Signalpegel im ausgewählten Bereich zu niedrig für Gain-Staging. Schlage KEINE Absenkung auf -100 dB vor!'
+              });
+            }
           } else if (call.name === 'propose_mix_adjustment') {
-            const { proposal, warnings } = this.validateProposalAgainstStrips(args, tracks);
+            const { proposal, warnings } = this.validateProposalAgainstStrips(
+              args,
+              tracks,
+              isSilentPlayback
+            );
             allWarnings.push(...warnings);
             finalProposal = normalizeProposal(proposal, tracks);
             toolResult =
@@ -691,6 +733,15 @@ export class AgentRunner {
         assistantText: `⚠️ Agent-Fehler: ${String(err)}`,
         steps: this.steps
       };
+    }
+
+    const checkTelem = this.cfg.getTelemetry?.() ?? telemetry;
+    if (auditionExecuted && (checkTelem?.loudness?.momentaryLufs ?? -70.0) <= -70.0) {
+      isSilentPlayback = true;
+    }
+
+    if (isSilentPlayback && !allWarnings.some((w) => w.includes('Signalpegel im ausgewählten Bereich zu niedrig'))) {
+      allWarnings.push('⚠️ Signalpegel im ausgewählten Bereich zu niedrig für Gain-Staging.');
     }
 
     const warningText = allWarnings.length > 0 ? '\n\n' + allWarnings.join('\n') : '';

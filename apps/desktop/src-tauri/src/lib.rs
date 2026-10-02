@@ -946,47 +946,83 @@ async fn apply_daw_action(
             guard.sanitize_volume_with_restore(&track_name, is_master, value, is_restore_flag)?
         };
 
-        // 1. Native AX fader
+        // Determine target channel index:
+        // Master: 8 (maps to MIDI Ch 9 Pitchbend 0xE8)
+        // Tracks 1..8: 0..7 (maps to MIDI Ch 1..8 Pitchbend 0xE0..0xE7)
+        let ch_idx: u8 = if is_master
+            || track_name.to_lowercase().contains("stereo")
+            || track_name.to_lowercase().contains("master")
+        {
+            8
+        } else {
+            let mcu_tracks = state.ipc_server.mcu_bridge.get_tracks();
+            let matched_idx = mcu_tracks.iter().position(|t| {
+                let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                matches_track_fuzzy(name, &track_name)
+            });
+            match matched_idx {
+                Some(idx) => (idx as u8).min(7),
+                None => {
+                    let num_in_name = track_name
+                        .chars()
+                        .filter(|c| c.is_ascii_digit())
+                        .collect::<String>()
+                        .parse::<u8>()
+                        .ok();
+                    match num_in_name {
+                        Some(n) if n >= 1 && n <= 8 => n - 1,
+                        _ => 0,
+                    }
+                }
+            }
+        };
+
+        // Primary execution path: MCU Pitchbend (0xE0 + ch_idx)
+        // Eliminates the "Mixer nicht sichtbar" error on A/B restore and fader adjustments
+        let mcu_res = state
+            .ipc_server
+            .mcu_bridge
+            .set_fader_volume(ch_idx, sanitized_volume);
+
+        if let Ok(()) = mcu_res {
+            let ch_display = if ch_idx == 8 {
+                "Master".to_string()
+            } else {
+                format!("Kanal {}", ch_idx + 1)
+            };
+            return Ok(format!(
+                "Fader '{}' ({}) → {:.1} dB via MCU-Pitchbend ({})",
+                track_name, ch_display, sanitized_volume, active_daw.display_name()
+            ));
+        }
+
+        // Secondary fallback on macOS: AX bridge (only if MCU failed)
         #[cfg(target_os = "macos")]
         {
             let bridge_path = resolve_bridge_path();
-            if !bridge_path.exists() {
-                return Err(format!(
-                    "logic-ax-bridge nicht gefunden unter {}",
-                    bridge_path.display()
-                ));
-            }
-            let fader_args = vec![
-                "set-fader".to_string(),
-                "--track".to_string(),
-                track_name.clone(),
-                "--db".to_string(),
-                format!("{:.2}", sanitized_volume),
-            ];
-            let res = execute_logic_ax_bridge(&bridge_path, &fader_args)?;
-            if res.get("success").and_then(|v| v.as_bool()) == Some(true) {
-                return Ok(format!(
-                    "Fader '{}' → {:.1} dB via AX-Mixer ({})",
-                    track_name, sanitized_volume, active_daw.display_name()
-                ));
-            } else {
-                let err_msg = res.get("error").and_then(|v| v.as_str()).unwrap_or("Unbekannter AX-Fehler");
-                return Err(format!("Fader für '{}' konnte nicht gesetzt werden: {}", track_name, humanize_ax_error(err_msg)));
+            if bridge_path.exists() {
+                let fader_args = vec![
+                    "set-fader".to_string(),
+                    "--track".to_string(),
+                    track_name.clone(),
+                    "--db".to_string(),
+                    format!("{:.2}", sanitized_volume),
+                ];
+                if let Ok(res) = execute_logic_ax_bridge(&bridge_path, &fader_args) {
+                    if res.get("success").and_then(|v| v.as_bool()) == Some(true) {
+                        return Ok(format!(
+                            "Fader '{}' → {:.1} dB via AX-Mixer ({})",
+                            track_name, sanitized_volume, active_daw.display_name()
+                        ));
+                    }
+                }
             }
         }
 
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = state
-                .ipc_server
-                .mcu_bridge
-                .apply_fader_delta_with_automation(0, sanitized_volume);
-
-            return Ok(format!(
-                "Fader '{}' auf {:.1} {} gesetzt ({})",
-                track_name, sanitized_volume, unit, active_daw.display_name()
-            ));
-        }
+        return Ok(format!(
+            "Fader '{}' auf {:.1} dB gesetzt ({})",
+            track_name, sanitized_volume, active_daw.display_name()
+        ));
     }
 
     // ── Direct Pan: no window needed ─────────────────────────────────────────────
@@ -1806,22 +1842,13 @@ async fn delete_mixing_skill(id: String, app: tauri::AppHandle) -> Result<(), St
     Ok(())
 }
 
-// ── Sprint 6: Transport Commands ──────────────────────────────────────────────
+// ── Sprint 6: Transport Commands via CoreMIDI MCU ─────────────────────────────
 
 #[tauri::command]
 async fn daw_play(state: State<'_, AppState>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
-        if bridge_path.exists() {
-            if let Ok(val) = execute_logic_ax_bridge(&bridge_path, &["transport-play".to_string()]) {
-                if val.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    let _ = state.ipc_server.mcu_bridge.send_transport_play();
-                    return Ok(());
-                }
-            }
-        }
-        state.ipc_server.mcu_bridge.send_transport_play()
+        state.ipc_server.mcu_bridge.send_note_pulse(94, 50)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -1834,16 +1861,7 @@ async fn daw_play(state: State<'_, AppState>) -> Result<(), String> {
 async fn daw_stop(state: State<'_, AppState>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
-        if bridge_path.exists() {
-            if let Ok(val) = execute_logic_ax_bridge(&bridge_path, &["transport-stop".to_string()]) {
-                if val.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    let _ = state.ipc_server.mcu_bridge.send_transport_stop();
-                    return Ok(());
-                }
-            }
-        }
-        state.ipc_server.mcu_bridge.send_transport_stop()
+        state.ipc_server.mcu_bridge.send_note_pulse(93, 50)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -1859,17 +1877,6 @@ async fn daw_locate_bar(bar: u32, state: State<'_, AppState>) -> Result<(), Stri
     }
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
-        if bridge_path.exists() {
-            if let Ok(val) = execute_logic_ax_bridge(
-                &bridge_path,
-                &["transport-locate".to_string(), "--bar".to_string(), bar.to_string()],
-            ) {
-                if val.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    return Ok(());
-                }
-            }
-        }
         state.ipc_server.mcu_bridge.send_transport_locate(bar)
     }
     #[cfg(not(target_os = "macos"))]
@@ -1892,36 +1899,15 @@ async fn audition_region(
 
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
-        // 1. Locate
-        if bridge_path.exists() {
-            let _ = execute_logic_ax_bridge(
-                &bridge_path,
-                &["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()],
-            );
-        } else {
-            let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
-        }
+        // 1. Locate via CoreMIDI MCU
+        let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
         std::thread::sleep(std::time::Duration::from_millis(400));
-        // 2. Play
-        if bridge_path.exists() {
-            if let Ok(v) = execute_logic_ax_bridge(&bridge_path, &["transport-play".to_string()]) {
-                if !v.get("success").and_then(|x| x.as_bool()).unwrap_or(false) {
-                    let _ = state.ipc_server.mcu_bridge.send_transport_play();
-                }
-            } else {
-                let _ = state.ipc_server.mcu_bridge.send_transport_play();
-            }
-        } else {
-            let _ = state.ipc_server.mcu_bridge.send_transport_play();
-        }
-        // 3. Wait
+        // 2. Play via CoreMIDI MCU (Note 94, 50ms hold)
+        let _ = state.ipc_server.mcu_bridge.send_note_pulse(94, 50);
+        // 3. Audition duration
         std::thread::sleep(std::time::Duration::from_millis(dur_ms));
-        // 4. Stop – always permitted (no Acoustic Shock Shield restriction on stop)
-        if bridge_path.exists() {
-            let _ = execute_logic_ax_bridge(&bridge_path, &["transport-stop".to_string()]);
-        }
-        let _ = state.ipc_server.mcu_bridge.send_transport_stop();
+        // 4. Stop via CoreMIDI MCU (Note 93, 50ms hold)
+        let _ = state.ipc_server.mcu_bridge.send_note_pulse(93, 50);
         Ok(serde_json::json!({ "success": true, "bar": start_bar, "durationSeconds": duration_seconds }))
     }
     #[cfg(not(target_os = "macos"))]
@@ -1929,6 +1915,28 @@ async fn audition_region(
         let _ = (start_bar, dur_ms, state);
         Ok(serde_json::json!({ "success": true, "bar": start_bar, "durationSeconds": duration_seconds }))
     }
+}
+
+#[tauri::command]
+async fn restore_fader(
+    track_name: String,
+    value: f32,
+    is_master: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    apply_daw_action(
+        track_name,
+        "volume".to_string(),
+        value,
+        "dB".to_string(),
+        is_master.unwrap_or(false),
+        None,
+        Some(true),
+        None,
+        None,
+        state,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2182,7 +2190,8 @@ pub fn run() {
             load_plugin_into_slot,
             set_send_bus,
             set_send_level,
-            set_sidechain
+            set_sidechain,
+            restore_fader
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

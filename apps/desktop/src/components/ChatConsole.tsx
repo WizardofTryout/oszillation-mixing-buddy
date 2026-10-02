@@ -79,6 +79,8 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   const [agentSteps, setAgentSteps] = useState<AgentStep[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const telemetryRef = useRef(telemetry);
+  telemetryRef.current = telemetry;
 
   const handleCancel = async () => {
     if (abortControllerRef.current) {
@@ -230,7 +232,8 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
                 }
                 return [...prev, step];
               });
-            }
+            },
+            getTelemetry: () => telemetryRef.current
           });
 
           const res = await runner.run(

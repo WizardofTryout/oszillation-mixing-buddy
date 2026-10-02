@@ -6,6 +6,30 @@ use std::sync::{Arc, Mutex};
 pub const MCU_SYSEX_HEADER: [u8; 5] = [0xF0, 0x00, 0x00, 0x66, 0x14];
 pub const MCU_CMD_LCD_WRITE: u8 = 0x12;
 
+// ── Transport & Navigation Notes (Channel 1) ──────────────────────────────────
+pub const MCU_NOTE_PLAY: u8 = 0x5E; // 94
+pub const MCU_NOTE_STOP: u8 = 0x5D; // 93
+pub const MCU_NOTE_REWIND: u8 = 0x5B; // 91
+pub const MCU_NOTE_FAST_FORWARD: u8 = 0x5C; // 92
+pub const MCU_NOTE_CYCLE: u8 = 0x56; // 86
+pub const MCU_NOTE_CURSOR_UP: u8 = 0x60; // 96
+pub const MCU_NOTE_CURSOR_DOWN: u8 = 0x61; // 97
+pub const MCU_NOTE_CURSOR_LEFT: u8 = 0x62; // 98
+pub const MCU_NOTE_CURSOR_RIGHT: u8 = 0x63; // 99
+
+// ── Channel Strip Control Base Notes (Channels 1–8 / idx 0..7) ────────────────
+pub const MCU_NOTE_REC_BASE: u8 = 0x00; // 0..7
+pub const MCU_NOTE_SOLO_BASE: u8 = 0x08; // 8..15
+pub const MCU_NOTE_MUTE_BASE: u8 = 0x10; // 16..23
+pub const MCU_NOTE_SELECT_BASE: u8 = 0x18; // 24..31
+pub const MCU_NOTE_VPOT_CLICK_BASE: u8 = 0x20; // 32..39
+
+// ── Utilities & Global Commands (Channel 1) ───────────────────────────────────
+pub const MCU_NOTE_SAVE: u8 = 0x40; // 64
+pub const MCU_NOTE_UNDO: u8 = 0x41; // 65
+pub const MCU_NOTE_CANCEL: u8 = 0x42; // 66
+pub const MCU_NOTE_ENTER: u8 = 0x43; // 67
+
 /// Automation Modes mapped to MCU Button Notes (Channel 1, Note On)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -270,21 +294,133 @@ impl McuBridge {
     // High-Level MCU Control Methods
     // -----------------------------------------------------------------------
 
-    /// Selects a channel strip on the MCU surface (Note On 0x18 + channel_idx, vel 0x7F)
+    /// Sends a Note On (0x90) on MIDI Channel 1, holds for `hold_ms` milliseconds,
+    /// then sends a Note Off (0x80) with velocity 0.
+    pub fn send_note_pulse(&self, note: u8, hold_ms: u64) -> Result<(), String> {
+        self.send_midi(&[0x90, note, 0x7F])?;
+        if hold_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(hold_ms));
+        }
+        self.send_midi(&[0x80, note, 0x00])
+    }
+
+    // ── Transport & Navigation (Note-On / Note-Off mit 50ms Hold) ───────────
+
+    /// Play: Note 94 (0x5E)
+    pub fn send_transport_play(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_PLAY, 50)
+    }
+
+    /// Stop: Note 93 (0x5D)
+    pub fn send_transport_stop(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_STOP, 50)
+    }
+
+    /// Rewind: Note 91 (0x5B)
+    pub fn send_transport_rewind(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_REWIND, 50)
+    }
+
+    /// Fast Forward: Note 92 (0x5C)
+    pub fn send_transport_fast_forward(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_FAST_FORWARD, 50)
+    }
+
+    /// Cycle: Note 86 (0x56)
+    pub fn send_transport_cycle(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_CYCLE, 50)
+    }
+
+    /// Cursor UP: Note 96 (0x60)
+    pub fn send_cursor_up(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_CURSOR_UP, 50)
+    }
+
+    /// Cursor DOWN: Note 97 (0x61)
+    pub fn send_cursor_down(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_CURSOR_DOWN, 50)
+    }
+
+    /// Cursor LEFT: Note 98 (0x62)
+    pub fn send_cursor_left(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_CURSOR_LEFT, 50)
+    }
+
+    /// Cursor RIGHT: Note 99 (0x63)
+    pub fn send_cursor_right(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_CURSOR_RIGHT, 50)
+    }
+
+    /// Locates the playhead to the given bar using MCU Rewind / RTZ and Jog Wheel scrubbing.
+    pub fn send_transport_locate(&self, bar: u32) -> Result<(), String> {
+        if bar <= 1 {
+            // RTZ / Rewind pulse
+            return self.send_note_pulse(MCU_NOTE_REWIND, 50);
+        }
+        // First: return to start
+        self.send_note_pulse(MCU_NOTE_REWIND, 50)?;
+        std::thread::sleep(std::time::Duration::from_millis(60));
+
+        // Use MCU Jog wheel (CC 0x3C / 60) for scrubbing to target bar
+        let ticks = (bar.saturating_sub(1) * 4).min(500);
+        for _ in 0..ticks {
+            self.send_midi(&[0xB0, 0x3C, 0x01])?;
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        Ok(())
+    }
+
+    // ── Kanalzug-Steuerung (Kanäle 1–8 / idx 0..7) ──────────────────────────
+
+    /// Rec Ready: Noten 0–7 (0x00..0x07)
+    pub fn set_channel_rec(&self, channel_idx: u8) -> Result<(), String> {
+        if channel_idx > 7 {
+            return Err("MCU channel index must be 0..7".to_string());
+        }
+        self.send_note_pulse(MCU_NOTE_REC_BASE + channel_idx, 50)
+    }
+
+    /// Solo: Noten 8–15 (0x08..0x0F)
+    pub fn set_channel_solo(&self, channel_idx: u8) -> Result<(), String> {
+        if channel_idx > 7 {
+            return Err("MCU channel index must be 0..7".to_string());
+        }
+        self.send_note_pulse(MCU_NOTE_SOLO_BASE + channel_idx, 50)
+    }
+
+    /// Mute: Noten 16–23 (0x10..0x17)
+    pub fn set_channel_mute(&self, channel_idx: u8) -> Result<(), String> {
+        if channel_idx > 7 {
+            return Err("MCU channel index must be 0..7".to_string());
+        }
+        self.send_note_pulse(MCU_NOTE_MUTE_BASE + channel_idx, 50)
+    }
+
+    /// Select: Noten 24–31 (0x18..0x1F)
     pub fn select_channel(&self, channel_idx: u8) -> Result<(), String> {
         if channel_idx > 7 {
             return Err("MCU channel index must be 0..7".to_string());
         }
-        self.send_midi(&[0x90, 0x18 + channel_idx, 0x7F])
+        self.send_note_pulse(MCU_NOTE_SELECT_BASE + channel_idx, 50)
     }
 
-    /// Moves a motorized fader to a target dB value.
-    /// Maps [-96 dB … +6 dB] linearly to the 14-bit pitch-bend range [0 … 16383].
-    /// 0 dB ≈ pitch-bend value 12 288.
+    /// V-Pot Click: Noten 32–39 (0x20..0x27)
+    pub fn click_vpot(&self, channel_idx: u8) -> Result<(), String> {
+        if channel_idx > 7 {
+            return Err("MCU channel index must be 0..7".to_string());
+        }
+        self.send_note_pulse(MCU_NOTE_VPOT_CLICK_BASE + channel_idx, 50)
+    }
+
+    // ── Fader-Level (14-Bit Pitchbend) ──────────────────────────────────────
+
+    /// Moves a motorized fader to a target dB value using 14-bit pitchbend.
+    /// - Channels 1–8: Pitchbend auf MIDI-Kanälen 1–8 (0xE0..0xE7)
+    /// - Masterfader: Pitchbend auf MIDI-Kanal 9 (0xE8)
+    /// - Calibration: 0.0 dB ≈ 10240 (0x2800) und -inf dB = 0.
     pub fn set_fader_volume(&self, channel_idx: u8, volume_db: f32) -> Result<(), String> {
-        let ch = channel_idx.min(8); // 8 = Master fader
-        let norm = ((volume_db + 96.0) / 102.0).clamp(0.0, 1.0);
-        let val_14bit = (norm * 16383.0).round() as u16;
+        let ch = channel_idx.min(8); // 0..7 = Kanäle 1-8, 8 = Masterfader
+        let val_14bit = db_to_mcu_pitchbend(volume_db);
         let lsb = (val_14bit & 0x7F) as u8;
         let msb = ((val_14bit >> 7) & 0x7F) as u8;
         self.send_midi(&[0xE0 + ch, lsb, msb])
@@ -329,49 +465,61 @@ impl McuBridge {
     }
 
     /// Atomic fader move with Touch Automation Guard:
-    /// 1. Switch to Touch mode
-    /// 2. Fader Touch On
-    /// 3. Move fader to target_db
-    /// 4. Fader Touch Off
+    /// 1. Fader Touch On
+    /// 2. Move fader to target_db via Pitchbend
+    /// 3. Fader Touch Off
     pub fn apply_fader_delta_with_automation(
         &self,
         channel_idx: u8,
         target_db: f32,
     ) -> Result<(), String> {
-        self.set_automation_mode(AutomationMode::Touch)?;
-        self.set_fader_touch(channel_idx, true)?;
-        self.set_fader_volume(channel_idx, target_db)?;
-        self.set_fader_touch(channel_idx, false)?;
+        let ch = channel_idx.min(8);
+        self.set_fader_touch(ch, true)?;
+        self.set_fader_volume(ch, target_db)?;
+        self.set_fader_touch(ch, false)?;
         Ok(())
     }
 
-    // -----------------------------------------------------------------------
-    // Sprint 6: MCU Transport Controls
-    // -----------------------------------------------------------------------
+    // ── Utilities & Globale Befehle ─────────────────────────────────────────
 
-    /// Sends MCU Play command (Note On 0x5E, vel 0x7F on Channel 1).
-    /// This is the preferred path when AX transport buttons are unavailable.
-    pub fn send_transport_play(&self) -> Result<(), String> {
-        // MCU Play: Note On, Note 0x5E, Velocity 0x7F
-        self.send_midi(&[0x90, 0x5E, 0x7F])?;
-        // Immediately release (Note Off) to avoid held state
-        self.send_midi(&[0x80, 0x5E, 0x00])
+    /// Save: Note 64 (0x40)
+    pub fn utility_save(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_SAVE, 50)
     }
 
-    /// Sends MCU Stop command (Note On 0x5D, vel 0x7F on Channel 1).
-    pub fn send_transport_stop(&self) -> Result<(), String> {
-        self.send_midi(&[0x90, 0x5D, 0x7F])?;
-        self.send_midi(&[0x80, 0x5D, 0x00])
+    /// Undo: Note 65 (0x41)
+    pub fn utility_undo(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_UNDO, 50)
     }
 
-    /// Sends MCU Rewind / locate-to-start command followed by bar offset.
-    /// For coarse positioning: sends Rewind (0x5B) clicks proportional to bar number.
-    /// Note: precise bar navigation requires AX bridge or Logic MIDI position SysEx.
-    pub fn send_transport_locate(&self, _bar: u32) -> Result<(), String> {
-        // First: Return to Zero (MCU: Note 0x5B = Rewind, 0x60 = RTZ)
-        self.send_midi(&[0x90, 0x60, 0x7F])?; // RTZ / Go To Beginning
-        self.send_midi(&[0x80, 0x60, 0x00])?;
-        Ok(())
+    /// Cancel: Note 66 (0x42)
+    pub fn utility_cancel(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_CANCEL, 50)
+    }
+
+    /// Enter: Note 67 (0x43)
+    pub fn utility_enter(&self) -> Result<(), String> {
+        self.send_note_pulse(MCU_NOTE_ENTER, 50)
+    }
+}
+
+/// Converts dB (-96.0 dB .. +6.0 dB) to 14-bit MCU Pitchbend value (0 .. 16383).
+/// Formula: 0.0 dB ≈ 10240 (0x2800), -inf (<= -96.0 dB) = 0.
+pub fn db_to_mcu_pitchbend(volume_db: f32) -> u16 {
+    if volume_db <= -96.0 {
+        return 0;
+    }
+    if volume_db >= 6.0 {
+        return 16383;
+    }
+    if volume_db >= 0.0 {
+        // Linear interpolation from 0.0 dB (10240) to +6.0 dB (16383)
+        let ratio = volume_db / 6.0;
+        (10240.0 + ratio * (16383.0 - 10240.0)).round() as u16
+    } else {
+        // Linear interpolation from -96.0 dB (0) to 0.0 dB (10240)
+        let ratio = (volume_db + 96.0) / 96.0;
+        (ratio * 10240.0).round().clamp(0.0, 10240.0) as u16
     }
 }
 
@@ -487,5 +635,50 @@ mod tests {
             .filter(|t| t["type"].as_str() == Some("master"))
             .count();
         assert_eq!(master_count, 1);
+    }
+
+    #[test]
+    fn test_mcu_command_matrix_notes() {
+        assert_eq!(MCU_NOTE_PLAY, 94);
+        assert_eq!(MCU_NOTE_STOP, 93);
+        assert_eq!(MCU_NOTE_REWIND, 91);
+        assert_eq!(MCU_NOTE_FAST_FORWARD, 92);
+        assert_eq!(MCU_NOTE_CYCLE, 86);
+        assert_eq!(MCU_NOTE_CURSOR_UP, 96);
+        assert_eq!(MCU_NOTE_CURSOR_DOWN, 97);
+        assert_eq!(MCU_NOTE_CURSOR_LEFT, 98);
+        assert_eq!(MCU_NOTE_CURSOR_RIGHT, 99);
+
+        assert_eq!(MCU_NOTE_REC_BASE, 0);
+        assert_eq!(MCU_NOTE_SOLO_BASE, 8);
+        assert_eq!(MCU_NOTE_MUTE_BASE, 16);
+        assert_eq!(MCU_NOTE_SELECT_BASE, 24);
+        assert_eq!(MCU_NOTE_VPOT_CLICK_BASE, 32);
+
+        assert_eq!(MCU_NOTE_SAVE, 64);
+        assert_eq!(MCU_NOTE_UNDO, 65);
+        assert_eq!(MCU_NOTE_CANCEL, 66);
+        assert_eq!(MCU_NOTE_ENTER, 67);
+    }
+
+    #[test]
+    fn test_db_to_mcu_pitchbend_calibration() {
+        // 0.0 dB should calibrate to exactly 10240 (0x2800)
+        assert_eq!(db_to_mcu_pitchbend(0.0), 10240);
+
+        // -inf / <= -96.0 dB should calibrate to 0
+        assert_eq!(db_to_mcu_pitchbend(-96.0), 0);
+        assert_eq!(db_to_mcu_pitchbend(-100.0), 0);
+
+        // +6.0 dB should calibrate to 16383 (0x3FFF)
+        assert_eq!(db_to_mcu_pitchbend(6.0), 16383);
+        assert_eq!(db_to_mcu_pitchbend(10.0), 16383);
+
+        // Verify MSB/LSB for 0.0 dB
+        let pb = db_to_mcu_pitchbend(0.0);
+        let lsb = (pb & 0x7F) as u8;
+        let msb = ((pb >> 7) & 0x7F) as u8;
+        assert_eq!(lsb, 0x00);
+        assert_eq!(msb, 0x50); // 80 * 128 = 10240
     }
 }
