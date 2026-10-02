@@ -524,7 +524,10 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
             usage={usageStats}
             activeKeysCount={apiKey ? apiKey.split(/[\n,;]+/).map((k) => k.trim()).filter(Boolean).length : 1}
             modelName={modelName.trim() || 'gemini-2.5-flash'}
-            onReset={() => setUsageStats(null)}
+            onReset={() => {
+              AgentRunner.resetSessionTokens();
+              setUsageStats(null);
+            }}
           />
 
           {/* Skill Selector Dropdown */}

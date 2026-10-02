@@ -262,61 +262,67 @@ func findElementDFS(
 }
 
 func ensureCycleOff(appElement: AXUIElement) -> Bool {
-    let allWindows = getLogicWindows(appElement)
-    for w in allWindows {
-        if let cycleBox = findElementDFS(root: w, roleFilter: "AXCheckBox", maxDepth: 12, predicate: { el in
-            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-            return desc == "cycle" || desc.contains("cycle")
+    for w in getLogicWindows(appElement) {
+        if let el = findElementDFS(root: w, roleFilter: nil, maxDepth: 12, predicate: { e in
+            let r = getAXString(e, kAXRoleAttribute as String) ?? ""
+            guard r == "AXCheckBox" || r == "AXButton" || r == "AXRadioButton" else { return false }
+            let d = (getAXString(e, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let t = (getAXString(e, kAXTitleAttribute as String) ?? "").lowercased()
+            return d.contains("cycle") || t.contains("cycle")
         }) {
             var val: AnyObject?
-            AXUIElementCopyAttributeValue(cycleBox, kAXValueAttribute as CFString, &val)
-            if let v = val as? Int, v == 1 {
-                let err = AXUIElementPerformAction(cycleBox, kAXPressAction as CFString)
+            AXUIElementCopyAttributeValue(el, kAXValueAttribute as CFString, &val)
+            if (val as? Int == 1) || (val as? Bool == true) || ((val as? String) == "1") {
+                let err = AXUIElementPerformAction(el, kAXPressAction as CFString)
                 return err == .success || err == .cannotComplete
-            } else {
-                return true
-            }
+            } else if val != nil { return true }
         }
+    }
+    var menuBarVal: AnyObject?
+    AXUIElementCopyAttributeValue(appElement, kAXMenuBarAttribute as CFString, &menuBarVal)
+    if let mb = menuBarVal as! AXUIElement?, let mi = findElementDFS(root: mb, roleFilter: "AXMenuItem", maxDepth: 6, predicate: { e in
+        let t = (getAXString(e, kAXTitleAttribute as String) ?? "").lowercased()
+        return t == "cycle" || t.starts(with: "cycle") || t.contains("cycle-modus") || t.contains("cycle mode")
+    }) {
+        var markVal: AnyObject?; var val: AnyObject?
+        AXUIElementCopyAttributeValue(mi, "AXMenuItemMarkChar" as CFString, &markVal)
+        AXUIElementCopyAttributeValue(mi, kAXValueAttribute as CFString, &val)
+        let isChecked = (markVal != nil && !((markVal as? String) ?? "").isEmpty) || (val as? Int == 1) || (val as? Bool == true)
+        if isChecked {
+            let err = AXUIElementPerformAction(mi, kAXPressAction as CFString)
+            return err == .success || err == .cannotComplete
+        } else { return true }
     }
     return false
 }
 
 func findTargetElement(in window: AXUIElement, criteria: SearchCriteria) -> AXUIElement? {
-    // Priority 1: Exact NS-Identifier (e.g. "_NS:153", "_NS:313")
     if let targetId = criteria.identifier, !targetId.isEmpty {
-        if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: { el in
-            let elId = getAXString(el, "AXIdentifier") ?? ""
-            return elId == targetId
-        }) {
+        if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: { (getAXString($0, "AXIdentifier") ?? "") == targetId }) {
             return found
         }
     }
-
-    // Priority 2: Visible Description or Title (e.g. "Peak 3 Gain", "Low Cut Frequency")
     if let targetDesc = criteria.description, !targetDesc.isEmpty {
         let lowerDesc = targetDesc.lowercased()
-        if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: { el in
-            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+        if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: {
+            let desc = (getAXString($0, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let title = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased()
             return desc == lowerDesc || title == lowerDesc
         }) {
             return found
         }
     }
-
-    // Priority 3: Help Prefix (e.g. "Threshold knob")
     if let targetHelp = criteria.helpPrefix, !targetHelp.isEmpty {
         let lowerHelp = targetHelp.lowercased()
-        if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: { el in
-            let help = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
-            return help.hasPrefix(lowerHelp)
+        if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: {
+            (getAXString($0, kAXHelpAttribute as String) ?? "").lowercased().hasPrefix(lowerHelp)
         }) {
             return found
         }
     }
-
     return nil
 }
+
 
 // Collect all interactive controls in a plugin window for full fast tree inspection
 func collectInteractiveControls(
@@ -2543,15 +2549,16 @@ case "transport-locate":
         exit(0)
     }
 
-    // 1. Deactivate Cycle mode to prevent looping
-    _ = ensureCycleOff(appElement: appElement)
-
-    // 2. Activate Logic Pro so window/menu commands reach it
+    // 1. Activate Logic Pro so window/menu commands reach it
     if let app = getLogicRunningApp() {
         app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
     }
     AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-    usleep(120_000)
+    usleep(100_000)
+
+    // 2. ZWINGEND Cycle-Modus ausschalten, BEVOR der Dialog "Zu Position" geöffnet wird!
+    _ = ensureCycleOff(appElement: appElement)
+    usleep(40_000)
 
     var dialogOpened = false
 

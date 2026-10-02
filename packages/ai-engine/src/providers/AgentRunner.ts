@@ -172,10 +172,64 @@ const TOOL_PROPOSE: FunctionDeclaration = {
 };
 
 // --------------------------------------------------------------------------
+// Audition Intent Parsing (Single-Pass Deterministisch)
+// --------------------------------------------------------------------------
+
+export function parseAuditionIntent(prompt: string): { startBar: number; endBar: number; durationSeconds: number } | null {
+  const lower = prompt.toLowerCase();
+  const wantsAudition =
+    lower.includes('höre') ||
+    lower.includes('hoer') ||
+    lower.includes('listen') ||
+    lower.includes('audition') ||
+    lower.includes('takt') ||
+    lower.includes('bar');
+
+  if (!wantsAudition) return null;
+
+  // 1. Bereichssuche: "Takt 9 bis 13", "Takt 9 - 13", "Bar 9 to 13"
+  const rangeMatch = prompt.match(/(?:takt|bar|bars|takte)\s*(\d+)\s*(?:bis|to|-|\.\.)\s*(?:takt|bar)?\s*(\d+)/i);
+  if (rangeMatch) {
+    const s = parseInt(rangeMatch[1], 10);
+    const e = parseInt(rangeMatch[2], 10);
+    const startBar = Math.max(1, Math.min(s, e));
+    const endBar = Math.max(startBar + 1, Math.max(s, e));
+    const barCount = endBar - startBar;
+    // 2.4s pro Takt bei 100 BPM (z. B. 4 Takte = 9.6s)
+    const durationSeconds = Math.round(Math.max(2.0, Math.min(30.0, barCount * 2.4)) * 10) / 10;
+    return { startBar, endBar, durationSeconds };
+  }
+
+  // 2. Einzelner Takt: "starte bei Takt 25", "ab Takt 9", "Takt 9", "bar 16"
+  const singleMatch = prompt.match(/(?:takt|bar)\s*(\d+)/i);
+  if (singleMatch) {
+    const startBar = Math.max(1, parseInt(singleMatch[1], 10));
+    const endBar = startBar + 4;
+    const durationSeconds = 9.6;
+    return { startBar, endBar, durationSeconds };
+  }
+
+  // 3. Allgemeine Höranweisung ohne Taktangabe ("Höre dir den Mix an"): Standard Takt 1 bis 5 (9.6s)
+  return { startBar: 1, endBar: 5, durationSeconds: 9.6 };
+}
+
+// --------------------------------------------------------------------------
 // AgentRunner
 // --------------------------------------------------------------------------
 
 export class AgentRunner {
+  public static cumulativeSessionTokens = 0;
+  public static cumulativePromptTokens = 0;
+  public static cumulativeCandidatesTokens = 0;
+  public static cumulativeTurnsCount = 0;
+
+  public static resetSessionTokens(): void {
+    AgentRunner.cumulativeSessionTokens = 0;
+    AgentRunner.cumulativePromptTokens = 0;
+    AgentRunner.cumulativeCandidatesTokens = 0;
+    AgentRunner.cumulativeTurnsCount = 0;
+  }
+
   private cfg: AgentRunnerConfig;
   private steps: AgentStep[] = [];
   private fetchedStrips: ChannelStrip[] | null = null;
@@ -837,6 +891,30 @@ export class AgentRunner {
       fx: (s.inserts || []).map((i) => i.name).filter(Boolean)
     }));
 
+    this.resolveStep(prefetchStep, `${compactStrips.length} Spuren ultra-kompakt bereitgestellt`);
+
+    // ── Punkt 2: Deterministische Lokale Audition VOR dem ersten API-Call ─────
+    const auditionIntent = parseAuditionIntent(userPrompt);
+    let auditionExecuted = false;
+
+    if (auditionIntent) {
+      const { startBar, endBar, durationSeconds } = auditionIntent;
+      const auditionStep = this.addStep('👂', `Wiedergabe Takt ${startBar} bis ${endBar} · ${durationSeconds}s`);
+      try {
+        await this.cfg.invokeTauri('audition_region', {
+          startBar,
+          endBar,
+          durationSeconds
+        });
+        this.resolveStep(auditionStep, `Audition abgeschlossen (${durationSeconds}s) · Telemetrie erfasst`);
+        auditionExecuted = true;
+      } catch (err) {
+        console.warn('⚠️ [AgentRunner] Lokale Audition fehlgeschlagen:', err);
+        this.resolveStep(auditionStep, `Audition übersprungen (${String(err)})`);
+      }
+    }
+
+    // Frische Telemetriedaten direkt nach lokalem Playback erfassen
     const liveTelem = this.cfg.getTelemetry?.() ?? telemetry;
     const compactTelemetry = liveTelem
       ? {
@@ -851,31 +929,18 @@ export class AgentRunner {
         }
       : null;
 
-    this.resolveStep(prefetchStep, `${compactStrips.length} Spuren ultra-kompakt bereitgestellt`);
-
-    const lowerPrompt = userPrompt.toLowerCase();
-    const wantsAudition =
-      lowerPrompt.includes('h\u00f6re') ||
-      lowerPrompt.includes('listen') ||
-      lowerPrompt.includes('audition') ||
-      lowerPrompt.includes('takt') ||
-      lowerPrompt.includes('bar');
-
-    const barMatch = userPrompt.match(/(?:takt|bar)\s*(\d+)/i);
-    const suggestedBar = barMatch ? parseInt(barMatch[1], 10) : undefined;
-
+    // ── Single-Turn API-Call Vorbereitung (Exakt 1 Request) ───────────────────
     const initialUserText =
       `Engineer request: "${userPrompt}"\n\n` +
       `SESSION CONTEXT (PREFETCHED):\n` +
       `- Tracks & Inserts: ${JSON.stringify(compactStrips)}\n` +
-      `- Live Metrology: ${compactTelemetry ? JSON.stringify(compactTelemetry) : 'Standby / Low Signal'}\n\n` +
+      `- Measured Metrology: ${compactTelemetry ? JSON.stringify(compactTelemetry) : 'Standby / Low Signal'}\n\n` +
       `STRICT DIRECTIVE:\n` +
-      `SESSION CONTEXT ALREADY ATTACHED. Do NOT call \`list_tracks\`. ` +
-      (wantsAudition
-        ? `User requested auditioning${suggestedBar ? ` around bar ${suggestedBar}` : ''}. Call \`audition_region\` once, then immediately generate \`propose_mix_adjustment\`! (Max 2 turns total)`
-        : `Generate \`propose_mix_adjustment\` immediately in this turn!`);
+      (auditionExecuted
+        ? `Audition has ALREADY been completed locally (playback of bars ${auditionIntent?.startBar} to ${auditionIntent?.endBar} for ${auditionIntent?.durationSeconds}s). Telemetry is attached above. You MUST respond with \`propose_mix_adjustment\` directly in this single response!`
+        : `Audition has ALREADY been completed locally. Telemetry is attached above. You MUST respond with \`propose_mix_adjustment\` in this single response!`);
 
-    // Turn 1 (User): initial user request with live telemetry
+    // Turn 1 (User): initial user request with measured telemetry
     const contents: GeminiContent[] = [
       {
         role: 'user',
@@ -889,7 +954,6 @@ export class AgentRunner {
     const MAX_ITERATIONS = 3;
     let totalToolCalls = 0;
     const MAX_TOOL_CALLS = 3;
-    let auditionExecuted = false;
     let isSilentPlayback = false;
 
     let promptTokens = 0;
@@ -910,12 +974,38 @@ export class AgentRunner {
 
         this.checkAborted(activeSignal);
 
-        // Track token usage
+        // Track token usage immediately into session state
         turnsCount++;
         if (response.usageMetadata) {
-          promptTokens += response.usageMetadata.promptTokenCount ?? 0;
-          candidatesTokens += response.usageMetadata.candidatesTokenCount ?? 0;
+          const p = response.usageMetadata.promptTokenCount ?? 0;
+          const c = response.usageMetadata.candidatesTokenCount ?? 0;
+          promptTokens += p;
+          candidatesTokens += c;
           totalTokens = promptTokens + candidatesTokens;
+
+          AgentRunner.cumulativePromptTokens += p;
+          AgentRunner.cumulativeCandidatesTokens += c;
+          AgentRunner.cumulativeSessionTokens += (p + c);
+          AgentRunner.cumulativeTurnsCount += 1;
+        }
+
+        const currentUsage: AgentUsageStats = {
+          promptTokenCount: AgentRunner.cumulativePromptTokens,
+          candidatesTokenCount: AgentRunner.cumulativeCandidatesTokens,
+          totalTokenCount: AgentRunner.cumulativeSessionTokens,
+          durationMs: Math.round(performance.now() - startTime),
+          turnsCount: AgentRunner.cumulativeTurnsCount,
+          model: modelName,
+          activeKeyCount: this.keyPool.length,
+          estimatedCostUsd:
+            AgentRunner.cumulativePromptTokens * 0.000000075 +
+            AgentRunner.cumulativeCandidatesTokens * 0.0000003
+        };
+
+        try {
+          this.cfg.onUsageUpdate?.(currentUsage);
+        } catch (e) {
+          console.warn('onUsageUpdate error:', e);
         }
 
         // Turn 2 (Model): Append candidate parts to contents
@@ -994,8 +1084,11 @@ export class AgentRunner {
             );
             allWarnings.push(...warnings);
             finalProposal = normalizeProposal(proposal, tracks);
-            toolResult =
-              'Proposal received and validated. Please provide a brief musical explanation for the engineer.';
+            if (!lastText && finalProposal) {
+              lastText = finalProposal.rationale || finalProposal.title || 'Vorschlag erfolgreich generiert.';
+            }
+            // Single-Pass 1-Turn Garantie: Vorschlag validiert, keine weiteren API-Turns notwendig
+            break;
           } else {
             toolResult = JSON.stringify({ error: `Unknown tool: ${call.name}` });
           }
@@ -1023,6 +1116,22 @@ export class AgentRunner {
         });
       }
     } catch (err) {
+      const fallbackUsage: AgentUsageStats = {
+        promptTokenCount: AgentRunner.cumulativePromptTokens,
+        candidatesTokenCount: AgentRunner.cumulativeCandidatesTokens,
+        totalTokenCount: AgentRunner.cumulativeSessionTokens,
+        durationMs: Math.round(performance.now() - startTime),
+        turnsCount: AgentRunner.cumulativeTurnsCount,
+        model: modelName,
+        activeKeyCount: this.keyPool.length,
+        estimatedCostUsd:
+          AgentRunner.cumulativePromptTokens * 0.000000075 +
+          AgentRunner.cumulativeCandidatesTokens * 0.0000003
+      };
+      try {
+        this.cfg.onUsageUpdate?.(fallbackUsage);
+      } catch {}
+
       if (activeSignal?.aborted || String(err).includes('Vom Benutzer abgebrochen')) {
         this.steps.forEach((s) => {
           if (s.status === 'running') {
@@ -1032,12 +1141,14 @@ export class AgentRunner {
         });
         return {
           assistantText: '⏹ Vorgang vom Benutzer abgebrochen.',
-          steps: this.steps
+          steps: this.steps,
+          usage: fallbackUsage
         };
       }
       return {
         assistantText: `⚠️ Agent-Fehler: ${String(err)}`,
-        steps: this.steps
+        steps: this.steps,
+        usage: fallbackUsage
       };
     }
 
@@ -1054,14 +1165,16 @@ export class AgentRunner {
     const assistantText = (lastText.trim() || 'Agent hat die Analyse abgeschlossen.') + warningText;
 
     const durationMs = Math.round(performance.now() - startTime);
-    const estimatedCostUsd = (promptTokens * 0.000000075) + (candidatesTokens * 0.0000003);
+    const estimatedCostUsd =
+      AgentRunner.cumulativePromptTokens * 0.000000075 +
+      AgentRunner.cumulativeCandidatesTokens * 0.0000003;
 
     const usageStats: AgentUsageStats = {
-      promptTokenCount: promptTokens,
-      candidatesTokenCount: candidatesTokens,
-      totalTokenCount: totalTokens,
+      promptTokenCount: AgentRunner.cumulativePromptTokens,
+      candidatesTokenCount: AgentRunner.cumulativeCandidatesTokens,
+      totalTokenCount: AgentRunner.cumulativeSessionTokens,
       durationMs,
-      turnsCount,
+      turnsCount: AgentRunner.cumulativeTurnsCount,
       model: modelName,
       activeKeyCount: this.keyPool.length,
       estimatedCostUsd
@@ -1112,13 +1225,12 @@ function agentDelay(ms: number, signal?: AbortSignal): Promise<void> {
 function buildAgentSystemPrompt(): string {
   return (
     MIXING_BUDDY_SYSTEM_PROMPT +
-    `\n\n## AGENTIC TOOL USE RULES (STRICTLY ENFORCED)\n\n` +
-    `1. ZERO-TURN PREFETCH: Session context (tracks, faders, pans, inserts, metrology) is already attached in the prompt. Do NOT call \`list_tracks\`!\n` +
-    `2. If user requested listening/auditioning (e.g. mentions "höre", "listen", or a bar number), call \`audition_region\` once, then immediately generate \`propose_mix_adjustment\`.\n` +
+    `\n\n## AGENTIC SINGLE-PASS RULES (STRICTLY ENFORCED)\n\n` +
+    `1. ZERO-TURN PREFETCH: Session context (tracks, faders, pans, inserts, measured metrology) is already attached in the prompt. Do NOT call \`list_tracks\` or \`audition_region\`!\n` +
+    `2. SINGLE-PASS GUARANTEE: Audition has ALREADY been completed locally. You MUST respond directly with \`propose_mix_adjustment\` in this single response!\n` +
     `3. Always use the exact track names from the attached session context (NEVER invent or abbreviate names).\n` +
     `4. NEVER propose a plugin that is not listed in the attached fx array for that track.\n` +
-    `5. Immediately submit \`propose_mix_adjustment\` with verified plugins as your final proposal.\n` +
-    `6. MAX 2 TURNS: Complete in at most 2 turns (Turn 1: audition_region if requested -> Turn 2: propose_mix_adjustment). If no audition is requested, output propose_mix_adjustment in Turn 1!`
+    `5. Provide a clear, professional musical rationale in \`rationale\` inside \`propose_mix_adjustment\`.\n`
   );
 }
 
