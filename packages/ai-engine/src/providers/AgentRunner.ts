@@ -473,6 +473,78 @@ export class AgentRunner {
     }
   }
 
+  // ── Dynamic Session Track Resolver ───────────────────────────────────────
+
+  /**
+   * Resolves an LLM-generated track name (which may be abbreviated, MCU-truncated,
+   * or slightly mistyped) to the canonical full name as it exists in fetchedStrips.
+   *
+   * Priority order:
+   *  1. Exact match (case-insensitive)
+   *  2. One contains the other (case-insensitive)
+   *  3. Token-based overlap: ≥ 1 significant token in common
+   *  4. Trigram similarity ≥ 0.4
+   *  5. No match → return original (unchanged)
+   */
+  private resolveCanonicalTrackName(aiName: string): string {
+    const strips = this.fetchedStrips;
+    if (!strips || strips.length === 0) return aiName;
+
+    const lower = aiName.toLowerCase().trim();
+
+    // Prio 1: Exact (case-insensitive)
+    const exact = strips.find((s) => s.trackName.toLowerCase().trim() === lower);
+    if (exact) return exact.trackName;
+
+    // Prio 2: Substring containment
+    const contained = strips.find(
+      (s) =>
+        s.trackName.toLowerCase().includes(lower) ||
+        lower.includes(s.trackName.toLowerCase())
+    );
+    if (contained) return contained.trackName;
+
+    // Prio 3: Token overlap (≥ 1 significant token, len ≥ 3)
+    const aiTokens = lower.split(/[\s_\-\/]+/).filter((t) => t.length >= 3);
+    if (aiTokens.length > 0) {
+      for (const strip of strips) {
+        const stripTokens = strip.trackName.toLowerCase().split(/[\s_\-\/]+/);
+        if (aiTokens.some((t) => stripTokens.some((st) => st.includes(t) || t.includes(st)))) {
+          return strip.trackName;
+        }
+      }
+    }
+
+    // Prio 4: Trigram similarity
+    const trigrams = (s: string): Set<string> => {
+      const result = new Set<string>();
+      const padded = `  ${s}  `;
+      for (let i = 0; i < padded.length - 2; i++) result.add(padded.slice(i, i + 3));
+      return result;
+    };
+    const similarity = (a: string, b: string): number => {
+      const ta = trigrams(a);
+      const tb = trigrams(b);
+      let overlap = 0;
+      ta.forEach((t) => { if (tb.has(t)) overlap++; });
+      return (2 * overlap) / (ta.size + tb.size);
+    };
+
+    let bestScore = 0.4; // minimum threshold
+    let bestMatch: string | null = null;
+    for (const strip of strips) {
+      const score = similarity(lower, strip.trackName.toLowerCase());
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = strip.trackName;
+      }
+    }
+    if (bestMatch) return bestMatch;
+
+    // No match – keep original
+    return aiName;
+  }
+
   // ── Anti-Hallucination Guard ──────────────────────────────────────────────
 
   private validateProposalAgainstStrips(
@@ -508,6 +580,19 @@ export class AgentRunner {
     const sanitizedDeltas = filteredDeltas.map((d) => {
       const delta = { ...(d as any) } as any;
 
+      // ── Dynamic Track Name Resolution ─────────────────────────────────────
+      // Resolve LLM-generated / MCU-truncated track names to canonical DAW names
+      if (delta.trackName && typeof delta.trackName === 'string') {
+        const resolved = this.resolveCanonicalTrackName(delta.trackName);
+        if (resolved !== delta.trackName) {
+          warnings.push(
+            `ℹ️ Spurname „${delta.trackName}" → „${resolved}" aufgelöst (dynamische Session-Namensauflösung).`
+          );
+          delta.trackName = resolved;
+        }
+      }
+
+      // ── Plugin Slot Matching ───────────────────────────────────────────────
       if (delta.pluginName && delta.trackName && this.fetchedStrips) {
         const strip = this.fetchedStrips.find(
           (s) =>

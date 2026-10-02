@@ -391,12 +391,18 @@ impl McuBridge {
         self.send_note_pulse(MCU_NOTE_CYCLE, 50)
     }
 
-    /// Deaktiviert den Cycle-Modus automatisch, falls er aktiv ist (oder zur Sicherheit vor Audition/Locate).
+    /// Deaktiviert den Cycle-Modus sicher – sendet Note 86 NUR wenn Cycle laut
+    /// MCU-Feedback tatsächlich aktiv ist. Verhindert die Cycle-Toggle-Falle
+    /// (blindes Senden würde Cycle einschalten, wenn er bereits aus ist).
     pub fn ensure_cycle_off(&self) -> Result<(), String> {
-        // Falls Cycle aktiv ist (oder zur Sicherheit vor Audition):
-        // Sende MCU Note 86 (Pulse 50ms), um Cycle auszuschalten
-        self.send_note_pulse(MCU_NOTE_CYCLE, 50)?;
-        self.is_cycle_active.store(false, Ordering::SeqCst);
+        if self.is_cycle_active.load(Ordering::SeqCst) {
+            // Cycle ist aktiv: Note 86 senden, um ihn auszuschalten
+            self.send_note_pulse(MCU_NOTE_CYCLE, 50)?;
+            self.is_cycle_active.store(false, Ordering::SeqCst);
+            println!("🔁 [MCU Bridge] Cycle deactivated (was active).");
+        } else {
+            println!("🔁 [MCU Bridge] ensure_cycle_off: Cycle already off – no Note 86 sent.");
+        }
         Ok(())
     }
 

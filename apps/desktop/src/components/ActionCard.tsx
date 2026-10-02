@@ -99,10 +99,36 @@ export const ActionCard: React.FC<ActionCardProps> = ({
         </div>
       </div>
 
-      {/* Rationale */}
-      <p className="text-xs text-slate-300 leading-relaxed bg-[#121418] p-2.5 rounded border border-darkBorder/60">
-        {proposal.rationale}
-      </p>
+      {/* Rationale – collapsible accordion with markdown rendering */}
+      {(() => {
+        const [rationaleOpen, setRationaleOpen] = React.useState(false);
+        const shortRationale = proposal.rationale.length > 140
+          ? proposal.rationale.slice(0, 140).replace(/\s\S*$/, '') + '…'
+          : proposal.rationale;
+        // Minimal inline markdown: **bold**, *italic*, `code`
+        const renderMarkdown = (text: string) =>
+          text
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.+?)\*/g, '<em>$1</em>')
+            .replace(/`(.+?)`/g, '<code class="bg-slate-800 px-1 rounded text-teal-300 text-[10px]">$1</code>');
+        return (
+          <div className="bg-[#121418] rounded border border-darkBorder/60 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setRationaleOpen((o) => !o)}
+              className="w-full flex items-start justify-between gap-2 px-2.5 py-2 text-left hover:bg-slate-800/40 transition-colors"
+            >
+              <p
+                className="text-xs text-slate-300 leading-relaxed flex-1"
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(rationaleOpen ? proposal.rationale : shortRationale) }}
+              />
+              <span className="text-slate-500 text-[10px] mt-0.5 shrink-0 select-none">
+                {rationaleOpen ? '▲' : '▼'}
+              </span>
+            </button>
+          </div>
+        );
+      })()}
 
       {/* Sidechain Routing Header Strip */}
       {proposal.sidechainRoute && (
