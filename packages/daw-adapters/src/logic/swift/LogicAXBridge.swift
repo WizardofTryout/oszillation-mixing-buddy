@@ -88,6 +88,40 @@ func sendSpacebarToLogic() -> Bool {
     return true
 }
 
+func digitToKeyCode(_ char: Character) -> CGKeyCode? {
+    switch char {
+    case "0": return 29
+    case "1": return 18
+    case "2": return 19
+    case "3": return 20
+    case "4": return 21
+    case "5": return 23
+    case "6": return 22
+    case "7": return 26
+    case "8": return 28
+    case "9": return 25
+    default: return nil
+    }
+}
+
+func postKeyToLogic(pid: pid_t, keyCode: CGKeyCode, delayUs: useconds_t = 30_000) {
+    let src = CGEventSource(stateID: .hidSystemState)
+    let keyDown = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true)
+    let keyUp = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false)
+    keyDown?.postToPid(pid)
+    usleep(10_000)
+    keyUp?.postToPid(pid)
+    usleep(delayUs)
+}
+
+func sendDigitsToLogic(pid: pid_t, text: String) {
+    for char in text {
+        if let kc = digitToKeyCode(char) {
+            postKeyToLogic(pid: pid, keyCode: kc, delayUs: 35_000)
+        }
+    }
+}
+
 func clickAtPoint(point: CGPoint) {
     guard let pid = getLogicPID() else { return }
     let src = CGEventSource(stateID: .hidSystemState)
@@ -2416,9 +2450,28 @@ case "transport-play":
         }
     }
 
-    // 2. Fallback only if no AX element was found in any window
-    if !played {
-        played = sendSpacebarToLogic()
+    // 2. Fallback / Verification: Check if Logic is playing; if not, send Spacebar with 150ms delay
+    usleep(150_000)
+    var isConfirmedPlaying = false
+    for w in allWindows {
+        if let playBtn = findElementDFS(root: w, roleFilter: nil, maxDepth: 12, predicate: { el in
+            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let role = getAXString(el, kAXRoleAttribute as String) ?? ""
+            return (role == "AXCheckBox" || role == "AXButton") &&
+                   (desc == "wiedergabe" || desc == "play" || desc.contains("wiedergabe") || desc.contains("play"))
+        }) {
+            var val: AnyObject?
+            AXUIElementCopyAttributeValue(playBtn, kAXValueAttribute as CFString, &val)
+            if (val as? Int) == 1 {
+                isConfirmedPlaying = true
+            }
+            break
+        }
+    }
+
+    if !isConfirmedPlaying {
+        let _ = sendSpacebarToLogic()
+        played = true
     }
 
     printJSON(["success": true, "action": "play"])
@@ -2473,47 +2526,24 @@ case "transport-locate":
         exit(0)
     }
 
-    var located = false
-
-    let allWindows = getLogicWindows(appElement)
-    for w in allWindows {
-        // 1. Direct LCD Takt Slider in Steuerungsleiste ("Position der Abspielposition" -> AXSlider "Takt")
-        if let taktSlider = findElementDFS(root: w, roleFilter: "AXSlider", maxDepth: 12, predicate: { el in
-            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-            let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
-            return desc == "takt" || desc == "bar" || t == "takt" || t == "bar" || desc.contains("takt") || desc.contains("bar")
-        }) {
-            let setErr = AXUIElementSetAttributeValue(taktSlider, kAXValueAttribute as CFString, barNum as CFTypeRef)
-            if setErr == .success || setErr == .cannotComplete {
-                let _ = AXUIElementPerformAction(taktSlider, kAXConfirmAction as CFString)
-                located = true
-                break
-            }
-        }
-
-        // 2. Fallback: AXTextField in transport LCD
-        if !located {
-            if let posField = findElementDFS(root: w, roleFilter: "AXTextField", maxDepth: 12, predicate: { el in
-                let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-                let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
-                return desc.contains("position") || t.contains("position") ||
-                       desc.contains("takt") || t.contains("takt") ||
-                       desc.contains("bar")
-            }) {
-                let posString = "\(barNum) 1 1 1" as CFString
-                let setErr = AXUIElementSetAttributeValue(posField, kAXValueAttribute as CFString, posString)
-                if setErr == .success || setErr == .cannotComplete {
-                    let _ = AXUIElementPerformAction(posField, kAXConfirmAction as CFString)
-                    located = true
-                }
-                break
-            }
-        }
+    // 1. Activate Logic Pro so key commands reach the main arrangement window
+    if let app = getLogicRunningApp() {
+        app.activate()
+        usleep(120_000) // 120ms
     }
 
-    guard located else {
-        printJSON(["success": false, "error": "Transport position field not found. Ensure Logic Pro main window with transport bar is visible."])
-        exit(0)
+    if let pid = getLogicPID() {
+        // 2. Send "Go to Position..." key command: Keycode 75 (Keypad /) and Keycode 44 (/)
+        postKeyToLogic(pid: pid, keyCode: 75, delayUs: 60_000)
+        postKeyToLogic(pid: pid, keyCode: 44, delayUs: 60_000)
+
+        // 3. Type target bar digits sequentially (e.g. '2', '5')
+        let barDigits = "\(barNum)"
+        sendDigitsToLogic(pid: pid, text: barDigits)
+        usleep(40_000)
+
+        // 4. Confirm with Return (Keycode 36)
+        postKeyToLogic(pid: pid, keyCode: 36, delayUs: 100_000)
     }
 
     printJSON(["success": true, "action": "locate", "bar": barNum])

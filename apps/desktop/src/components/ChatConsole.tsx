@@ -91,14 +91,23 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
       console.warn('Failed to stop DAW on cancel:', e);
     }
     setIsAnalyzing(false);
+
+    // Freeze current steps: mark running steps as error/Abgebrochen, preserve done steps
+    const frozenSteps: AgentStep[] = agentSteps.map((s) =>
+      s.status === 'running'
+        ? { ...s, status: 'error' as const, detail: s.detail ? `${s.detail} · Abgebrochen` : 'Abgebrochen' }
+        : s
+    );
+
     setAgentSteps([]);
     setMessages((prev) => [
       ...prev,
       {
         id: `msg_cancel_${Date.now()}`,
-        sender: 'system',
+        sender: 'assistant',
         text: '⏹ Vorgang vom Benutzer abgebrochen. DAW-Wiedergabe gestoppt.',
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        steps: frozenSteps.length > 0 ? frozenSteps : undefined
       }
     ]);
   };

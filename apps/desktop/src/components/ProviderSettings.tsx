@@ -17,7 +17,8 @@ import {
   EyeOff,
   Settings,
   X,
-  Download
+  Download,
+  Star
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { GeminiProvider } from '@mixing-buddy/ai-engine';
@@ -388,9 +389,18 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
       {/* Provider Selector */}
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between">
-          <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
-            Reasoning Engine & AI Backend:
-          </label>
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
+              Reasoning Engine & AI Backend:
+            </label>
+            <span
+              className="text-[11px] text-amber-400 flex items-center gap-1 font-medium bg-amber-950/40 border border-amber-500/30 px-2 py-0.5 rounded shadow-sm"
+              title="Jeder Tab-Wechsel wird automatisch als dauerhafter Standard für App-Neustarts gesichert"
+            >
+              <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+              <span>Standard: {currentMode === 'byok_gemini' ? 'Gemini BYOK' : currentMode === 'managed' ? 'Managed Cloud' : currentMode === 'byok_claude' ? 'Claude BYOK' : currentMode === 'mcp_external' ? 'MCP External' : currentMode}</span>
+            </span>
+          </div>
           <button
             type="button"
             onClick={() => {

@@ -676,6 +676,12 @@ export class AgentRunner {
       }
     } catch (err) {
       if (activeSignal?.aborted || String(err).includes('Vom Benutzer abgebrochen')) {
+        this.steps.forEach((s) => {
+          if (s.status === 'running') {
+            s.status = 'error';
+            s.detail = s.detail ? `${s.detail} · Abgebrochen` : 'Abgebrochen';
+          }
+        });
         return {
           assistantText: '⏹ Vorgang vom Benutzer abgebrochen.',
           steps: this.steps

@@ -33,9 +33,26 @@ import { Sliders, Headphones, Inbox, Sparkles, Database, Target, BarChart2, Star
 export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<MetrologyTelemetryFrame | null>(null);
   const [isAudioConnected, setIsAudioConnected] = useState<boolean>(false);
-  const [providerMode, setProviderMode] = useState<ProviderMode>('managed');
+  const [providerMode, setProviderMode] = useState<ProviderMode>(() => {
+    try {
+      const saved = localStorage.getItem('omb_preferred_provider') as ProviderMode;
+      if (
+        saved &&
+        ['managed', 'byok_claude', 'byok_gemini', 'byok_openai', 'ollama', 'mcp_external'].includes(saved)
+      ) {
+        return saved;
+      }
+    } catch {}
+    return 'byok_gemini';
+  });
   const [activeDaw, setActiveDaw] = useState<string>('none');
-  const [modelName, setModelName] = useState<string>('gemini-3.8-flash');
+  const [modelName, setModelName] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem('omb_preferred_model');
+      if (saved && saved.trim()) return saved.trim();
+    } catch {}
+    return 'gemini-2.5-flash';
+  });
   const [apiKey, setApiKey] = useState<string>(() => {
     try {
       return localStorage.getItem('mixing_buddy_gemini_api_key') || '';
@@ -43,6 +60,20 @@ export const App: React.FC = () => {
       return '';
     }
   });
+
+  const handleSelectProviderMode = (mode: ProviderMode) => {
+    setProviderMode(mode);
+    try {
+      localStorage.setItem('omb_preferred_provider', mode);
+    } catch {}
+  };
+
+  const handleModelNameChange = (name: string) => {
+    setModelName(name);
+    try {
+      localStorage.setItem('omb_preferred_model', name);
+    } catch {}
+  };
   const [proposals, setProposals] = useState<MixActionProposal[]>([]);
   const [chatLog, setChatLog] = useState<string | null>(null);
   const [mcpClientsCount, setMcpClientsCount] = useState<number>(0);
@@ -1157,13 +1188,13 @@ export const App: React.FC = () => {
             </div>
             <ProviderSettings
               currentMode={providerMode}
-              onSelectMode={setProviderMode}
+              onSelectMode={handleSelectProviderMode}
               activeDaw={activeDaw}
               isAudioConnected={isAudioConnected}
               isLicenseActive={true}
               mcpClientsCount={mcpClientsCount}
               modelName={modelName}
-              onModelNameChange={setModelName}
+              onModelNameChange={handleModelNameChange}
               apiKey={apiKey}
               onApiKeyChange={handleApiKeyChange}
             />
