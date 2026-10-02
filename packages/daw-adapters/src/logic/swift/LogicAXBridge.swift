@@ -261,14 +261,65 @@ func findElementDFS(
     return nil
 }
 
+func getPlayheadX(appElement: AXUIElement) -> CGFloat? {
+    for w in getLogicWindows(appElement) {
+        if let el = findElementDFS(root: w, roleFilter: nil, maxDepth: 10, predicate: { (getAXString($0, kAXDescriptionAttribute as String) ?? "") == "Symbol der Abspielposition" }) {
+            var pVal: AnyObject?; AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pVal)
+            if let v = pVal { var pt = CGPoint.zero; AXValueGetValue(v as! AXValue, .cgPoint, &pt); return pt.x }
+        }
+    }
+    return nil
+}
+
+func getCycleElement(appElement: AXUIElement) -> (AXUIElement, CGPoint, CGSize)? {
+    for w in getLogicWindows(appElement) {
+        if let el = findElementDFS(root: w, roleFilter: nil, maxDepth: 10, predicate: { (getAXString($0, kAXDescriptionAttribute as String) ?? "") == "Cycle-Bereich" }) {
+            var pVal: AnyObject?; var sVal: AnyObject?
+            AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pVal)
+            AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sVal)
+            if let pv = pVal, let sv = sVal {
+                var pt = CGPoint.zero; var sz = CGSize.zero
+                AXValueGetValue(pv as! AXValue, .cgPoint, &pt); AXValueGetValue(sv as! AXValue, .cgSize, &sz)
+                return (el, pt, sz)
+            }
+        }
+    }
+    return nil
+}
+
 func ensureCycleOff(appElement: AXUIElement) -> Bool {
+    var menuBarVal: AnyObject?
+    AXUIElementCopyAttributeValue(appElement, kAXMenuBarAttribute as CFString, &menuBarVal)
+    if let mb = menuBarVal as! AXUIElement? {
+        if let miPlay = findElementDFS(root: mb, roleFilter: "AXMenuItem", maxDepth: 6, predicate: {
+            let t = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased()
+            return t.contains("vom cycle-start wiedergeben") || t.contains("play from cycle start")
+        }) {
+            var mark: AnyObject?
+            AXUIElementCopyAttributeValue(miPlay, "AXMenuItemMarkChar" as CFString, &mark)
+            if let m = mark as? String, !m.isEmpty { _ = AXUIElementPerformAction(miPlay, kAXPressAction as CFString) }
+        }
+        if let mi = findElementDFS(root: mb, roleFilter: "AXMenuItem", maxDepth: 6, predicate: {
+            let t = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased()
+            return t == "cycle" || t.starts(with: "cycle") || t.contains("cycle-modus") || t.contains("cycle mode")
+        }) {
+            var markVal: AnyObject?; var val: AnyObject?
+            AXUIElementCopyAttributeValue(mi, "AXMenuItemMarkChar" as CFString, &markVal)
+            AXUIElementCopyAttributeValue(mi, kAXValueAttribute as CFString, &val)
+            let isChecked = (markVal != nil && !((markVal as? String) ?? "").isEmpty) || (val as? Int == 1) || (val as? Bool == true)
+            if isChecked {
+                let err = AXUIElementPerformAction(mi, kAXPressAction as CFString)
+                return err == .success || err == .cannotComplete
+            } else { return true }
+        }
+    }
     for w in getLogicWindows(appElement) {
         if let el = findElementDFS(root: w, roleFilter: nil, maxDepth: 12, predicate: { e in
             let r = getAXString(e, kAXRoleAttribute as String) ?? ""
-            guard r == "AXCheckBox" || r == "AXButton" || r == "AXRadioButton" else { return false }
             let d = (getAXString(e, kAXDescriptionAttribute as String) ?? "").lowercased()
             let t = (getAXString(e, kAXTitleAttribute as String) ?? "").lowercased()
-            return d.contains("cycle") || t.contains("cycle")
+            return (r == "AXLayoutItem" && d == "cycle-bereich") ||
+                   ((r == "AXCheckBox" || r == "AXButton" || r == "AXRadioButton") && (d.contains("cycle") || t.contains("cycle")))
         }) {
             var val: AnyObject?
             AXUIElementCopyAttributeValue(el, kAXValueAttribute as CFString, &val)
@@ -278,23 +329,39 @@ func ensureCycleOff(appElement: AXUIElement) -> Bool {
             } else if val != nil { return true }
         }
     }
+    return true
+}
+
+func performTransportLocate(appElement: AXUIElement, barNum: Int) -> (dialogOpened: Bool, windowFound: Bool, pid: pid_t) {
+    if let app = getLogicRunningApp() { app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps]) }
+    AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    usleep(50_000)
+    var dialogOpened = false
     var menuBarVal: AnyObject?
     AXUIElementCopyAttributeValue(appElement, kAXMenuBarAttribute as CFString, &menuBarVal)
-    if let mb = menuBarVal as! AXUIElement?, let mi = findElementDFS(root: mb, roleFilter: "AXMenuItem", maxDepth: 6, predicate: { e in
-        let t = (getAXString(e, kAXTitleAttribute as String) ?? "").lowercased()
-        return t == "cycle" || t.starts(with: "cycle") || t.contains("cycle-modus") || t.contains("cycle mode")
+    if let mb = menuBarVal as! AXUIElement?, let mi = findElementDFS(root: mb, roleFilter: "AXMenuItem", maxDepth: 6, predicate: {
+        let t = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased()
+        return t == "position …" || t == "position..." || (t.contains("position") && (t.contains("…") || t.contains("...")))
     }) {
-        var markVal: AnyObject?; var val: AnyObject?
-        AXUIElementCopyAttributeValue(mi, "AXMenuItemMarkChar" as CFString, &markVal)
-        AXUIElementCopyAttributeValue(mi, kAXValueAttribute as CFString, &val)
-        let isChecked = (markVal != nil && !((markVal as? String) ?? "").isEmpty) || (val as? Int == 1) || (val as? Bool == true)
-        if isChecked {
-            let err = AXUIElementPerformAction(mi, kAXPressAction as CFString)
-            return err == .success || err == .cannotComplete
-        } else { return true }
+        let err = AXUIElementPerformAction(mi, kAXPressAction as CFString)
+        dialogOpened = (err == .success || err == .cannotComplete)
     }
-    return false
+    let logicPid = getLogicPID() ?? 0
+    if !dialogOpened && logicPid > 0 { postKeyToLogic(pid: logicPid, keyCode: 75, delayUs: 40_000) }
+    var foundWindow = false
+    for _ in 0..<12 {
+        usleep(30_000)
+        if getLogicWindows(appElement).contains(where: { (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased().contains("position") }) {
+            foundWindow = true; break
+        }
+    }
+    if logicPid > 0 {
+        sendDigitsToLogic(pid: logicPid, text: "\(barNum)"); usleep(30_000)
+        postKeyToLogic(pid: logicPid, keyCode: 36, delayUs: 60_000)
+    }
+    return (dialogOpened, foundWindow, logicPid)
 }
+
 
 func findTargetElement(in window: AXUIElement, criteria: SearchCriteria) -> AXUIElement? {
     if let targetId = criteria.identifier, !targetId.isEmpty {
@@ -1558,11 +1625,7 @@ case "set-param":
 
     let updatedVal = getAXDouble(element, kAXValueAttribute as String) ?? targetValue
     let valDesc = getAXString(element, kAXValueDescriptionAttribute as String) ?? ""
-    printJSON([
-        "success": setOk,
-        "newValue": updatedVal,
-        "valueDescription": valDesc
-    ])
+    printJSON(["success": setOk, "newValue": updatedVal, "valueDescription": valDesc])
 
 case "toggle-bypass":
     let winQuery = getArg("--window") ?? ""
@@ -1600,10 +1663,7 @@ case "toggle-bypass":
 
     let actErr = AXUIElementPerformAction(element, kAXPressAction as CFString)
     let updatedVal = getAXDouble(element, kAXValueAttribute as String) ?? 0.0
-    printJSON([
-        "success": actErr == .success,
-        "newValue": updatedVal
-    ])
+    printJSON(["success": actErr == .success, "newValue": updatedVal])
 
 case "scan-tracks":
     let windows = getLogicWindows(appElement)
@@ -1846,15 +1906,7 @@ case "profile-plugin":
         tags.append("UTILITY")
     }
 
-    printJSON([
-        "success": true,
-        "schemaVersion": "1.0",
-        "pluginName": pluginName,
-        "windowTitle": windowTitle,
-        "category": category,
-        "tags": tags,
-        "parameters": parameters
-    ])
+    printJSON(["success": true, "schemaVersion": "1.0", "pluginName": pluginName, "windowTitle": windowTitle, "category": category, "tags": tags, "parameters": parameters])
 
 // ─── NEW COMMANDS ──────────────────────────────────────────────────────────────
 
@@ -2199,8 +2251,7 @@ case "set-folder-expanded":
     }
 
     guard found else {
-        printJSON(["success": false,
-                   "error": "Track Stack '\(trackName)' not found in Logic Pro arrangement. Ensure the track is visible in the main window."])
+        printJSON(["success": false, "error": "Track Stack '\(trackName)' not found in Logic Pro arrangement. Ensure the track is visible in the main window."])
         exit(0)
     }
 
@@ -2273,8 +2324,7 @@ case "select-track":
     }
 
     guard selected else {
-        printJSON(["success": false,
-                   "error": "Track '\(trackName)' not found in Logic Pro arrangement. Ensure Logic Pro's main window is open and the track is visible."])
+        printJSON(["success": false, "error": "Track '\(trackName)' not found in Logic Pro arrangement. Ensure Logic Pro's main window is open and the track is visible."])
         exit(0)
     }
 
@@ -2391,13 +2441,7 @@ case "load-plugin":
 
     // Wait up to 400ms for menu to close and plugin to instantiate
     usleep(400_000)
-
-    printJSON([
-        "success": true,
-        "track": strip.trackName,
-        "slot": slotNum,
-        "plugin": pluginPath
-    ])
+    printJSON(["success": true, "track": strip.trackName, "slot": slotNum, "plugin": pluginPath])
 
 case "list-insert-menu":
     guard let trackName = getArg("--track"), !trackName.isEmpty else {
@@ -2539,92 +2583,69 @@ case "transport-stop":
 
     printJSON(["success": true, "action": "stop"])
 
-case "cycle-off":
+case "cycle-off", "ensure-cycle-off":
     let success = ensureCycleOff(appElement: appElement)
     printJSON(["success": success, "action": "cycle-off"])
+
+case "set-cycle-region":
+    guard let startStr = getArg("--start"), let startNum = Int(startStr), startNum >= 1 else {
+        printJSON(["success": false, "error": "Missing or invalid --start argument"])
+        exit(0)
+    }
+    let endNum = Int(getArg("--end") ?? "") ?? (startNum + 4)
+    if let app = getLogicRunningApp() { app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps]) }
+    AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    usleep(50_000)
+
+    var endX: CGFloat? = nil
+    if endNum > startNum {
+        _ = performTransportLocate(appElement: appElement, barNum: endNum)
+        usleep(50_000)
+        endX = getPlayheadX(appElement: appElement)
+    }
+    _ = performTransportLocate(appElement: appElement, barNum: startNum)
+    usleep(50_000)
+    let startX = getPlayheadX(appElement: appElement)
+
+    var cycleMoved = false
+    if let (cycleEl, cyclePt, cycleSz) = getCycleElement(appElement: appElement), let sX = startX {
+        var newPt = CGPoint(x: sX, y: cyclePt.y)
+        if let axVal = AXValueCreate(.cgPoint, &newPt) {
+            _ = AXUIElementSetAttributeValue(cycleEl, kAXPositionAttribute as CFString, axVal)
+            cycleMoved = true
+        }
+        usleep(40_000)
+        if let eX = endX, eX > sX {
+            if let (_, curPt, curSz) = getCycleElement(appElement: appElement) {
+                let curRight = curPt.x + curSz.width
+                if abs(curRight - eX) > 4 {
+                    let startDrag = CGPoint(x: curRight - 2, y: curPt.y + curSz.height / 2)
+                    let endDrag = CGPoint(x: eX, y: curPt.y + curSz.height / 2)
+                    let src = CGEventSource(stateID: .hidSystemState)
+                    let md = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: startDrag, mouseButton: .left)
+                    let mDrag = CGEvent(mouseEventSource: src, mouseType: .leftMouseDragged, mouseCursorPosition: endDrag, mouseButton: .left)
+                    let mu = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: endDrag, mouseButton: .left)
+                    md?.post(tap: .cghidEventTap); usleep(30_000)
+                    mDrag?.post(tap: .cghidEventTap); usleep(30_000)
+                    mu?.post(tap: .cghidEventTap); usleep(50_000)
+                    var resetPt = CGPoint(x: sX, y: cyclePt.y)
+                    if let finalAx = AXValueCreate(.cgPoint, &resetPt) {
+                        _ = AXUIElementSetAttributeValue(cycleEl, kAXPositionAttribute as CFString, finalAx)
+                    }
+                }
+            }
+        }
+    }
+    printJSON(["success": true, "action": "set-cycle-region", "start": startNum, "end": endNum, "cycleMoved": cycleMoved])
 
 case "transport-locate":
     guard let barStr = getArg("--bar"), let barNum = Int(barStr), barNum >= 1 else {
         printJSON(["success": false, "error": "Missing or invalid --bar argument (must be >= 1)"])
         exit(0)
     }
-
-    // 1. Activate Logic Pro so window/menu commands reach it
-    if let app = getLogicRunningApp() {
-        app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
-    }
-    AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-    usleep(100_000)
-
-    // 2. ZWINGEND Cycle-Modus ausschalten, BEVOR der Dialog "Zu Position" geöffnet wird!
     _ = ensureCycleOff(appElement: appElement)
-    usleep(40_000)
-
-    var dialogOpened = false
-
-    // 3. Open "Go to Position..." (Zu Position / Position …)
-    func triggerPositionMenu(_ el: AXUIElement) -> Bool {
-        var titleVal: AnyObject?
-        AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &titleVal)
-        let title = ((titleVal as? String) ?? "").lowercased()
-        if title == "position …" || title == "position..." || (title.contains("position") && (title.contains("…") || title.contains("..."))) {
-            let err = AXUIElementPerformAction(el, kAXPressAction as CFString)
-            return err == .success || err == .cannotComplete
-        }
-        var childrenVal: AnyObject?
-        AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &childrenVal)
-        guard let children = childrenVal as? [AXUIElement] else { return false }
-        for c in children {
-            if triggerPositionMenu(c) { return true }
-        }
-        return false
-    }
-
-    var menuBarVal: AnyObject?
-    AXUIElementCopyAttributeValue(appElement, kAXMenuBarAttribute as CFString, &menuBarVal)
-    if let menuBar = menuBarVal as! AXUIElement? {
-        dialogOpened = triggerPositionMenu(menuBar)
-    }
-
-    let logicPid = getLogicPID() ?? 0
-    if !dialogOpened && logicPid > 0 {
-        postKeyToLogic(pid: logicPid, keyCode: 75, delayUs: 50_000)
-    }
-
-    // Wait up to 500ms for "Position" modal window to become active
-    var foundWindow = false
-    for _ in 0..<15 {
-        usleep(35_000)
-        let windows = getLogicWindows(appElement)
-        if windows.contains(where: {
-            let t = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased()
-            return t.contains("position")
-        }) {
-            foundWindow = true
-            break
-        }
-    }
-
-    // 4. Type target bar digits sequentially (e.g. '2', '5')
-    if logicPid > 0 {
-        let barDigits = "\(barNum)"
-        sendDigitsToLogic(pid: logicPid, text: barDigits)
-        usleep(40_000)
-
-        // 5. Confirm with Return (Keycode 36)
-        postKeyToLogic(pid: logicPid, keyCode: 36, delayUs: 80_000)
-    }
-
-    printJSON([
-        "success": true,
-        "action": "locate",
-        "bar": barNum,
-        "dialogOpened": dialogOpened,
-        "windowFound": foundWindow,
-        "pid": logicPid,
-        "isTrusted": AXIsProcessTrusted(),
-        "menuBarExists": (menuBarVal != nil)
-    ])
+    let res = performTransportLocate(appElement: appElement, barNum: barNum)
+    printJSON(["success": true, "action": "locate", "bar": barNum, "dialogOpened": res.dialogOpened, "windowFound": res.windowFound, "pid": res.pid, "isTrusted": AXIsProcessTrusted()])
 
 // MARK: - SPRINT 9: Bus Sends, Routing & Send Level Control
 
@@ -2716,12 +2737,7 @@ case "set-send-bus":
     }
 
     usleep(300_000)
-    printJSON([
-        "success": true,
-        "track": strip.trackName,
-        "slot": slotNum,
-        "bus": busNum
-    ])
+    printJSON(["success": true, "track": strip.trackName, "slot": slotNum, "bus": busNum])
 
 case "set-send-level":
     guard let trackName = getArg("--track"), !trackName.isEmpty else {
@@ -2757,12 +2773,7 @@ case "set-send-level":
 
     // 3. Drag knob to target dB
     let res = dragSendKnobToDb(slider: slider, targetDb: targetDb)
-    printJSON([
-        "success": res.success,
-        "track": strip.trackName,
-        "slot": slotNum,
-        "db": res.finalDb
-    ])
+    printJSON(["success": res.success, "track": strip.trackName, "slot": slotNum, "db": res.finalDb])
 
 // MARK: - SPRINT 10: Sidechain Routing in Plugin Header
 
@@ -2789,13 +2800,8 @@ case "get-sidechain":
         ?? getAXString(scBtn, kAXTitleAttribute as String)
         ?? ""
 
-    printJSON([
-        "success": true,
-        "track": target.stripTrackName,
-        "slot": slotNum,
-        "pluginName": target.pluginName,
-        "sidechain": val
-    ])
+    printJSON(["success": true, "track": target.stripTrackName, "slot": slotNum, "pluginName": target.pluginName, "sidechain": val])
+
 
 case "set-sidechain":
     guard let trackName = getArg("--track"), !trackName.isEmpty else {

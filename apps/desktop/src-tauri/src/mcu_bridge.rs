@@ -391,11 +391,12 @@ impl McuBridge {
         self.send_note_pulse(MCU_NOTE_CYCLE, 50)
     }
 
-    /// Deaktiviert den Cycle-Modus via Note 86 ohne blockierende Abfrage
+    /// Deaktiviert den Cycle-Modus im In-Memory Status.
+    /// Kein blinder Note-86-Toggle (da Note 86 ein Toggle ist und einen inaktiven Cycle ungewollt einschalten würde).
+    /// Die deterministische Deaktivierung erfolgt zwingend über den verifizierten Status-Pfad in Swift ('LogicAXBridge.swift').
     pub fn ensure_cycle_off(&self) -> Result<(), String> {
-        self.send_note_pulse(MCU_NOTE_CYCLE, 50)?;
         self.is_cycle_active.store(false, Ordering::SeqCst);
-        println!("🔁 [MCU Bridge] ensure_cycle_off: Note 86 pulse sent.");
+        println!("🔁 [MCU Bridge] ensure_cycle_off: Blind Note 86 toggle suppressed. Managed deterministically via Swift.");
         Ok(())
     }
 

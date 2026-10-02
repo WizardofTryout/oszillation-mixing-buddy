@@ -1921,26 +1921,50 @@ async fn audition_region(
 
     #[cfg(target_os = "macos")]
     {
-        // 1. Zwingend Cycle-Modus ausschalten vor Audition
+        let bridge_path = resolve_bridge_path();
+
+        // 1. Swift: Setze Cycle-Bereich auf start..end bzw. stelle sicher, dass Cycle aus ist
+        if let Some(end) = end_bar {
+            let cycle_args = vec![
+                "set-cycle-region".to_string(),
+                "--start".to_string(),
+                start_bar.to_string(),
+                "--end".to_string(),
+                end.to_string(),
+            ];
+            let _ = execute_logic_ax_bridge(&bridge_path, &cycle_args);
+        } else {
+            let cycle_args = vec!["ensure-cycle-off".to_string()];
+            let _ = execute_logic_ax_bridge(&bridge_path, &cycle_args);
+        }
         let _ = state.ipc_server.mcu_bridge.ensure_cycle_off();
 
         // 2. Exaktes Bar-Locate via native Swift Bridge (mit MCU Fallback)
-        let bridge_path = resolve_bridge_path();
         let args = vec!["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()];
         if let Err(e) = execute_logic_ax_bridge(&bridge_path, &args) {
             println!("⚠️ [audition_region] Bridge locate failed ({}), falling back to MCU locate", e);
             let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
         }
-        std::thread::sleep(std::time::Duration::from_millis(300));
 
-        // 3. Play via CoreMIDI MCU (Note 94, 50ms hold)
-        let _ = state.ipc_server.mcu_bridge.send_note_pulse(94, 50);
+        // 3. Warte 200 ms
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        // 4. Audition duration
-        std::thread::sleep(std::time::Duration::from_millis(dur_ms));
+        // 4. Starte Playback via Swift Bridge ('transport-play')
+        let play_args = vec!["transport-play".to_string()];
+        if let Err(e) = execute_logic_ax_bridge(&bridge_path, &play_args) {
+            println!("⚠️ [audition_region] Bridge play failed ({}), falling back to MCU note pulse", e);
+            let _ = state.ipc_server.mcu_bridge.send_note_pulse(94, 50);
+        }
 
-        // 5. Stop via CoreMIDI MCU (Note 93, 50ms hold)
-        let _ = state.ipc_server.mcu_bridge.send_note_pulse(93, 50);
+        // 5. Warte die berechnete Dauer
+        tokio::time::sleep(std::time::Duration::from_millis(dur_ms)).await;
+
+        // 6. Stoppe Playback via Swift Bridge ('transport-stop')
+        let stop_args = vec!["transport-stop".to_string()];
+        if let Err(e) = execute_logic_ax_bridge(&bridge_path, &stop_args) {
+            println!("⚠️ [audition_region] Bridge stop failed ({}), falling back to MCU note pulse", e);
+            let _ = state.ipc_server.mcu_bridge.send_note_pulse(93, 50);
+        }
         Ok(serde_json::json!({
             "success": true,
             "startBar": start_bar,
