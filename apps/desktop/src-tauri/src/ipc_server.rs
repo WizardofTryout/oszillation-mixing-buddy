@@ -76,7 +76,14 @@ impl IPCServer {
 
             rt.block_on(async {
                 let addr = SocketAddr::from(([127, 0, 0, 1], port));
-                let listener = match TcpListener::bind(addr).await {
+                let listener = match (|| -> std::io::Result<TcpListener> {
+                    let socket = tokio::net::TcpSocket::new_v4()?;
+                    socket.set_reuseaddr(true)?;
+                    #[cfg(unix)]
+                    socket.set_reuseport(true)?;
+                    socket.bind(addr)?;
+                    socket.listen(128)
+                })() {
                     Ok(l) => {
                         println!("📡 IPC Server listening on ws://{} and http://{}/api", addr, addr);
                         l
@@ -657,9 +664,21 @@ async fn handle_connection(
                 let body = {
                     #[cfg(target_os = "macos")]
                     {
-                        match mcu_bridge.send_transport_locate(bar) {
-                            Ok(()) => serde_json::json!({"success": true, "action": "locate", "bar": bar, "via": "mcu"}).to_string(),
-                            Err(e) => serde_json::json!({"success": false, "error": e}).to_string(),
+                        // 1. Zwingend Cycle-Modus ausschalten
+                        let _ = mcu_bridge.ensure_cycle_off();
+
+                        // 2. Exaktes Bar-Locate via native Swift Bridge
+                        let bridge_path = crate::resolve_bridge_path();
+                        let args = vec!["transport-locate".to_string(), "--bar".to_string(), bar.to_string()];
+                        match crate::execute_logic_ax_bridge(&bridge_path, &args) {
+                            Ok(res) => res.to_string(),
+                            Err(e) => {
+                                println!("⚠️ [/api/transport/locate] Bridge locate failed ({}), falling back to MCU", e);
+                                match mcu_bridge.send_transport_locate(bar) {
+                                    Ok(()) => serde_json::json!({"success": true, "action": "locate", "bar": bar, "via": "mcu"}).to_string(),
+                                    Err(e2) => serde_json::json!({"success": false, "error": format!("{}: {}", e, e2)}).to_string(),
+                                }
+                            }
                         }
                     }
                     #[cfg(not(target_os = "macos"))]

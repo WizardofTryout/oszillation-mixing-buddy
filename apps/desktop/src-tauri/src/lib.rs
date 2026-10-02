@@ -1877,7 +1877,19 @@ async fn daw_locate_bar(bar: u32, state: State<'_, AppState>) -> Result<(), Stri
     }
     #[cfg(target_os = "macos")]
     {
-        state.ipc_server.mcu_bridge.send_transport_locate(bar)
+        // 1. Zwingend Cycle-Modus ausschalten
+        let _ = state.ipc_server.mcu_bridge.ensure_cycle_off();
+
+        // 2. Exaktes Bar-Locate via native Swift Bridge (Gehe zu Position ...)
+        let bridge_path = resolve_bridge_path();
+        let args = vec!["transport-locate".to_string(), "--bar".to_string(), bar.to_string()];
+        match execute_logic_ax_bridge(&bridge_path, &args) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                println!("⚠️ [daw_locate_bar] Bridge locate failed ({}), falling back to MCU locate", e);
+                state.ipc_server.mcu_bridge.send_transport_locate(bar)
+            }
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -1899,14 +1911,25 @@ async fn audition_region(
 
     #[cfg(target_os = "macos")]
     {
-        // 1. Locate via CoreMIDI MCU
-        let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        // 2. Play via CoreMIDI MCU (Note 94, 50ms hold)
+        // 1. Zwingend Cycle-Modus ausschalten vor Audition
+        let _ = state.ipc_server.mcu_bridge.ensure_cycle_off();
+
+        // 2. Exaktes Bar-Locate via native Swift Bridge (mit MCU Fallback)
+        let bridge_path = resolve_bridge_path();
+        let args = vec!["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()];
+        if let Err(e) = execute_logic_ax_bridge(&bridge_path, &args) {
+            println!("⚠️ [audition_region] Bridge locate failed ({}), falling back to MCU locate", e);
+            let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
+
+        // 3. Play via CoreMIDI MCU (Note 94, 50ms hold)
         let _ = state.ipc_server.mcu_bridge.send_note_pulse(94, 50);
-        // 3. Audition duration
+
+        // 4. Audition duration
         std::thread::sleep(std::time::Duration::from_millis(dur_ms));
-        // 4. Stop via CoreMIDI MCU (Note 93, 50ms hold)
+
+        // 5. Stop via CoreMIDI MCU (Note 93, 50ms hold)
         let _ = state.ipc_server.mcu_bridge.send_note_pulse(93, 50);
         Ok(serde_json::json!({ "success": true, "bar": start_bar, "durationSeconds": duration_seconds }))
     }
@@ -2137,9 +2160,15 @@ async fn record_fader_ride(
         };
         let _ = state.ipc_server.mcu_bridge.set_automation_mode(auto_mode);
 
-        // 3. Springt auf start_bar (Locate)
-        let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        // 3. Deaktiviere Cycle und springe auf start_bar (Exact Locate via Bridge)
+        let _ = state.ipc_server.mcu_bridge.ensure_cycle_off();
+        let bridge_path = resolve_bridge_path();
+        let args = vec!["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()];
+        if let Err(e) = execute_logic_ax_bridge(&bridge_path, &args) {
+            println!("⚠️ [record_fader_ride] Bridge locate failed ({}), falling back to MCU locate", e);
+            let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
         // 4. Setzt Fader-Touch aktiv (Note 104 + index, Velocity 127)
         let _ = state.ipc_server.mcu_bridge.set_fader_touch(ch_idx, true);

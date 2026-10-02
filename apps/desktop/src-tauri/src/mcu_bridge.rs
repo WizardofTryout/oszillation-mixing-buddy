@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 
 /// SysEx Header for Mackie Control Universal (MCU)
 /// F0 00 00 66 14 12 <offset> <ASCII text...> F7
@@ -195,6 +198,7 @@ impl McuLcdState {
 pub struct McuBridge {
     lcd_state: Arc<Mutex<McuLcdState>>,
     discovered_tracks: Arc<Mutex<Vec<serde_json::Value>>>,
+    pub is_cycle_active: Arc<AtomicBool>,
     /// VirtualSource: Mixing Buddy → Logic Pro (outgoing MIDI commands)
     #[cfg(target_os = "macos")]
     virtual_source: Arc<Mutex<Option<coremidi::VirtualSource>>>,
@@ -212,6 +216,7 @@ impl McuBridge {
         Self {
             lcd_state: Arc::new(Mutex::new(McuLcdState::default())),
             discovered_tracks: Arc::new(Mutex::new(Vec::new())),
+            is_cycle_active: Arc::new(AtomicBool::new(false)),
             #[cfg(target_os = "macos")]
             virtual_source: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "macos")]
@@ -240,6 +245,7 @@ impl McuBridge {
             // --- Virtual Destination: Logic Pro → Mixing Buddy (MCU feedback) ------
             let lcd_ref = Arc::clone(&self.lcd_state);
             let tracks_ref = Arc::clone(&self.discovered_tracks);
+            let cycle_ref = Arc::clone(&self.is_cycle_active);
 
             let virtual_dst = client
                 .virtual_destination("Oszillation Mixing Buddy In", move |packet_list| {
@@ -250,17 +256,35 @@ impl McuBridge {
 
                     for packet in packet_list.iter() {
                         let data = packet.data();
-                        if lcd.update_from_sysex(data) {
-                            let track_names = lcd.extract_track_names();
-                            if !track_names.is_empty() {
-                                println!(
-                                    "🎛️ [MCU Bridge] Live tracks from Logic LCD: {:?}",
-                                    track_names
-                                );
-                                let updated = build_track_list(&track_names);
-                                if let Ok(mut tr) = tracks_ref.lock() {
-                                    *tr = updated;
+                        let mut i = 0;
+                        while i < data.len() {
+                            let status = data[i];
+                            if (status == 0x90 || status == 0x80) && i + 2 < data.len() {
+                                let note = data[i + 1];
+                                let vel = data[i + 2];
+                                if note == MCU_NOTE_CYCLE {
+                                    let active = status == 0x90 && vel > 0;
+                                    cycle_ref.store(active, Ordering::SeqCst);
+                                    println!("🔁 [MCU Bridge] Logic Cycle feedback: {}", active);
                                 }
+                                i += 3;
+                            } else if status == 0xF0 {
+                                if lcd.update_from_sysex(&data[i..]) {
+                                    let track_names = lcd.extract_track_names();
+                                    if !track_names.is_empty() {
+                                        println!(
+                                            "🎛️ [MCU Bridge] Live tracks from Logic LCD: {:?}",
+                                            track_names
+                                        );
+                                        let updated = build_track_list(&track_names);
+                                        if let Ok(mut tr) = tracks_ref.lock() {
+                                            *tr = updated;
+                                        }
+                                    }
+                                }
+                                break;
+                            } else {
+                                i += 1;
                             }
                         }
                     }
@@ -365,6 +389,15 @@ impl McuBridge {
     /// Cycle: Note 86 (0x56)
     pub fn send_transport_cycle(&self) -> Result<(), String> {
         self.send_note_pulse(MCU_NOTE_CYCLE, 50)
+    }
+
+    /// Deaktiviert den Cycle-Modus automatisch, falls er aktiv ist (oder zur Sicherheit vor Audition/Locate).
+    pub fn ensure_cycle_off(&self) -> Result<(), String> {
+        // Falls Cycle aktiv ist (oder zur Sicherheit vor Audition):
+        // Sende MCU Note 86 (Pulse 50ms), um Cycle auszuschalten
+        self.send_note_pulse(MCU_NOTE_CYCLE, 50)?;
+        self.is_cycle_active.store(false, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Cursor UP: Note 96 (0x60)

@@ -298,6 +298,26 @@ func findElementDFS(
     return nil
 }
 
+func ensureCycleOff(appElement: AXUIElement) -> Bool {
+    let allWindows = getLogicWindows(appElement)
+    for w in allWindows {
+        if let cycleBox = findElementDFS(root: w, roleFilter: "AXCheckBox", maxDepth: 12, predicate: { el in
+            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            return desc == "cycle" || desc.contains("cycle")
+        }) {
+            var val: AnyObject?
+            AXUIElementCopyAttributeValue(cycleBox, kAXValueAttribute as CFString, &val)
+            if let v = val as? Int, v == 1 {
+                let err = AXUIElementPerformAction(cycleBox, kAXPressAction as CFString)
+                return err == .success || err == .cannotComplete
+            } else {
+                return true
+            }
+        }
+    }
+    return false
+}
+
 func findTargetElement(in window: AXUIElement, criteria: SearchCriteria) -> AXUIElement? {
     // Priority 1: Exact NS-Identifier (e.g. "_NS:153", "_NS:313")
     if let targetId = criteria.identifier, !targetId.isEmpty {
@@ -2520,33 +2540,91 @@ case "transport-stop":
 
     printJSON(["success": true, "action": "stop"])
 
+case "cycle-off":
+    let success = ensureCycleOff(appElement: appElement)
+    printJSON(["success": success, "action": "cycle-off"])
+
 case "transport-locate":
     guard let barStr = getArg("--bar"), let barNum = Int(barStr), barNum >= 1 else {
         printJSON(["success": false, "error": "Missing or invalid --bar argument (must be >= 1)"])
         exit(0)
     }
 
-    // 1. Activate Logic Pro so key commands reach the main arrangement window
+    // 1. Deactivate Cycle mode to prevent looping
+    _ = ensureCycleOff(appElement: appElement)
+
+    // 2. Activate Logic Pro so window/menu commands reach it
     if let app = getLogicRunningApp() {
-        app.activate()
-        usleep(120_000) // 120ms
+        app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+    }
+    AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    usleep(120_000)
+
+    var dialogOpened = false
+
+    // 3. Open "Go to Position..." (Zu Position / Position …)
+    func triggerPositionMenu(_ el: AXUIElement) -> Bool {
+        var titleVal: AnyObject?
+        AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &titleVal)
+        let title = ((titleVal as? String) ?? "").lowercased()
+        if title == "position …" || title == "position..." || (title.contains("position") && (title.contains("…") || title.contains("..."))) {
+            let err = AXUIElementPerformAction(el, kAXPressAction as CFString)
+            return err == .success || err == .cannotComplete
+        }
+        var childrenVal: AnyObject?
+        AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &childrenVal)
+        guard let children = childrenVal as? [AXUIElement] else { return false }
+        for c in children {
+            if triggerPositionMenu(c) { return true }
+        }
+        return false
     }
 
-    if let pid = getLogicPID() {
-        // 2. Send "Go to Position..." key command: Keycode 75 (Keypad /) and Keycode 44 (/)
-        postKeyToLogic(pid: pid, keyCode: 75, delayUs: 60_000)
-        postKeyToLogic(pid: pid, keyCode: 44, delayUs: 60_000)
+    var menuBarVal: AnyObject?
+    AXUIElementCopyAttributeValue(appElement, kAXMenuBarAttribute as CFString, &menuBarVal)
+    if let menuBar = menuBarVal as! AXUIElement? {
+        dialogOpened = triggerPositionMenu(menuBar)
+    }
 
-        // 3. Type target bar digits sequentially (e.g. '2', '5')
+    let logicPid = getLogicPID() ?? 0
+    if !dialogOpened && logicPid > 0 {
+        postKeyToLogic(pid: logicPid, keyCode: 75, delayUs: 50_000)
+    }
+
+    // Wait up to 500ms for "Position" modal window to become active
+    var foundWindow = false
+    for _ in 0..<15 {
+        usleep(35_000)
+        let windows = getLogicWindows(appElement)
+        if windows.contains(where: {
+            let t = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased()
+            return t.contains("position")
+        }) {
+            foundWindow = true
+            break
+        }
+    }
+
+    // 4. Type target bar digits sequentially (e.g. '2', '5')
+    if logicPid > 0 {
         let barDigits = "\(barNum)"
-        sendDigitsToLogic(pid: pid, text: barDigits)
+        sendDigitsToLogic(pid: logicPid, text: barDigits)
         usleep(40_000)
 
-        // 4. Confirm with Return (Keycode 36)
-        postKeyToLogic(pid: pid, keyCode: 36, delayUs: 100_000)
+        // 5. Confirm with Return (Keycode 36)
+        postKeyToLogic(pid: logicPid, keyCode: 36, delayUs: 80_000)
     }
 
-    printJSON(["success": true, "action": "locate", "bar": barNum])
+    printJSON([
+        "success": true,
+        "action": "locate",
+        "bar": barNum,
+        "dialogOpened": dialogOpened,
+        "windowFound": foundWindow,
+        "pid": logicPid,
+        "isTrusted": AXIsProcessTrusted(),
+        "menuBarExists": (menuBarVal != nil)
+    ])
 
 // MARK: - SPRINT 9: Bus Sends, Routing & Send Level Control
 
