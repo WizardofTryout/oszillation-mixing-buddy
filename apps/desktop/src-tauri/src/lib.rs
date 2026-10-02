@@ -1880,6 +1880,58 @@ async fn daw_locate_bar(bar: u32, state: State<'_, AppState>) -> Result<(), Stri
 }
 
 #[tauri::command]
+async fn audition_region(
+    start_bar: u32,
+    duration_seconds: f32,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    if start_bar < 1 {
+        return Err("start_bar must be >= 1".to_string());
+    }
+    let dur_ms = (duration_seconds.max(2.0).min(30.0) * 1000.0) as u64;
+
+    #[cfg(target_os = "macos")]
+    {
+        let bridge_path = resolve_bridge_path();
+        // 1. Locate
+        if bridge_path.exists() {
+            let _ = execute_logic_ax_bridge(
+                &bridge_path,
+                &["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()],
+            );
+        } else {
+            let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        // 2. Play
+        if bridge_path.exists() {
+            if let Ok(v) = execute_logic_ax_bridge(&bridge_path, &["transport-play".to_string()]) {
+                if !v.get("success").and_then(|x| x.as_bool()).unwrap_or(false) {
+                    let _ = state.ipc_server.mcu_bridge.send_transport_play();
+                }
+            } else {
+                let _ = state.ipc_server.mcu_bridge.send_transport_play();
+            }
+        } else {
+            let _ = state.ipc_server.mcu_bridge.send_transport_play();
+        }
+        // 3. Wait
+        std::thread::sleep(std::time::Duration::from_millis(dur_ms));
+        // 4. Stop – always permitted (no Acoustic Shock Shield restriction on stop)
+        if bridge_path.exists() {
+            let _ = execute_logic_ax_bridge(&bridge_path, &["transport-stop".to_string()]);
+        }
+        let _ = state.ipc_server.mcu_bridge.send_transport_stop();
+        Ok(serde_json::json!({ "success": true, "bar": start_bar, "durationSeconds": duration_seconds }))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (start_bar, dur_ms, state);
+        Ok(serde_json::json!({ "success": true, "bar": start_bar, "durationSeconds": duration_seconds }))
+    }
+}
+
+#[tauri::command]
 async fn set_folder_expanded(track_name: String, expanded: bool) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
     {
@@ -2124,6 +2176,7 @@ pub fn run() {
             daw_play,
             daw_stop,
             daw_locate_bar,
+            audition_region,
             set_folder_expanded,
             select_track,
             load_plugin_into_slot,

@@ -14,6 +14,7 @@ export * from './providers/AnthropicProvider.js';
 export * from './providers/GeminiProvider.js';
 export * from './providers/OpenAIProvider.js';
 export * from './providers/LocalOllamaProvider.js';
+export * from './providers/AgentRunner.js';
 export * from './referenceMatch.js';
 export * from './skillSynthesis.js';
 

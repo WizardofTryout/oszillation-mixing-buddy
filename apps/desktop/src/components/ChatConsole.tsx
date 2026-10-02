@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, AlertCircle, Copy, Check, MessageSquarePlus } from 'lucide-react';
+import { Send, Bot, User, Sparkles, AlertCircle, Copy, Check, MessageSquarePlus, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import type {
   MetrologyTelemetryFrame,
   MixActionProposal,
@@ -9,7 +9,7 @@ import type {
   MixingSkill,
   MixingSkillSummary
 } from '@mixing-buddy/shared-types';
-import { GeminiProvider } from '@mixing-buddy/ai-engine';
+import { AgentRunner, type AgentStep } from '@mixing-buddy/ai-engine';
 import { invoke } from '@tauri-apps/api/core';
 import type { ProviderMode } from './ProviderSettings.js';
 
@@ -68,13 +68,14 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
     {
       id: 'msg_welcome',
       sender: 'assistant',
-      text: `Hallo! Ich bin dein AI Co-Producer. Gib mir Anweisungen (z. B. "Hebe die Höhen an", "Räume das Low-End auf" oder "Erstelle eine neue Spur"), und ich analysiere das Live-Signal und generiere ActionCards für deine DAW.`,
+      text: `Hallo! Ich bin dein AI Co-Producer. Gib mir Anweisungen (z. B. "Höre dir Takt 25 an und räume das Low-End auf"), und ich analysiere das Live-Signal, höre in die DAW rein und generiere ActionCards für dich.`,
       timestamp: Date.now()
     }
   ]);
   const [input, setInput] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [agentSteps, setAgentSteps] = useState<AgentStep[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const handleCopyMessage = (id: string, text: string) => {
@@ -170,17 +171,31 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           }
         })();
 
-      // 1. If BYOK Gemini is selected: Send the prompt directly to Gemini!
+      // 1. If BYOK Gemini is selected: Run the full agentic ReAct loop!
       if (providerMode === 'byok_gemini') {
         if (effectiveApiKey.length > 5) {
           const keyList = effectiveApiKey.split(/[\n,;]+/).map((k) => k.trim()).filter(Boolean);
-          const gemini = new GeminiProvider({
+          // Reset step badges
+          setAgentSteps([]);
+
+          const runner = new AgentRunner({
             apiKey: keyList[0] || effectiveApiKey,
-            apiKeys: keyList,
-            modelName: modelName.trim() || 'gemini-3.8-flash'
+            modelName: modelName.trim() || 'gemini-2.5-flash',
+            invokeTauri: (command, args) => invoke(command, args),
+            onStep: (step) => {
+              setAgentSteps((prev) => {
+                const idx = prev.findIndex((s) => s.id === step.id);
+                if (idx >= 0) {
+                  const next = [...prev];
+                  next[idx] = step;
+                  return next;
+                }
+                return [...prev, step];
+              });
+            }
           });
 
-          const res = await gemini.generateMixProposal(query, telemetry, tracks, {
+          const res = await runner.run(query, telemetry, tracks, {
             dawName: dawLabel,
             userPrompt: query,
             targetScope,
@@ -201,6 +216,8 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           if (res.proposal) {
             onProposalGenerated(res.proposal);
           }
+          // Keep final steps visible for 4 seconds, then clear
+          setTimeout(() => setAgentSteps([]), 4000);
           setIsAnalyzing(false);
           return;
         } else {
@@ -533,12 +550,42 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           </div>
         ))}
 
+        {/* Agent Step Badges */}
+        {agentSteps.length > 0 && (
+          <div className="flex flex-col gap-1 py-1 px-1">
+            {agentSteps.map((step) => (
+              <div
+                key={step.id}
+                className={`flex items-center gap-2 text-[11px] rounded-md px-2 py-1 transition-all ${
+                  step.status === 'running'
+                    ? 'bg-blue-950/50 border border-blue-500/30 text-blue-200'
+                    : step.status === 'done'
+                    ? 'bg-emerald-950/40 border border-emerald-500/30 text-emerald-300'
+                    : 'bg-red-950/40 border border-red-500/30 text-red-300'
+                }`}
+              >
+                {step.status === 'running' ? (
+                  <Loader2 className="w-3 h-3 animate-spin shrink-0 text-blue-400" />
+                ) : step.status === 'done' ? (
+                  <CheckCircle2 className="w-3 h-3 shrink-0 text-emerald-400" />
+                ) : (
+                  <XCircle className="w-3 h-3 shrink-0 text-red-400" />
+                )}
+                <span className="font-medium">{step.icon} {step.label}</span>
+                {step.detail && (
+                  <span className="text-[10px] opacity-60 ml-auto shrink-0">{step.detail}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
         {isAnalyzing && (
           <div className="flex items-center gap-2 text-slate-400 italic text-[11px]">
             <Sparkles className="w-3 h-3 text-blue-400 animate-spin" />
             <span>
               {providerMode === 'byok_gemini'
-                ? `Google Gemini (${modelName}) analysiert Telemetrie und generiert Vorschlag...`
+                ? `Agentischer Loop aktiv – Agent analysiert Spuren und hört in Logic Pro rein...`
                 : `AI Co-Producer analysiert Telemetriedaten für ${dawLabel}...`}
             </span>
           </div>
