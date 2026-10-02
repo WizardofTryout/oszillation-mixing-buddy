@@ -21,30 +21,35 @@ pub struct AppState {
     pub ipc_server: IPCServer,
 }
 
-/// Resolves the path to the compiled native Swift AXUIElement sidecar (`logic-ax-bridge`)
-pub fn resolve_bridge_path() -> PathBuf {
+/// Canonical path resolution for native Swift AXUIElement sidecar (`logic-ax-bridge`)
+pub fn resolve_bridge_binary() -> std::path::PathBuf {
+    // 1. App-Bundle Resources (Produktionsbetrieb):
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            // macOS bundle layout: Contents/MacOS/binary -> Contents/Resources/
-            for rel in [
-                "../Resources/logic-ax-bridge",
-                "../Resources/_up_/_up_/_up_/packages/daw-adapters/bin/logic-ax-bridge",
-            ] {
-                let candidate = parent.join(rel);
-                if candidate.exists() {
-                    return candidate;
+        if let Some(bin_dir) = exe.parent() {
+            if let Some(contents) = bin_dir.parent() {
+                let bundle_path = contents.join("Resources").join("logic-ax-bridge");
+                if bundle_path.exists() {
+                    return bundle_path;
                 }
             }
         }
     }
-
-    let workspace_abs = PathBuf::from(
+    // 2. Fallback fester Bundle-Pfad:
+    let app_path = std::path::PathBuf::from("/Applications/Oszillation Mixing Buddy.app/Contents/Resources/logic-ax-bridge");
+    if app_path.exists() {
+        return app_path;
+    }
+    // 3. Entwicklungs-Pfad aus dem Workspace:
+    let dev_path = std::path::PathBuf::from("packages/daw-adapters/bin/logic-ax-bridge");
+    if dev_path.exists() {
+        return dev_path;
+    }
+    let workspace_abs = std::path::PathBuf::from(
         "/Volumes/Spacestation/MCP/Antigravity-MCP-tools/Steinberg-Mixing-Buddy/packages/daw-adapters/bin/logic-ax-bridge",
     );
     if workspace_abs.exists() {
         return workspace_abs;
     }
-
     if let Ok(cwd) = std::env::current_dir() {
         for rel in [
             "packages/daw-adapters/bin/logic-ax-bridge",
@@ -57,8 +62,12 @@ pub fn resolve_bridge_path() -> PathBuf {
             }
         }
     }
+    dev_path
+}
 
-    workspace_abs
+/// Backward compatibility alias pointing to canonical resolution
+pub fn resolve_bridge_path() -> std::path::PathBuf {
+    resolve_bridge_binary()
 }
 
 struct AXParamTarget {
@@ -727,17 +736,26 @@ fn validate_volume_adjustment(
 fn execute_logic_ax_bridge(bridge_path: &PathBuf, args: &[String]) -> Result<serde_json::Value, String> {
     let output = std::process::Command::new(bridge_path)
         .args(args)
-        .output()
-        .map_err(|e| format!("Fehler beim Ausführen von logic-ax-bridge: {}", e))?;
+        .output();
+
+    let output = match output {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("Konnte logic-ax-bridge unter {:?} nicht starten: {:?}", bridge_path, e);
+            return Err(format!("Konnte logic-ax-bridge unter {:?} nicht starten: {:?}", bridge_path, e));
+        }
+    };
 
     let stdout_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr_str = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
     if !output.status.success() {
+        let err_msg = if stderr_str.is_empty() { &stdout_str } else { &stderr_str };
+        eprintln!("logic-ax-bridge Ausführung fehlgeschlagen (Exit {}): {}", output.status, err_msg);
         return Err(format!(
             "logic-ax-bridge Fehler (Exit {}): {}",
             output.status,
-            if stderr_str.is_empty() { &stdout_str } else { &stderr_str }
+            err_msg
         ));
     }
 
@@ -868,7 +886,7 @@ fn matches_track_fuzzy(strip_name: &str, query: &str) -> bool {
 fn resolve_canonical_track_name(track_query: &str) -> String {
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
             let strips_args = vec!["list-channel-strips".to_string()];
             if let Ok(strips_result) = execute_logic_ax_bridge(&bridge_path, &strips_args) {
@@ -999,7 +1017,7 @@ async fn apply_daw_action(
         // Secondary fallback on macOS: AX bridge (only if MCU failed)
         #[cfg(target_os = "macos")]
         {
-            let bridge_path = resolve_bridge_path();
+            let bridge_path = resolve_bridge_binary();
             if bridge_path.exists() {
                 let fader_args = vec![
                     "set-fader".to_string(),
@@ -1029,7 +1047,7 @@ async fn apply_daw_action(
     if is_pan_param {
         #[cfg(target_os = "macos")]
         {
-            let bridge_path = resolve_bridge_path();
+            let bridge_path = resolve_bridge_binary();
             if !bridge_path.exists() {
                 return Err(format!(
                     "logic-ax-bridge nicht gefunden unter {}",
@@ -1067,7 +1085,7 @@ async fn apply_daw_action(
     // AUFGABE 2: Execute plugin parameter change in Logic Pro via native `logic-ax-bridge`
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         if !bridge_path.exists() {
             return Err(format!(
                 "Native Swift-Bridge nicht gefunden unter: {}",
@@ -1356,7 +1374,7 @@ async fn toggle_plugin_bypass(
     // AUFGABE 3: Native Swift-Bridge (`logic-ax-bridge toggle-bypass`) instead of osascript
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         if !bridge_path.exists() {
             return Err(format!(
                 "Native Swift-Bridge nicht gefunden unter: {}",
@@ -1531,7 +1549,7 @@ pub struct PluginSummary {
 pub fn learn_active_plugin_sync(window_title: Option<String>) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         if !bridge_path.exists() {
             return Err(format!(
                 "Native Swift-Bridge nicht gefunden unter: {}",
@@ -1766,7 +1784,7 @@ async fn delete_learned_plugin(slug: String, app: tauri::AppHandle) -> Result<St
 async fn list_channel_strips() -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         if !bridge_path.exists() {
             return Err(format!(
                 "Native Swift-Bridge nicht gefunden unter: {}",
@@ -1848,7 +1866,15 @@ async fn delete_mixing_skill(id: String, app: tauri::AppHandle) -> Result<(), St
 async fn daw_play(state: State<'_, AppState>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        state.ipc_server.mcu_bridge.send_note_pulse(94, 50)
+        let bridge_path = resolve_bridge_binary();
+        let play_args = vec!["transport-play".to_string()];
+        match execute_logic_ax_bridge(&bridge_path, &play_args) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                eprintln!("Transport-Play fehlgeschlagen ({}), falling back to MCU note pulse", e);
+                state.ipc_server.mcu_bridge.send_note_pulse(94, 50)
+            }
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -1861,7 +1887,15 @@ async fn daw_play(state: State<'_, AppState>) -> Result<(), String> {
 async fn daw_stop(state: State<'_, AppState>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        state.ipc_server.mcu_bridge.send_note_pulse(93, 50)
+        let bridge_path = resolve_bridge_binary();
+        let stop_args = vec!["transport-stop".to_string()];
+        match execute_logic_ax_bridge(&bridge_path, &stop_args) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                eprintln!("Transport-Stop fehlgeschlagen ({}), falling back to MCU note pulse", e);
+                state.ipc_server.mcu_bridge.send_note_pulse(93, 50)
+            }
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -1881,12 +1915,12 @@ async fn daw_locate_bar(bar: u32, state: State<'_, AppState>) -> Result<(), Stri
         let _ = state.ipc_server.mcu_bridge.ensure_cycle_off();
 
         // 2. Exaktes Bar-Locate via native Swift Bridge (Gehe zu Position ...)
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         let args = vec!["transport-locate".to_string(), "--bar".to_string(), bar.to_string()];
         match execute_logic_ax_bridge(&bridge_path, &args) {
             Ok(_) => Ok(()),
             Err(e) => {
-                println!("⚠️ [daw_locate_bar] Bridge locate failed ({}), falling back to MCU locate", e);
+                eprintln!("⚠️ [daw_locate_bar] Bridge locate failed ({}), falling back to MCU locate", e);
                 state.ipc_server.mcu_bridge.send_transport_locate(bar)
             }
         }
@@ -1921,7 +1955,12 @@ async fn audition_region(
 
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
+        if !bridge_path.exists() {
+            let err_msg = format!("logic-ax-bridge sidecar nicht gefunden unter {:?}", bridge_path);
+            eprintln!("{}", err_msg);
+            return Err(err_msg);
+        }
 
         // 1. Swift: Setze Cycle-Bereich auf start..end bzw. stelle sicher, dass Cycle aus ist
         if let Some(end) = end_bar {
@@ -1942,7 +1981,7 @@ async fn audition_region(
         // 2. Exaktes Bar-Locate via native Swift Bridge (mit MCU Fallback)
         let args = vec!["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()];
         if let Err(e) = execute_logic_ax_bridge(&bridge_path, &args) {
-            println!("⚠️ [audition_region] Bridge locate failed ({}), falling back to MCU locate", e);
+            eprintln!("⚠️ [audition_region] Bridge locate failed ({}), falling back to MCU locate", e);
             let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
         }
 
@@ -1951,9 +1990,22 @@ async fn audition_region(
 
         // 4. Starte Playback via Swift Bridge ('transport-play')
         let play_args = vec!["transport-play".to_string()];
-        if let Err(e) = execute_logic_ax_bridge(&bridge_path, &play_args) {
-            println!("⚠️ [audition_region] Bridge play failed ({}), falling back to MCU note pulse", e);
-            let _ = state.ipc_server.mcu_bridge.send_note_pulse(94, 50);
+        let play_result = execute_logic_ax_bridge(&bridge_path, &play_args);
+        let play_started = match &play_result {
+            Ok(_) => true,
+            Err(e) => {
+                eprintln!("⚠️ [audition_region] Bridge play failed ({}), falling back to MCU note pulse", e);
+                state.ipc_server.mcu_bridge.send_note_pulse(94, 50).is_ok()
+            }
+        };
+
+        if !play_started {
+            let err_msg = format!(
+                "Playback konnte nicht gestartet werden: logic-ax-bridge fehlgeschlagen ({:?}) und MCU Fallback nicht verfügbar",
+                play_result.err()
+            );
+            eprintln!("{}", err_msg);
+            return Err(err_msg);
         }
 
         // 5. Warte die berechnete Dauer
@@ -1962,7 +2014,7 @@ async fn audition_region(
         // 6. Stoppe Playback via Swift Bridge ('transport-stop')
         let stop_args = vec!["transport-stop".to_string()];
         if let Err(e) = execute_logic_ax_bridge(&bridge_path, &stop_args) {
-            println!("⚠️ [audition_region] Bridge stop failed ({}), falling back to MCU note pulse", e);
+            eprintln!("⚠️ [audition_region] Bridge stop failed ({}), falling back to MCU note pulse", e);
             let _ = state.ipc_server.mcu_bridge.send_note_pulse(93, 50);
         }
         Ok(serde_json::json!({
@@ -2206,7 +2258,7 @@ async fn record_fader_ride(
 
         // 3. Deaktiviere Cycle und springe auf start_bar (Exact Locate via Bridge)
         let _ = state.ipc_server.mcu_bridge.ensure_cycle_off();
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         let args = vec!["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()];
         if let Err(e) = execute_logic_ax_bridge(&bridge_path, &args) {
             println!("⚠️ [record_fader_ride] Bridge locate failed ({}), falling back to MCU locate", e);
@@ -2294,7 +2346,7 @@ async fn restore_fader(
 async fn set_folder_expanded(track_name: String, expanded: bool) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
             return execute_logic_ax_bridge(
                 &bridge_path,
@@ -2320,7 +2372,7 @@ async fn set_folder_expanded(track_name: String, expanded: bool) -> Result<serde
 async fn select_track(track_name: String) -> Result<serde_json::Value, String> {
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
             return execute_logic_ax_bridge(
                 &bridge_path,
@@ -2349,7 +2401,7 @@ async fn load_plugin_into_slot(
     let track = resolve_canonical_track_name(&track);
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
             return execute_logic_ax_bridge(
                 &bridge_path,
@@ -2382,7 +2434,7 @@ async fn set_send_bus(
     let track = resolve_canonical_track_name(&track);
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
             return execute_logic_ax_bridge(
                 &bridge_path,
@@ -2415,7 +2467,7 @@ async fn set_send_level(
     let track = resolve_canonical_track_name(&track);
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
             return execute_logic_ax_bridge(
                 &bridge_path,
@@ -2448,7 +2500,7 @@ async fn set_sidechain(
     let track = resolve_canonical_track_name(&track);
     #[cfg(target_os = "macos")]
     {
-        let bridge_path = resolve_bridge_path();
+        let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
             return execute_logic_ax_bridge(
                 &bridge_path,

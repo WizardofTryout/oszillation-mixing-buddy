@@ -230,35 +230,112 @@ export class AgentRunner {
     AgentRunner.cumulativeTurnsCount = 0;
   }
 
+  // ── Legal Studio Multi-Key Engine ─────────────────────────────────────────
+  public static keyRequestHistory: Map<string, number[]> = new Map();
+  public static lastGlobalApiCallTime = 0;
+  public static globalKeyIndex = 0;
+
   private cfg: AgentRunnerConfig;
   private steps: AgentStep[] = [];
   private fetchedStrips: ChannelStrip[] | null = null;
 
   /** Resolved key pool (always non-empty after construction guard) */
-  private keyPool: string[] = [];
-  /** Round-robin index into keyPool */
-  private keyIndex = 0;
+  public apiKeys: string[] = [];
+  /** Current key index in apiKeys pool */
+  public currentKeyIndex = 0;
+  /** Active model (supports 503 resilient fallback) */
+  public activeModel: string = 'gemini-2.5-flash';
 
   constructor(config: AgentRunnerConfig) {
     this.cfg = config;
+    this.activeModel = config.modelName || 'gemini-2.5-flash';
     // Build key pool from apiKeys or fall back to apiKey
     if (config.apiKeys && config.apiKeys.length > 0) {
-      this.keyPool = config.apiKeys.filter((k) => k.trim().length > 5);
+      this.apiKeys = config.apiKeys.map((k) => k.trim()).filter((k) => k.length > 5);
     } else if (config.apiKey && config.apiKey.trim().length > 5) {
-      this.keyPool = [config.apiKey.trim()];
+      this.apiKeys = [config.apiKey.trim()];
+    }
+    if (this.apiKeys.length > 0) {
+      this.currentKeyIndex = AgentRunner.globalKeyIndex % this.apiKeys.length;
     }
   }
 
-  // ── Key Rotation ──────────────────────────────────────────────────────────
-
-  private currentKey(): string | null {
-    return this.keyPool.length > 0 ? this.keyPool[this.keyIndex] : null;
+  // Backward compatibility getter
+  public get keyPool(): string[] {
+    return this.apiKeys;
   }
 
-  private rotateKey(): void {
-    if (this.keyPool.length > 1) {
-      this.keyIndex = (this.keyIndex + 1) % this.keyPool.length;
+  // ── Proactive Key Rotation with 80% Quota Capping & Pacing ────────────────
+
+  /**
+   * Proaktive Rotation bei JEDEM Request + 80% Quota-Deckelung (max 4 Anfragen/60s)
+   * + Mindestabstand (Pacing) von mindestens 1.200 ms.
+   */
+  private async getNextKeyWithPacing(signal?: AbortSignal): Promise<string> {
+    if (this.apiKeys.length === 0) {
+      throw new Error('Kein gültiger API-Key im Pool konfiguriert.');
     }
+
+    // 1. Mindestabstand (Pacing): mind. 1.200 ms zwischen zwei API-Aufrufen
+    const now = Date.now();
+    const elapsed = now - AgentRunner.lastGlobalApiCallTime;
+    if (elapsed < 1200) {
+      const waitMs = 1200 - elapsed;
+      await agentDelay(waitMs, signal);
+    }
+    this.checkAborted(signal);
+
+    // 2. Proaktive Rotation bei JEDEM Request
+    const poolSize = this.apiKeys.length;
+    let chosenKey: string | null = null;
+
+    for (let attempt = 0; attempt < poolSize; attempt++) {
+      this.currentKeyIndex = (this.currentKeyIndex + 1) % poolSize;
+      AgentRunner.globalKeyIndex = this.currentKeyIndex;
+      const candidateKey = this.apiKeys[this.currentKeyIndex];
+
+      // 60-Sekunden-Historie bereinigen
+      const currentTime = Date.now();
+      const history = (AgentRunner.keyRequestHistory.get(candidateKey) || []).filter(
+        (ts) => currentTime - ts < 60000
+      );
+      AgentRunner.keyRequestHistory.set(candidateKey, history);
+
+      // 80% Quota-Deckelung (Free-Tier Limit: 5 RPM -> max. 4 Anfragen in den letzten 60s)
+      if (history.length < 4) {
+        chosenKey = candidateKey;
+        break;
+      }
+      // Wenn bereits 4 Anfragen: diesen Key proaktiv überspringen und nächsten im Pool wählen
+    }
+
+    // Falls alle Keys an ihrer 80% Grenze sind: warte kurz auf den ältesten Zeitstempel
+    if (!chosenKey) {
+      this.currentKeyIndex = (this.currentKeyIndex + 1) % poolSize;
+      AgentRunner.globalKeyIndex = this.currentKeyIndex;
+      chosenKey = this.apiKeys[this.currentKeyIndex];
+      const history = AgentRunner.keyRequestHistory.get(chosenKey) || [];
+      if (history.length > 0) {
+        const oldest = history[0];
+        const waitMs = Math.max(500, Math.min(15000, 60000 - (Date.now() - oldest) + 100));
+        const waitStep = this.addStep(
+          '⏳',
+          `80% Quota aller Keys erreicht · Pacing (${(waitMs / 1000).toFixed(1)}s)...`
+        );
+        await agentDelay(waitMs, signal);
+        this.resolveStep(waitStep, 'Quota wieder frei');
+      }
+    }
+
+    // Zeitstempel für diesen Key registrieren
+    const finalHistory = (AgentRunner.keyRequestHistory.get(chosenKey) || []).filter(
+      (ts) => Date.now() - ts < 60000
+    );
+    finalHistory.push(Date.now());
+    AgentRunner.keyRequestHistory.set(chosenKey, finalHistory);
+    AgentRunner.lastGlobalApiCallTime = Date.now();
+
+    return chosenKey;
   }
 
   // ── Step helpers ──────────────────────────────────────────────────────────
@@ -764,30 +841,29 @@ export class AgentRunner {
     return { proposal, warnings };
   }
 
-  // ── Gemini call with key-rotation retry ──────────────────────────────────
+  // ── Gemini call with proactive key rotation, pacing & resilient 503 fallback ──
 
   /**
-   * Calls model.generateContent({ contents }) with the current key.
-   * On 429 / 503 it rotates to the next key and retries once.
+   * Calls model.generateContent({ contents }) with proactive key rotation,
+   * 80% quota capping (4 RPM), 1.200 ms pacing, and automatic 503 model fallback to gemini-2.5-flash.
    */
   private async generateContentWithRetry(
-    modelName: string,
     systemInstruction: string,
     contents: GeminiContent[],
     signal?: AbortSignal
   ): Promise<any> {
-    const maxAttempts = Math.min(3, Math.max(1, this.keyPool.length));
+    const maxAttempts = Math.max(3, this.apiKeys.length * 2);
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       this.checkAborted(signal);
 
-      const key = this.currentKey();
-      if (!key) throw new Error('Kein gültiger API-Key vorhanden.');
+      // Proaktives Multi-Key Round-Robin & Pacing
+      const key = await this.getNextKeyWithPacing(signal);
 
       try {
         const genAI = new GoogleGenerativeAI(key);
         const model = genAI.getGenerativeModel({
-          model: modelName,
+          model: this.activeModel,
           systemInstruction,
           tools: [
             {
@@ -810,7 +886,7 @@ export class AgentRunner {
         }
 
         const msg = String(err);
-        const is503 = msg.includes('503') || msg.includes('overloaded') || msg.includes('Service Unavailable');
+        const is503 = msg.includes('503') || msg.includes('overloaded') || msg.includes('Service Unavailable') || msg.includes('The model is overloaded');
         const is429 =
           msg.includes('429') ||
           msg.includes('ResourceExhausted') ||
@@ -819,24 +895,33 @@ export class AgentRunner {
           msg.includes('quota');
         const isQuotaOrOverload = is503 || is429;
 
-        if (isQuotaOrOverload && attempt < maxAttempts - 1) {
-          // Sofortigen Key-Wechsel im Pool veranlassen
-          if (this.keyPool.length > 1) {
-            this.rotateKey();
+        // Resilienter Modell-Fallback bei 503 ServiceUnavailable
+        if (is503) {
+          if (this.activeModel !== 'gemini-2.5-flash') {
+            const prevModel = this.activeModel;
+            this.activeModel = 'gemini-2.5-flash';
+            const fallbackStep = this.addStep(
+              '🔄',
+              `${prevModel} überlastet · Wechsle automatisch auf ${this.activeModel}...`
+            );
+            await agentDelay(800, signal);
+            this.resolveStep(fallbackStep, `Auf ${this.activeModel} umgeschaltet`);
+            continue;
           }
+        }
 
-          // Bei 503: Exponentieller Jitter-Backoff zwischen 1.5s und 2.5s zufällig
+        if (isQuotaOrOverload && attempt < maxAttempts - 1) {
           const waitMs = is503
             ? Math.floor(Math.random() * 1000) + 1500
-            : (attempt === 0 ? 2500 : 3500);
+            : (attempt === 0 ? 1500 : 2500);
 
           const stepLabel = is503
-            ? `Model überlastet (503) · Jitter (${(waitMs / 1000).toFixed(1)}s) & Key-Wechsel...`
+            ? `Modell überlastet (503) · Jitter (${(waitMs / 1000).toFixed(1)}s) & Key-Wechsel...`
             : `API-Quota erreicht (429) · Wechsle Key & Cooldown (${(waitMs / 1000).toFixed(1)}s)...`;
 
           const quotaStep = this.addStep('⏳', stepLabel);
           await agentDelay(waitMs, signal);
-          this.resolveStep(quotaStep, 'Weiter mit neuem Key');
+          this.resolveStep(quotaStep, 'Weiter mit nächstem Key');
           continue;
         }
 
@@ -866,16 +951,15 @@ export class AgentRunner {
 
     this.steps = [];
     this.fetchedStrips = null;
-    this.keyIndex = 0;
 
-    if (this.keyPool.length === 0) {
+    if (this.apiKeys.length === 0) {
       return {
         assistantText: '⚠️ Kein Gemini API-Key konfiguriert.',
         steps: this.steps
       };
     }
 
-    const modelName = this.cfg.modelName || 'gemini-2.5-flash';
+    this.activeModel = this.cfg.modelName || 'gemini-2.5-flash';
     const systemInstruction = buildAgentSystemPrompt();
 
     // ── Zero-Turn Local Prefetching (0 API tokens, 0ms latency) ──────────────
@@ -966,7 +1050,6 @@ export class AgentRunner {
         this.checkAborted(activeSignal);
 
         const response = await this.generateContentWithRetry(
-          modelName,
           systemInstruction,
           contents,
           activeSignal
@@ -995,8 +1078,8 @@ export class AgentRunner {
           totalTokenCount: AgentRunner.cumulativeSessionTokens,
           durationMs: Math.round(performance.now() - startTime),
           turnsCount: AgentRunner.cumulativeTurnsCount,
-          model: modelName,
-          activeKeyCount: this.keyPool.length,
+          model: this.activeModel,
+          activeKeyCount: this.apiKeys.length,
           estimatedCostUsd:
             AgentRunner.cumulativePromptTokens * 0.000000075 +
             AgentRunner.cumulativeCandidatesTokens * 0.0000003
@@ -1122,8 +1205,8 @@ export class AgentRunner {
         totalTokenCount: AgentRunner.cumulativeSessionTokens,
         durationMs: Math.round(performance.now() - startTime),
         turnsCount: AgentRunner.cumulativeTurnsCount,
-        model: modelName,
-        activeKeyCount: this.keyPool.length,
+        model: this.activeModel,
+        activeKeyCount: this.apiKeys.length,
         estimatedCostUsd:
           AgentRunner.cumulativePromptTokens * 0.000000075 +
           AgentRunner.cumulativeCandidatesTokens * 0.0000003
@@ -1175,8 +1258,8 @@ export class AgentRunner {
       totalTokenCount: AgentRunner.cumulativeSessionTokens,
       durationMs,
       turnsCount: AgentRunner.cumulativeTurnsCount,
-      model: modelName,
-      activeKeyCount: this.keyPool.length,
+      model: this.activeModel,
+      activeKeyCount: this.apiKeys.length,
       estimatedCostUsd
     };
 
