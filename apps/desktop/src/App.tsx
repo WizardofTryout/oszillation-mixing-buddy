@@ -645,16 +645,25 @@ export const App: React.FC = () => {
     }
   };
 
-  // 3. Wired Action Handlers
-  const handleApplyAction = async (id: string) => {
+  const handleApplyAction = async (id: string, selectedIndices?: number[]) => {
     const proposal = proposals.find((p) => p.id === id);
     if (!proposal) return;
 
     const isLogic = activeDaw.toLowerCase().includes('logic');
     const dawLabel = isLogic ? 'Logic Pro' : activeDaw === 'none' ? 'Standalone' : 'Nuendo';
 
+    // Filtere nach ausgewählten Checkboxen falls übergeben
+    const deltasToApply = selectedIndices !== undefined
+      ? proposal.deltas.filter((_, idx) => selectedIndices.includes(idx))
+      : proposal.deltas;
+
+    if (deltasToApply.length === 0) {
+      setChatLog(`⚠️ Keine Parameter zum Anwenden ausgewählt.`);
+      return;
+    }
+
     // Validate volume adjustments through Acoustic Shock Shield
-    for (const delta of proposal.deltas) {
+    for (const delta of deltasToApply) {
       if (delta.parameterName === 'volume' || delta.parameterName === 'fader_db') {
         try {
           await invoke('validate_volume_adjustment', {
@@ -670,12 +679,12 @@ export const App: React.FC = () => {
     }
 
     // Ensure all referenced tracks exist in liveTracks
-    for (const delta of proposal.deltas) {
+    for (const delta of deltasToApply) {
       ensureProposalTrackExists(delta.trackId, delta.trackName);
     }
 
     // Snapshot for Undo-Stack
-    const snapshot = proposal.deltas.map((delta) => ({
+    const snapshot = deltasToApply.map((delta) => ({
       track: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
       parameter: delta.parameterName || 'EQ',
       previousValue: delta.currentValue ?? 0.0,
@@ -695,7 +704,7 @@ export const App: React.FC = () => {
         });
       }
 
-      for (const delta of proposal.deltas) {
+      for (const delta of deltasToApply) {
         await invoke('apply_daw_action', {
           trackName: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
           parameter: delta.parameterName || 'EQ',
@@ -721,9 +730,38 @@ export const App: React.FC = () => {
       setProposals((prev) =>
         prev.map((p) => (p.id === id ? { ...p, status: 'applied' } : p))
       );
-      setChatLog(`✅ Anpassung angewendet: "${proposal.title}" erfolgreich an ${dawLabel} gesendet.`);
+      setChatLog(`✅ Anpassung angewendet: "${proposal.title}" (${deltasToApply.length} Parameter) erfolgreich an ${dawLabel} gesendet.`);
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Anwenden: ${String(err)}`);
+    }
+  };
+
+  const handleRollbackSingleDelta = async (proposalId: string, deltaIndex: number) => {
+    const proposal = proposals.find((p) => p.id === proposalId);
+    if (!proposal) return;
+    const delta = proposal.deltas[deltaIndex];
+    if (!delta) return;
+
+    const isLogic = activeDaw.toLowerCase().includes('logic');
+    const dawLabel = isLogic ? 'Logic Pro' : activeDaw === 'none' ? 'Standalone' : 'Nuendo';
+
+    try {
+      setChatLog(`↩ Rollback (${dawLabel}): Setze ${delta.trackName} › ${delta.parameterName} auf ${delta.currentValue} zurück...`);
+      await invoke('apply_daw_action', {
+        trackName: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
+        parameter: delta.parameterName || 'EQ',
+        value: delta.currentValue ?? 0.0,
+        currentValue: delta.proposedValue ?? 0.0,
+        isRestore: true,
+        unit: delta.unit ?? 'dB',
+        isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo'),
+        pluginName: delta.pluginName || null,
+        slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
+      });
+
+      setChatLog(`✅ Rollback erfolgreich: ${delta.parameterName} auf ${delta.currentValue} ${delta.unit ?? 'dB'} zurückgesetzt.`);
+    } catch (err: unknown) {
+      setChatLog(`❌ Fehler beim Rollback: ${String(err)}`);
     }
   };
 
@@ -1375,18 +1413,27 @@ export const App: React.FC = () => {
               <span className="text-xs text-slate-400">
                 {proposals.filter((p) => p.status === 'pending').length} pending approval
               </span>
-              {/* Undo Button */}
-              {historyStack.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleUndoLastAction}
-                  className="px-2.5 py-1 text-xs rounded bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
-                  title={`Zuletzt angewendete Aktion rückgängig machen: "${historyStack[0]?.description}"`}
-                >
-                  <span>↩</span>
-                  <span className="font-semibold">Rückgängig ({historyStack.length})</span>
-                </button>
-              )}
+              {/* Permanenter Undo-Button */}
+              <button
+                type="button"
+                onClick={handleUndoLastAction}
+                disabled={historyStack.length === 0}
+                className={`px-2.5 py-1 text-xs rounded flex items-center gap-1.5 transition-all shadow-sm ${
+                  historyStack.length === 0
+                    ? 'opacity-40 cursor-not-allowed bg-slate-800 text-slate-400 border border-slate-700'
+                    : 'hover:bg-slate-700 text-amber-300 border border-amber-500/40 cursor-pointer bg-slate-800'
+                }`}
+                title={
+                  historyStack.length > 0
+                    ? `Zuletzt angewendete Aktion rückgängig machen: "${historyStack[0]?.description}"`
+                    : 'Keine Aktionen im Verlauf'
+                }
+              >
+                <span>↩</span>
+                <span className="font-semibold">
+                  Letzte Aktion rückgängig ({historyStack.length})
+                </span>
+              </button>
 
               {proposals.length > 0 && (
                 <button
@@ -1428,6 +1475,7 @@ export const App: React.FC = () => {
                     onReject={handleRejectAction}
                     onAudition={handleAuditionAction}
                     onTogglePin={handleTogglePin}
+                    onRollbackDelta={handleRollbackSingleDelta}
                   />
                 ))}
               </div>

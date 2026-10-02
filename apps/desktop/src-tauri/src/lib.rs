@@ -1901,13 +1901,23 @@ async fn daw_locate_bar(bar: u32, state: State<'_, AppState>) -> Result<(), Stri
 #[tauri::command]
 async fn audition_region(
     start_bar: u32,
-    duration_seconds: f32,
+    end_bar: Option<u32>,
+    duration_seconds: Option<f64>,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     if start_bar < 1 {
         return Err("start_bar must be >= 1".to_string());
     }
-    let dur_ms = (duration_seconds.max(2.0).min(30.0) * 1000.0) as u64;
+    let effective_duration = match (end_bar, duration_seconds) {
+        (Some(e), _) if e > start_bar => {
+            // Dynamische Abspieldauer: 2.4s pro Takt bei 100 BPM (z. B. 4 Takte = 9.6s)
+            let bar_count = (e - start_bar) as f64;
+            (bar_count * 2.4).max(2.0).min(30.0)
+        }
+        (_, Some(d)) => d.max(2.0).min(30.0),
+        _ => 8.0,
+    };
+    let dur_ms = (effective_duration * 1000.0) as u64;
 
     #[cfg(target_os = "macos")]
     {
@@ -1931,12 +1941,22 @@ async fn audition_region(
 
         // 5. Stop via CoreMIDI MCU (Note 93, 50ms hold)
         let _ = state.ipc_server.mcu_bridge.send_note_pulse(93, 50);
-        Ok(serde_json::json!({ "success": true, "bar": start_bar, "durationSeconds": duration_seconds }))
+        Ok(serde_json::json!({
+            "success": true,
+            "startBar": start_bar,
+            "endBar": end_bar,
+            "durationSeconds": effective_duration
+        }))
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (start_bar, dur_ms, state);
-        Ok(serde_json::json!({ "success": true, "bar": start_bar, "durationSeconds": duration_seconds }))
+        Ok(serde_json::json!({
+            "success": true,
+            "startBar": start_bar,
+            "endBar": end_bar,
+            "durationSeconds": effective_duration
+        }))
     }
 }
 

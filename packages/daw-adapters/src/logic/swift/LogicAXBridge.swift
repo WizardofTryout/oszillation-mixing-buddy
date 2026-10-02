@@ -12,31 +12,18 @@ func getAXAttribute(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
 }
 
 func getAXString(_ element: AXUIElement, _ attribute: String) -> String? {
-    guard let val = getAXAttribute(element, attribute) else { return nil }
-    if let str = val as? String {
-        return str
-    }
-    return nil
+    return getAXAttribute(element, attribute) as? String
 }
 
 func getAXDouble(_ element: AXUIElement, _ attribute: String) -> Double? {
     guard let val = getAXAttribute(element, attribute) else { return nil }
-    if let num = val as? NSNumber {
-        return num.doubleValue
-    }
-    if let str = val as? String {
-        let normalized = str.replacingOccurrences(of: ",", with: ".")
-        return Double(normalized)
-    }
+    if let num = val as? NSNumber { return num.doubleValue }
+    if let str = val as? String { return Double(str.replacingOccurrences(of: ",", with: ".")) }
     return nil
 }
 
 func getAXChildren(_ element: AXUIElement) -> [AXUIElement] {
-    guard let val = getAXAttribute(element, kAXChildrenAttribute as String) else { return [] }
-    if let arr = val as? [AXUIElement] {
-        return arr
-    }
-    return []
+    return (getAXAttribute(element, kAXChildrenAttribute as String) as? [AXUIElement]) ?? []
 }
 
 func findLogicApplicationElement() -> AXUIElement? {
@@ -89,19 +76,8 @@ func sendSpacebarToLogic() -> Bool {
 }
 
 func digitToKeyCode(_ char: Character) -> CGKeyCode? {
-    switch char {
-    case "0": return 29
-    case "1": return 18
-    case "2": return 19
-    case "3": return 20
-    case "4": return 21
-    case "5": return 23
-    case "6": return 22
-    case "7": return 26
-    case "8": return 28
-    case "9": return 25
-    default: return nil
-    }
+    let map: [Character: CGKeyCode] = ["0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25]
+    return map[char]
 }
 
 func postKeyToLogic(pid: pid_t, keyCode: CGKeyCode, delayUs: useconds_t = 30_000) {
@@ -135,37 +111,24 @@ func getLogicWindows(_ appElement: AXUIElement) -> [AXUIElement] {
     if let val = getAXAttribute(appElement, kAXWindowsAttribute as String) as? [AXUIElement], !val.isEmpty {
         return val
     }
-    // Fallback: In macOS when Logic Pro is not the frontmost app, kAXWindowsAttribute can be empty.
-    // Querying kAXChildrenAttribute returns all AXWindow elements reliably.
-    let children = getAXChildren(appElement)
-    let wins = children.filter { (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXWindow" }
-    return wins
+    return getAXChildren(appElement).filter { (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXWindow" }
 }
 
 // Extract plugin name from a window's top-level static text elements or EQ group
 func detectPluginName(in window: AXUIElement, windowTitle: String) -> String {
-    let children = getAXChildren(window)
     var candidateName = ""
     var hasEQGroup = false
 
-    for child in children {
+    for child in getAXChildren(window) {
         let role = getAXString(child, kAXRoleAttribute as String) ?? ""
         if role == "AXStaticText" {
-            let val = getAXString(child, kAXValueAttribute as String)
-                ?? getAXString(child, kAXTitleAttribute as String)
-                ?? ""
+            let val = getAXString(child, kAXValueAttribute as String) ?? getAXString(child, kAXTitleAttribute as String) ?? ""
             let trimmed = val.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty &&
-               trimmed != "Ansicht:" &&
-               trimmed != "View:" &&
-               trimmed.lowercased() != windowTitle.lowercased() {
+            if !trimmed.isEmpty && trimmed != "Ansicht:" && trimmed != "View:" && trimmed.lowercased() != windowTitle.lowercased() {
                 candidateName = trimmed
             }
-        } else if role == "AXGroup" {
-            let desc = getAXString(child, kAXDescriptionAttribute as String) ?? ""
-            if desc == "EQ" {
-                hasEQGroup = true
-            }
+        } else if role == "AXGroup" && (getAXString(child, kAXDescriptionAttribute as String) ?? "") == "EQ" {
+            hasEQGroup = true
         }
     }
 
@@ -774,7 +737,8 @@ func parseChannelStripElement(_ strip: AXUIElement) -> ParsedChannelStrip {
     var faderSlider: AXUIElement? = nil
     var faderTextField: AXUIElement? = nil
     var balanceSlider: AXUIElement? = nil
-    var pluginGroups: [(name: String, group: AXUIElement)] = []
+    var rawPluginGroups: [(name: String, group: AXUIElement, y: CGFloat)] = []
+    var insertBtnYs: [CGFloat] = []
     
     let children = getAXChildren(strip)
     for c in children {
@@ -814,6 +778,13 @@ func parseChannelStripElement(_ strip: AXUIElement) -> ParsedChannelStrip {
         }
         
         if role == "AXButton" {
+            if descLower.contains("takt einfügen") || descLower.contains("insert") || descLower.contains("audio-plug-in") {
+                var pVal: AnyObject?
+                AXUIElementCopyAttributeValue(c, kAXPositionAttribute as CFString, &pVal)
+                var p = CGPoint.zero
+                if let pv = pVal { AXValueGetValue(pv as! AXValue, .cgPoint, &p) }
+                insertBtnYs.append(p.y)
+            }
             if descLower.contains("ton aus") || descLower.contains("mute") || descLower.contains("stumm") {
                 let v = (getAXString(c, kAXValueAttribute as String) ?? "").lowercased()
                 muted = (v == "ein" || v == "1" || v == "true")
@@ -828,10 +799,27 @@ func parseChannelStripElement(_ strip: AXUIElement) -> ParsedChannelStrip {
             let ignored = ["automation", "read", "gruppe", "stereo-ausgabe", "pegelreduktionsmesser", "bus", "send", "aux"]
             let isIgnored = ignored.contains(where: { descLower.contains($0) })
             if !desc.isEmpty && !isIgnored {
-                pluginGroups.append((name: desc, group: c))
+                var pVal: AnyObject?
+                AXUIElementCopyAttributeValue(c, kAXPositionAttribute as CFString, &pVal)
+                var p = CGPoint.zero
+                if let pv = pVal { AXValueGetValue(pv as! AXValue, .cgPoint, &p) }
+                rawPluginGroups.append((name: desc, group: c, y: p.y))
             }
         }
     }
+    
+    // Filter out instrument group if audio insert buttons exist (e.g. Bass, Drum Kit, Piano)
+    let minInsertY = insertBtnYs.min() ?? -1
+    let audioPluginGroups = rawPluginGroups.filter { g in
+        if minInsertY > 0 && g.y < minInsertY - 5.0 {
+            return false
+        }
+        return true
+    }
+    
+    // Sort vertically ascending: lowest Y is top of channel strip (Slot 1)
+    let sortedGroups = audioPluginGroups.sorted { $0.y < $1.y }
+    let pluginGroups = sortedGroups.map { (name: $0.name, group: $0.group) }
     
     // Convert pluginGroups to 1-indexed inserts
     for (i, pg) in pluginGroups.enumerated() {
@@ -2046,52 +2034,57 @@ case "open-insert":
         exit(0)
     }
     
-    // Find the plugin group for slotNum (1-based)
     guard slotNum >= 1 && slotNum <= strip.pluginGroups.count else {
         printJSON(["success": false, "error": "Slot \(slotNum) existiert nicht auf Spur '\(strip.trackName)'. Belegt: \(strip.pluginGroups.count) Inserts"])
         exit(0)
     }
     
-    let targetPlugin = strip.pluginGroups[slotNum - 1]
-    // Look inside targetPlugin.group for an AXButton (e.g. desc="geöffnet" or AXButton)
-    var openBtn: AXUIElement? = nil
-    for c in getAXChildren(targetPlugin.group) {
-        let r = getAXString(c, kAXRoleAttribute as String) ?? ""
-        if r == "AXButton" {
-            openBtn = c
-            break
+    var targetPlugin = strip.pluginGroups[slotNum - 1]
+    let pluginQuery = (getArg("--plugin") ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+    func clickBtn(_ g: AXUIElement) -> Bool {
+        for c in getAXChildren(g) where getAXString(c, kAXRoleAttribute as String) == "AXButton" {
+            return AXUIElementPerformAction(c, kAXPressAction as CFString) == .success
         }
+        return false
     }
-    
-    guard let btn = openBtn else {
+
+    guard clickBtn(targetPlugin.group) else {
         printJSON(["success": false, "error": "Öffnen-Button für Plugin '\(targetPlugin.name)' nicht gefunden"])
         exit(0)
     }
-    
-    let pressErr = AXUIElementPerformAction(btn, kAXPressAction as CFString)
-    guard pressErr == .success else {
-        printJSON(["success": false, "error": "AXPress fehlgeschlagen (AXError: \(pressErr.rawValue))"])
-        exit(0)
-    }
-    
-    // Poll up to 400 ms for opened window
+
+    var openedWin: AXUIElement? = nil
     var openedTitle = targetPlugin.name
     let deadline = Date().addingTimeInterval(0.4)
     while Date() < deadline {
         Thread.sleep(forTimeInterval: 0.04)
-        let freshWins = getLogicWindows(appElement)
-        for w in freshWins {
+        for w in getLogicWindows(appElement) {
             let sr = getAXString(w, kAXSubroleAttribute as String) ?? ""
             let t = getAXString(w, kAXTitleAttribute as String) ?? ""
             if (sr == "AXDialog" || sr == "AXFloatingWindow") && !t.isEmpty {
                 if t.lowercased().contains(targetPlugin.name.lowercased()) || t.lowercased().contains(strip.trackName.lowercased()) {
-                    openedTitle = t
-                    break
+                    openedWin = w; openedTitle = t; break
                 }
             }
         }
+        if openedWin != nil { break }
     }
-    
+
+    let expected = !pluginQuery.isEmpty ? pluginQuery : targetPlugin.name.lowercased()
+    if !expected.isEmpty && !openedTitle.lowercased().contains(expected) {
+        if let w = openedWin {
+            for c in getAXChildren(w) where getAXString(c, kAXSubroleAttribute as String) == "AXCloseButton" {
+                _ = AXUIElementPerformAction(c, kAXPressAction as CFString)
+            }
+        }
+        if let match = strip.pluginGroups.first(where: { $0.name.lowercased().contains(expected) }) {
+            targetPlugin = match
+            _ = clickBtn(targetPlugin.group)
+            openedTitle = targetPlugin.name
+        }
+    }
+
     printJSON(["success": true, "track": strip.trackName, "pluginName": targetPlugin.name, "openedWindow": openedTitle])
 
 case "close-plugin-window":

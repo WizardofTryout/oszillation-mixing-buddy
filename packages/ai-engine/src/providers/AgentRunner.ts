@@ -88,12 +88,13 @@ const TOOL_LIST_TRACKS: FunctionDeclaration = {
 const TOOL_AUDITION_REGION: FunctionDeclaration = {
   name: 'audition_region',
   description:
-    'Locate the DAW playhead to a specific bar and play back for a number of seconds so the engineer can hear the mix at that position.',
+    'Locate the DAW playhead to a specific bar and play back for a range of bars or duration in seconds so the engineer can hear the mix at that position.',
   parameters: {
     type: SchemaType.OBJECT,
     properties: {
-      startBar: { type: SchemaType.INTEGER, description: 'Bar number to locate to (1-based)' },
-      durationSeconds: { type: SchemaType.NUMBER, description: 'Playback duration in seconds (default 8)' }
+      startBar: { type: SchemaType.INTEGER, description: 'Start bar number to locate to (1-based)' },
+      endBar: { type: SchemaType.INTEGER, description: 'Optional end bar number (e.g. 13 for "Takt 9 bis 13")' },
+      durationSeconds: { type: SchemaType.NUMBER, description: 'Playback duration in seconds (computed automatically from bar range if not specified)' }
     },
     required: ['startBar']
   }
@@ -371,18 +372,46 @@ export class AgentRunner {
 
   private async executeAuditionRegion(
     startBar: number,
-    durationSeconds: number,
-    signal?: AbortSignal
+    endBar?: number,
+    durationSeconds?: number,
+    signal?: AbortSignal,
+    userPrompt?: string
   ): Promise<string> {
-    const dur = Math.max(2, Math.min(30, durationSeconds));
-    const step = this.addStep('👂', `Wiedergabe Takt ${startBar} · ${dur}s`);
+    // Falls userPrompt eine Bar-Range nennt ("Takt 9 bis 13") und endBar nicht übergeben wurde:
+    let sBar = startBar;
+    let eBar = endBar;
+    if ((!eBar || eBar <= sBar) && (!durationSeconds || durationSeconds === 8)) {
+      const match = (userPrompt ?? '').match(/(?:takt|bar|bars|takte)\s*(\d+)\s*(?:bis|to|-)\s*(\d+)/i);
+      if (match) {
+        const pStart = parseInt(match[1], 10);
+        const pEnd = parseInt(match[2], 10);
+        if (pEnd > pStart) {
+          sBar = pStart;
+          eBar = pEnd;
+        }
+      }
+    }
+
+    let dur = typeof durationSeconds === 'number' && durationSeconds > 0 ? durationSeconds : 8;
+    if (typeof eBar === 'number' && eBar > sBar) {
+      const barCount = eBar - sBar;
+      // Dynamische Abspieldauer: 2.4s pro Takt bei 100 BPM (z. B. 4 Takte = 9.6s)
+      dur = Math.max(2, barCount * 2.4);
+    }
+    dur = Math.max(2, Math.min(30, dur));
+
+    const stepLabel = eBar && eBar > sBar
+      ? `Wiedergabe Takt ${sBar} bis ${eBar} · ${dur.toFixed(1)}s`
+      : `Wiedergabe Takt ${sBar} · ${dur.toFixed(1)}s`;
+
+    const step = this.addStep('👂', stepLabel);
     try {
       this.checkAborted(signal);
 
-      // Punkt 5: Zwingend daw_locate_bar aufrufen und 300 ms asynchron warten,
+      // Zwingend daw_locate_bar aufrufen und 300 ms asynchron warten,
       // damit Logic Pro den Playhead im Dialog "Zu Position" physisch platziert,
       // BEVOR daw_play getriggert wird!
-      await this.cfg.invokeTauri('daw_locate_bar', { bar: startBar });
+      await this.cfg.invokeTauri('daw_locate_bar', { bar: sBar });
       await agentDelay(300, signal);
       this.checkAborted(signal);
 
@@ -393,8 +422,8 @@ export class AgentRunner {
         await this.cfg.invokeTauri('daw_stop', {});
       }
 
-      this.resolveStep(step, `Takt ${startBar} abgespielt`);
-      return JSON.stringify({ success: true, bar: startBar, durationSeconds: dur });
+      this.resolveStep(step, eBar && eBar > sBar ? `Takt ${sBar} bis ${eBar} abgespielt` : `Takt ${sBar} abgespielt`);
+      return JSON.stringify({ success: true, startBar: sBar, endBar: eBar, durationSeconds: dur });
     } catch (err) {
       if (signal?.aborted) {
         try {
@@ -486,18 +515,74 @@ export class AgentRunner {
             (delta.trackName as string).toLowerCase().includes(s.trackName.toLowerCase())
         );
         if (strip) {
-          const inserts = strip.inserts ?? [];
-          const pluginNameLower = String(delta.pluginName).toLowerCase();
+          // 1. Sortiere Inserts strikt aufsteigend nach physischem Slot (1 bis 15)
+          const inserts = [...(strip.inserts ?? [])].sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0));
+          const pluginNameLower = String(delta.pluginName).toLowerCase().trim();
+          const paramNameLower = String(delta.parameterName ?? '').toLowerCase().trim();
 
-          // 1. Ground-Truth Match: Durchsuche inserts der Zielspur
-          const matchedInsert = inserts.find(
-            (ins) =>
-              ins.name.toLowerCase().includes(pluginNameLower) ||
-              pluginNameLower.includes(ins.name.toLowerCase())
+          // 2. Priorisiertes Matching:
+          // Prio 1: Exakter Wortabgleich (z. B. "comp" === "comp" oder "compressor" === "compressor")
+          let matchedInsert = inserts.find(
+            (ins) => ins.name.toLowerCase().trim() === pluginNameLower
           );
 
+          // Prio 2: Typen- und Familien-Abgleich (z. B. "Compressor" matcht "Comp", NICHT "Glow" oder "Limit")
+          if (!matchedInsert) {
+            const isCompQuery =
+              pluginNameLower.includes('comp') ||
+              pluginNameLower.includes('dynamics') ||
+              paramNameLower.includes('threshold') ||
+              paramNameLower.includes('ratio') ||
+              paramNameLower.includes('attack') ||
+              paramNameLower.includes('release');
+            const isEqQuery =
+              pluginNameLower.includes('eq') ||
+              pluginNameLower.includes('equalizer') ||
+              paramNameLower.includes('freq') ||
+              paramNameLower.includes('gain') ||
+              paramNameLower.includes('shelf') ||
+              paramNameLower.includes('peak') ||
+              paramNameLower.includes('cut') ||
+              paramNameLower.includes('band') ||
+              paramNameLower.includes('q');
+            const isLimitQuery = pluginNameLower.includes('limit');
+            const isGlowQuery = pluginNameLower.includes('glow');
+            const isPhatQuery = pluginNameLower.includes('phat');
+            const isAmpQuery = pluginNameLower.includes('amp');
+
+            if (isCompQuery && !isLimitQuery && !isGlowQuery && !isPhatQuery) {
+              // Nimm das ERSTE gefundene Kompressor-Plugin von oben nach unten (z. B. Slot 2 "Comp")
+              matchedInsert = inserts.find((ins) => {
+                const n = ins.name.toLowerCase();
+                return (n.includes('comp') || n.includes('compressor')) && !n.includes('glow') && !n.includes('limit');
+              });
+            } else if (isEqQuery) {
+              matchedInsert = inserts.find((ins) => {
+                const n = ins.name.toLowerCase();
+                return n.includes('eq') || n.includes('equalizer');
+              });
+            } else if (isLimitQuery) {
+              matchedInsert = inserts.find((ins) => ins.name.toLowerCase().includes('limit'));
+            } else if (isGlowQuery) {
+              matchedInsert = inserts.find((ins) => ins.name.toLowerCase().includes('glow'));
+            } else if (isPhatQuery) {
+              matchedInsert = inserts.find((ins) => ins.name.toLowerCase().includes('phat'));
+            } else if (isAmpQuery) {
+              matchedInsert = inserts.find((ins) => ins.name.toLowerCase().includes('amp'));
+            }
+          }
+
+          // Prio 3: Substring-Match (von oben nach unten)
+          if (!matchedInsert) {
+            matchedInsert = inserts.find(
+              (ins) =>
+                ins.name.toLowerCase().includes(pluginNameLower) ||
+                (pluginNameLower.length >= 4 && pluginNameLower.includes(ins.name.toLowerCase()))
+            );
+          }
+
           if (matchedInsert) {
-            // ECHTER Slot-Index gefunden! IMMER überschreiben/korrigieren!
+            // ECHTER 1-basierter Slot-Index gefunden! IMMER überschreiben/korrigieren!
             if (delta.slotIndex !== matchedInsert.slot) {
               warnings.push(
                 `ℹ️ Slot für "${delta.pluginName}" auf Spur "${strip.trackName}" auf realen Slot ${matchedInsert.slot} (${matchedInsert.name}) korrigiert.`
@@ -506,47 +591,7 @@ export class AgentRunner {
             }
             delta.pluginName = matchedInsert.name;
           } else if (delta.pluginName !== 'Master Fader') {
-            // 2. Falls das genannte Plugin nicht existiert: Versuche es anhand des Parameters umzubiegen
-            const paramName = String(delta.parameterName ?? '').toLowerCase();
-            const isEqParam =
-              paramName.includes('freq') ||
-              paramName.includes('gain') ||
-              paramName.includes('shelf') ||
-              paramName.includes('peak') ||
-              paramName.includes('cut') ||
-              paramName.includes('band') ||
-              paramName.includes('q');
-            const isCompParam =
-              paramName.includes('threshold') ||
-              paramName.includes('ratio') ||
-              paramName.includes('attack') ||
-              paramName.includes('release') ||
-              paramName.includes('knee') ||
-              paramName.includes('comp');
-
-            const eqInsert = inserts.find(
-              (ins) => ins.name.toLowerCase().includes('eq') || ins.name.toLowerCase().includes('equalizer')
-            );
-            const compInsert = inserts.find(
-              (ins) =>
-                ins.name.toLowerCase().includes('comp') ||
-                ins.name.toLowerCase().includes('compressor') ||
-                ins.name.toLowerCase().includes('dynamics')
-            );
-
-            if (isEqParam && eqInsert) {
-              warnings.push(
-                `ℹ️ Plugin für EQ-Parameter auf "${strip.trackName}" auf vorhandenes Plugin "${eqInsert.name}" (Slot ${eqInsert.slot}) umgebogen.`
-              );
-              delta.pluginName = eqInsert.name;
-              delta.slotIndex = eqInsert.slot;
-            } else if (isCompParam && compInsert) {
-              warnings.push(
-                `ℹ️ Plugin für Dynamik-Parameter auf "${strip.trackName}" auf vorhandenes Plugin "${compInsert.name}" (Slot ${compInsert.slot}) umgebogen.`
-              );
-              delta.pluginName = compInsert.name;
-              delta.slotIndex = compInsert.slot;
-            } else if (inserts.length > 0) {
+            if (inserts.length > 0) {
               warnings.push(
                 `⚠️ Plugin "${delta.pluginName}" nicht auf Spur "${strip.trackName}" vorhanden. Verfügbare Inserts: ${inserts.map((i) => `${i.name} (Slot ${i.slot})`).join(', ')}.`
               );
@@ -841,8 +886,10 @@ export class AgentRunner {
             auditionExecuted = true;
             toolResult = await this.executeAuditionRegion(
               Number(args.startBar ?? 1),
-              Number(args.durationSeconds ?? 8),
-              activeSignal
+              args.endBar !== undefined ? Number(args.endBar) : undefined,
+              args.durationSeconds !== undefined ? Number(args.durationSeconds) : undefined,
+              activeSignal,
+              userPrompt
             );
             const liveTelem = this.cfg.getTelemetry?.() ?? telemetry;
             const currentLufs = liveTelem?.loudness?.momentaryLufs ?? -70.0;

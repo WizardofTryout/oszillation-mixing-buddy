@@ -1,13 +1,14 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { MixActionProposal } from '@mixing-buddy/shared-types';
-import { Check, X, Volume2, Sparkles, Pin } from 'lucide-react';
+import { Check, X, Volume2, Sparkles, Pin, RotateCcw } from 'lucide-react';
 
 interface ActionCardProps {
   proposal: MixActionProposal;
-  onApply: (id: string) => void;
+  onApply: (id: string, selectedIndices?: number[]) => void;
   onReject: (id: string) => void;
   onAudition: (id: string) => void;
   onTogglePin?: (id: string) => void;
+  onRollbackDelta?: (proposalId: string, deltaIndex: number) => Promise<void> | void;
 }
 
 export const ActionCard: React.FC<ActionCardProps> = ({
@@ -15,8 +16,28 @@ export const ActionCard: React.FC<ActionCardProps> = ({
   onApply,
   onReject,
   onAudition,
-  onTogglePin
+  onTogglePin,
+  onRollbackDelta
 }) => {
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(() =>
+    new Set(proposal.deltas.map((_, i) => i))
+  );
+  const [rolledBackIndices, setRolledBackIndices] = useState<Set<number>>(new Set());
+
+  const isApplied = proposal.status === 'applied';
+
+  const toggleIndex = (idx: number) => {
+    setSelectedIndices((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+      }
+      return next;
+    });
+  };
+
   return (
     <div
       className={`bg-darkSurface rounded-lg p-4 shadow-xl flex flex-col gap-3 transition-all ${
@@ -45,7 +66,11 @@ export const ActionCard: React.FC<ActionCardProps> = ({
               <span>📌</span> Gespeichert
             </span>
           )}
-          <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+          <span
+            className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded ${
+              isApplied ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'
+            }`}
+          >
             {proposal.status}
           </span>
           {onTogglePin && (
@@ -98,27 +123,77 @@ export const ActionCard: React.FC<ActionCardProps> = ({
           Proposed Modifications:
         </span>
         <div className="space-y-1">
-          {proposal.deltas.map((delta, idx) => (
-            <div
-              key={idx}
-              className="flex justify-between items-center text-xs bg-slate-900/60 px-2.5 py-1.5 rounded border border-darkBorder/40 font-mono"
-            >
-              <div className="flex items-center gap-1.5 text-slate-200">
-                <span className="font-semibold text-blue-300">{delta.trackName}</span>
-                {delta.pluginName && <span className="text-slate-500">› {delta.pluginName}</span>}
-                <span className="text-slate-400">› {delta.parameterName}</span>
+          {proposal.deltas.map((delta, idx) => {
+            const isRolledBack = rolledBackIndices.has(idx);
+            const isChecked = selectedIndices.has(idx);
+
+            return (
+              <div
+                key={idx}
+                className={`flex justify-between items-center text-xs px-2.5 py-1.5 rounded border font-mono transition-colors ${
+                  isRolledBack
+                    ? 'bg-amber-950/20 border-amber-500/30 opacity-75'
+                    : !isApplied && !isChecked
+                    ? 'bg-slate-900/30 border-darkBorder/20 opacity-50'
+                    : 'bg-slate-900/60 border-darkBorder/40'
+                }`}
+              >
+                <div className="flex items-center gap-2 text-slate-200">
+                  {/* Vor dem Anwenden: Checkbox */}
+                  {!isApplied && (
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => toggleIndex(idx)}
+                      className="w-3.5 h-3.5 rounded border-slate-700 bg-slate-900 text-blue-500 focus:ring-0 cursor-pointer accent-blue-500"
+                      title={isChecked ? 'Auswahl aufheben' : 'Zum Anwenden auswählen'}
+                    />
+                  )}
+                  <span className="font-semibold text-blue-300">{delta.trackName}</span>
+                  {delta.pluginName && <span className="text-slate-500">› {delta.pluginName}</span>}
+                  <span className="text-slate-400">› {delta.parameterName}</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500 line-through">
+                    {delta.currentValue.toFixed(1)} {delta.unit}
+                  </span>
+                  <span className="text-slate-400">→</span>
+                  <span
+                    className={`font-bold ${
+                      isRolledBack ? 'text-amber-400 line-through' : 'text-emerald-400'
+                    }`}
+                  >
+                    {delta.proposedValue.toFixed(1)} {delta.unit}
+                  </span>
+
+                  {/* Nach dem Anwenden: Granularer Rollback-Button oder "Zurückgesetzt" */}
+                  {isApplied && (
+                    isRolledBack ? (
+                      <span className="text-[10px] text-amber-400 font-sans italic px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-500/30 ml-1">
+                        Zurückgesetzt
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (onRollbackDelta) {
+                            await onRollbackDelta(proposal.id, idx);
+                            setRolledBackIndices((prev) => new Set([...prev, idx]));
+                          }
+                        }}
+                        className="p-1 rounded text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition-colors ml-1"
+                        title="Diesen Parameter einzeln zurücksetzen (Undo)"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      </button>
+                    )
+                  )}
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-slate-500 line-through">
-                  {delta.currentValue.toFixed(1)} {delta.unit}
-                </span>
-                <span className="text-slate-400">→</span>
-                <span className="text-emerald-400 font-bold">
-                  {delta.proposedValue.toFixed(1)} {delta.unit}
-                </span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -142,11 +217,18 @@ export const ActionCard: React.FC<ActionCardProps> = ({
         </button>
 
         <button
-          onClick={() => onApply(proposal.id)}
-          className="px-3.5 py-1.5 rounded text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white flex items-center gap-1.5 transition-colors shadow-md shadow-blue-900/30"
+          onClick={() => onApply(proposal.id, Array.from(selectedIndices))}
+          disabled={isApplied || selectedIndices.size === 0}
+          className={`px-3.5 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-md ${
+            isApplied
+              ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/40 cursor-default'
+              : selectedIndices.size === 0
+              ? 'opacity-40 cursor-not-allowed bg-slate-800 text-slate-400'
+              : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30'
+          }`}
         >
           <Check className="w-3.5 h-3.5" />
-          Anwenden
+          {isApplied ? 'Angewendet' : 'Anwenden'}
         </button>
       </div>
     </div>
