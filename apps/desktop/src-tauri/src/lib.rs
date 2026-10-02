@@ -1921,7 +1921,7 @@ async fn audition_region(
             println!("⚠️ [audition_region] Bridge locate failed ({}), falling back to MCU locate", e);
             let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
         }
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        std::thread::sleep(std::time::Duration::from_millis(300));
 
         // 3. Play via CoreMIDI MCU (Note 94, 50ms hold)
         let _ = state.ipc_server.mcu_bridge.send_note_pulse(94, 50);

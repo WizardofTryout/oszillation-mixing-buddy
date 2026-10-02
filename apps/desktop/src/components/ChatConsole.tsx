@@ -11,6 +11,7 @@ import type {
 } from '@mixing-buddy/shared-types';
 import { AgentRunner, type AgentStep, type AgentUsageStats } from '@mixing-buddy/ai-engine';
 import { TokenUsageBadge } from './TokenUsageBadge.js';
+import { MarkdownRenderer } from './MarkdownRenderer.js';
 import { invoke } from '@tauri-apps/api/core';
 import type { ProviderMode } from './ProviderSettings.js';
 
@@ -623,7 +624,11 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
                   ))}
                 </div>
               )}
-              <span>{m.text}</span>
+              {m.sender === 'assistant' ? (
+                <MarkdownRenderer content={m.text} />
+              ) : (
+                <span>{m.text}</span>
+              )}
               <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
                 {m.sender === 'system' && (
                   <button

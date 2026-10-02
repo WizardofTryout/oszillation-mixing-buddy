@@ -101,6 +101,21 @@ export const App: React.FC = () => {
   const [chatLog, setChatLog] = useState<string | null>(null);
   const [mcpClientsCount, setMcpClientsCount] = useState<number>(0);
   const [cardFilter, setCardFilter] = useState<'all' | 'pinned'>('all');
+  const [historyStack, setHistoryStack] = useState<Array<{
+    id: string;
+    timestamp: number;
+    description: string;
+    snapshot: Array<{
+      track: string;
+      parameter: string;
+      previousValue: number;
+      appliedValue: number;
+      unit?: string;
+      isMaster?: boolean;
+      pluginName?: string | null;
+      slotIndex?: number | null;
+    }>;
+  }>>([]);
 
   // Accordion UI state for cleaner layout
   const [isAiConfigOpen, setIsAiConfigOpen] = useState<boolean>(false);
@@ -659,6 +674,18 @@ export const App: React.FC = () => {
       ensureProposalTrackExists(delta.trackId, delta.trackName);
     }
 
+    // Snapshot for Undo-Stack
+    const snapshot = proposal.deltas.map((delta) => ({
+      track: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
+      parameter: delta.parameterName || 'EQ',
+      previousValue: delta.currentValue ?? 0.0,
+      appliedValue: delta.proposedValue ?? 0.0,
+      unit: delta.unit ?? 'dB',
+      isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo'),
+      pluginName: delta.pluginName || null,
+      slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
+    }));
+
     try {
       if (proposal.sidechainRoute) {
         await invoke('set_sidechain', {
@@ -682,12 +709,50 @@ export const App: React.FC = () => {
         });
       }
 
+      // Add to Undo Stack
+      const historyItem = {
+        id: `hist_${Date.now()}`,
+        timestamp: Date.now(),
+        description: proposal.title,
+        snapshot
+      };
+      setHistoryStack((prev) => [historyItem, ...prev]);
+
       setProposals((prev) =>
         prev.map((p) => (p.id === id ? { ...p, status: 'applied' } : p))
       );
       setChatLog(`✅ Anpassung angewendet: "${proposal.title}" erfolgreich an ${dawLabel} gesendet.`);
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Anwenden: ${String(err)}`);
+    }
+  };
+
+  const handleUndoLastAction = async () => {
+    if (historyStack.length === 0) return;
+    const [actionToUndo, ...remainingStack] = historyStack;
+    const isLogic = activeDaw.toLowerCase().includes('logic');
+    const dawLabel = isLogic ? 'Logic Pro' : activeDaw === 'none' ? 'Standalone' : 'Nuendo';
+
+    try {
+      setChatLog(`↩ Rückgängig: "${actionToUndo.description}" wird in ${dawLabel} zurückgesetzt...`);
+      for (const item of actionToUndo.snapshot) {
+        await invoke('apply_daw_action', {
+          trackName: item.track,
+          parameter: item.parameter,
+          value: item.previousValue,
+          currentValue: item.appliedValue,
+          isRestore: true,
+          unit: item.unit ?? 'dB',
+          isMaster: !!item.isMaster,
+          pluginName: item.pluginName ?? null,
+          slotIndex: item.slotIndex ?? null
+        });
+      }
+
+      setHistoryStack(remainingStack);
+      setChatLog(`✅ Rückgängig erfolgreich: "${actionToUndo.description}" auf Ausgangswerte zurückgesetzt.`);
+    } catch (err: unknown) {
+      setChatLog(`❌ Fehler beim Rückgängig-Machen: ${String(err)}`);
     }
   };
 
@@ -1310,6 +1375,19 @@ export const App: React.FC = () => {
               <span className="text-xs text-slate-400">
                 {proposals.filter((p) => p.status === 'pending').length} pending approval
               </span>
+              {/* Undo Button */}
+              {historyStack.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleUndoLastAction}
+                  className="px-2.5 py-1 text-xs rounded bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/40 flex items-center gap-1.5 transition-all shadow-sm cursor-pointer"
+                  title={`Zuletzt angewendete Aktion rückgängig machen: "${historyStack[0]?.description}"`}
+                >
+                  <span>↩</span>
+                  <span className="font-semibold">Rückgängig ({historyStack.length})</span>
+                </button>
+              )}
+
               {proposals.length > 0 && (
                 <button
                   onClick={handleClearQueue}

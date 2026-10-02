@@ -79,7 +79,7 @@ export const TokenUsageBadge: React.FC<TokenUsageBadgeProps> = ({
 
       {/* Popover Card */}
       {isOpen && (
-        <div className="absolute right-0 mt-1.5 w-72 bg-slate-900/95 backdrop-blur-md border border-slate-700/90 rounded-xl shadow-2xl p-3 z-50 text-xs text-slate-300 animate-in fade-in zoom-in-95 duration-100">
+        <div className="absolute left-0 top-full mt-2 w-80 bg-slate-900/95 border border-slate-700/80 rounded-xl shadow-2xl p-4 z-50 backdrop-blur-md text-xs select-none animate-in fade-in zoom-in-95 duration-100">
           {/* Header */}
           <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-800">
             <div className="flex items-center gap-1.5 font-semibold text-slate-200">
