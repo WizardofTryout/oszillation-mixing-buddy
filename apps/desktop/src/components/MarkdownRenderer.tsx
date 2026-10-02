@@ -8,8 +8,8 @@ interface MarkdownRendererProps {
 export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, className = '' }) => {
   // Helper to parse inline styles (bold, inline code, italic)
   const renderInline = (text: string): React.ReactNode[] => {
-    // Regex splits text into tokens: `code`, **bold**, *italic*
-    const tokens = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g);
+    // Regex splits text into tokens: `code`, **bold**, __bold__, *italic*, _italic_
+    const tokens = text.split(/(`[^`]+`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_)/g);
 
     return tokens.map((token, index) => {
       if (token.startsWith('`') && token.endsWith('`') && token.length >= 2) {
@@ -23,7 +23,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
           </code>
         );
       }
-      if (token.startsWith('**') && token.endsWith('**') && token.length >= 4) {
+      if ((token.startsWith('**') && token.endsWith('**') && token.length >= 4) ||
+          (token.startsWith('__') && token.endsWith('__') && token.length >= 4)) {
         const boldText = token.slice(2, -2);
         return (
           <strong key={index} className="font-semibold text-slate-100">
@@ -31,7 +32,8 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
           </strong>
         );
       }
-      if (token.startsWith('*') && token.endsWith('*') && token.length >= 2) {
+      if ((token.startsWith('*') && token.endsWith('*') && token.length >= 2) ||
+          (token.startsWith('_') && token.endsWith('_') && token.length >= 2)) {
         const italicText = token.slice(1, -1);
         return (
           <em key={index} className="italic text-slate-300">
@@ -62,10 +64,41 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
     const rawLine = lines[i];
     const trimmed = rawLine.trim();
 
+    // Warning Callout Box: ⚠️ or > ⚠️
+    if (trimmed.startsWith('⚠️') || trimmed.startsWith('> ⚠️')) {
+      flushList();
+      const warnText = trimmed.replace(/^>\s*/, '').replace(/^⚠️\s*/, '').trim();
+      elements.push(
+        <div
+          key={`warn_${i}`}
+          className="bg-amber-950/30 border border-amber-500/30 rounded-lg p-2 text-amber-300 my-1.5 flex items-start gap-2 shadow-sm"
+        >
+          <span className="text-amber-400 shrink-0 select-none text-xs mt-0.5">⚠️</span>
+          <span className="flex-1 leading-relaxed text-xs">{renderInline(warnText)}</span>
+        </div>
+      );
+      continue;
+    }
+
     // Horizontal Rule: --- or ***
     if (/^---+$|^\*\*\*+$/.test(trimmed)) {
       flushList();
       elements.push(<hr key={`hr_${i}`} className="border-t border-slate-800 my-2.5" />);
+      continue;
+    }
+
+    // Blockquote
+    if (trimmed.startsWith('> ')) {
+      flushList();
+      const quoteText = trimmed.substring(2).trim();
+      elements.push(
+        <blockquote
+          key={`quote_${i}`}
+          className="border-l-2 border-slate-600 pl-2.5 my-1.5 text-slate-300 italic text-xs"
+        >
+          {renderInline(quoteText)}
+        </blockquote>
+      );
       continue;
     }
 
@@ -115,10 +148,24 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
       currentListItems.push(
         <li key={`li_${i}`} className="flex items-start gap-2 text-slate-200">
           <span className="text-blue-400 select-none mt-0.5">•</span>
-          <span className="flex-1">{renderInline(itemText)}</span>
+          <span className="flex-1 leading-relaxed">{renderInline(itemText)}</span>
         </li>
       );
       continue;
+    }
+
+    // Numbered list: 1. , 2. 
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const numMatch = trimmed.match(/^(\d+)\.\s+(.*)/);
+      if (numMatch) {
+        currentListItems.push(
+          <li key={`li_num_${i}`} className="flex items-start gap-2 text-slate-200">
+            <span className="text-cyan-400 font-mono text-[11px] select-none shrink-0">{numMatch[1]}.</span>
+            <span className="flex-1 leading-relaxed">{renderInline(numMatch[2])}</span>
+          </li>
+        );
+        continue;
+      }
     }
 
     // Empty line

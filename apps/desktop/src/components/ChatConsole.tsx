@@ -19,6 +19,7 @@ export interface ChatMessage {
   id: string;
   sender: 'user' | 'assistant' | 'system';
   text: string;
+  content?: string;
   timestamp: number;
   steps?: AgentStep[];
 }
@@ -627,10 +628,10 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
                   ))}
                 </div>
               )}
-              {m.sender === 'assistant' ? (
-                <MarkdownRenderer content={m.text} />
+              {m.sender === 'assistant' || m.sender === 'system' ? (
+                <MarkdownRenderer content={m.content || m.text || ''} />
               ) : (
-                <span>{m.text}</span>
+                <span className="whitespace-pre-wrap">{m.content || m.text || ''}</span>
               )}
               <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
                 {m.sender === 'system' && (
