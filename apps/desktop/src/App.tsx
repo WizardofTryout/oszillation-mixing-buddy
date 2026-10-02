@@ -33,9 +33,24 @@ import { Sliders, Headphones, Inbox, Sparkles, Database, Target, BarChart2, Star
 export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<MetrologyTelemetryFrame | null>(null);
   const [isAudioConnected, setIsAudioConnected] = useState<boolean>(false);
+  const [defaultProvider, setDefaultProvider] = useState<ProviderMode>(() => {
+    try {
+      const saved = (localStorage.getItem('omb_default_provider') ||
+        localStorage.getItem('omb_preferred_provider')) as ProviderMode;
+      if (
+        saved &&
+        ['managed', 'byok_claude', 'byok_gemini', 'byok_openai', 'ollama', 'mcp_external'].includes(saved)
+      ) {
+        return saved;
+      }
+    } catch {}
+    return 'byok_gemini';
+  });
+
   const [providerMode, setProviderMode] = useState<ProviderMode>(() => {
     try {
-      const saved = localStorage.getItem('omb_preferred_provider') as ProviderMode;
+      const saved = (localStorage.getItem('omb_default_provider') ||
+        localStorage.getItem('omb_preferred_provider')) as ProviderMode;
       if (
         saved &&
         ['managed', 'byok_claude', 'byok_gemini', 'byok_openai', 'ollama', 'mcp_external'].includes(saved)
@@ -64,6 +79,14 @@ export const App: React.FC = () => {
   const handleSelectProviderMode = (mode: ProviderMode) => {
     setProviderMode(mode);
     try {
+      localStorage.setItem('omb_preferred_provider', mode);
+    } catch {}
+  };
+
+  const handleSetDefaultProvider = (mode: ProviderMode) => {
+    setDefaultProvider(mode);
+    try {
+      localStorage.setItem('omb_default_provider', mode);
       localStorage.setItem('omb_preferred_provider', mode);
     } catch {}
   };
@@ -1189,6 +1212,8 @@ export const App: React.FC = () => {
             <ProviderSettings
               currentMode={providerMode}
               onSelectMode={handleSelectProviderMode}
+              defaultMode={defaultProvider}
+              onSetDefaultMode={handleSetDefaultProvider}
               activeDaw={activeDaw}
               isAudioConnected={isAudioConnected}
               isLicenseActive={true}

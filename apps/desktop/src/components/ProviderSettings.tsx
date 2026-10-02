@@ -36,6 +36,8 @@ type McpModalTab = 'claude_desktop' | 'cursor' | 'vscode_custom';
 interface ProviderSettingsProps {
   currentMode: ProviderMode;
   onSelectMode: (mode: ProviderMode) => void;
+  defaultMode?: ProviderMode;
+  onSetDefaultMode?: (mode: ProviderMode) => void;
   activeDaw: string;
   isAudioConnected: boolean;
   isLicenseActive: boolean;
@@ -59,6 +61,8 @@ interface KeyRow {
 export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   currentMode,
   onSelectMode,
+  defaultMode,
+  onSetDefaultMode,
   activeDaw,
   isAudioConnected,
   isLicenseActive,
@@ -70,6 +74,47 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
   apiKeys,
   onApiKeysChange
 }) => {
+  const getProviderLabel = (mode: ProviderMode): string => {
+    switch (mode) {
+      case 'managed':
+        return 'Managed Cloud';
+      case 'byok_claude':
+        return 'Claude BYOK';
+      case 'byok_gemini':
+        return 'Gemini BYOK';
+      case 'ollama':
+        return 'Ollama Local';
+      case 'mcp_external':
+        return 'External MCP';
+      default:
+        return mode;
+    }
+  };
+
+  const [internalDefaultMode, setInternalDefaultMode] = useState<ProviderMode>(() => {
+    try {
+      return (
+        defaultMode ||
+        (localStorage.getItem('omb_default_provider') as ProviderMode) ||
+        (localStorage.getItem('omb_preferred_provider') as ProviderMode) ||
+        'byok_gemini'
+      );
+    } catch {
+      return 'byok_gemini';
+    }
+  });
+
+  const effectiveDefaultMode = defaultMode ?? internalDefaultMode;
+
+  const handleMakeDefault = (mode: ProviderMode, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setInternalDefaultMode(mode);
+    onSetDefaultMode?.(mode);
+    try {
+      localStorage.setItem('omb_default_provider', mode);
+      localStorage.setItem('omb_preferred_provider', mode);
+    } catch {}
+  };
   const [copied, setCopied] = useState(false);
   const [isMcpModalOpen, setIsMcpModalOpen] = useState(false);
   const [mcpModalTab, setMcpModalTab] = useState<McpModalTab>('claude_desktop');
@@ -394,11 +439,11 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
               Reasoning Engine & AI Backend:
             </label>
             <span
-              className="text-[11px] text-amber-400 flex items-center gap-1 font-medium bg-amber-950/40 border border-amber-500/30 px-2 py-0.5 rounded shadow-sm"
-              title="Jeder Tab-Wechsel wird automatisch als dauerhafter Standard für App-Neustarts gesichert"
+              className="text-[11px] text-amber-400 flex items-center gap-1 font-medium bg-amber-950/40 border border-amber-500/30 px-2.5 py-0.5 rounded shadow-sm"
+              title="Aktiver Standard-Provider (beim App-Start automatisch aktiv)"
             >
-              <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-              <span>Standard: {currentMode === 'byok_gemini' ? 'Gemini BYOK' : currentMode === 'managed' ? 'Managed Cloud' : currentMode === 'byok_claude' ? 'Claude BYOK' : currentMode === 'mcp_external' ? 'MCP External' : currentMode}</span>
+              <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+              <span>Standard: {getProviderLabel(effectiveDefaultMode)}</span>
             </span>
           </div>
           <button
@@ -419,14 +464,33 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
           {/* Managed Cloud */}
           <button
             onClick={() => onSelectMode('managed')}
-            className={`p-2.5 rounded border text-left flex flex-col gap-1 transition-all ${
+            className={`p-2.5 rounded border text-left flex flex-col gap-1 transition-all relative group ${
               currentMode === 'managed'
                 ? 'bg-blue-600/20 border-blue-500 text-blue-200'
                 : 'bg-[#121418] border-darkBorder/60 text-slate-400 hover:text-slate-200'
             }`}
           >
-            <div className="flex items-center gap-1.5 text-xs font-bold">
-              <Server className="w-3.5 h-3.5" /> Managed Cloud
+            <div className="flex items-center justify-between gap-1">
+              <div className="flex items-center gap-1.5 text-xs font-bold truncate">
+                <Server className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Managed Cloud</span>
+              </div>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => handleMakeDefault('managed', e)}
+                onKeyDown={(e) => e.key === 'Enter' && handleMakeDefault('managed', e as any)}
+                title={effectiveDefaultMode === 'managed' ? 'Aktueller Standard-Provider' : 'Als Standard festlegen'}
+                className="p-0.5 rounded hover:bg-slate-800 transition-transform hover:scale-125 shrink-0 cursor-pointer"
+              >
+                <Star
+                  className={`w-3.5 h-3.5 transition-colors ${
+                    effectiveDefaultMode === 'managed'
+                      ? 'fill-amber-400 text-amber-400'
+                      : 'text-slate-600 group-hover:text-slate-400 hover:!text-amber-400'
+                  }`}
+                />
+              </span>
             </div>
             <span className="text-[10px] text-slate-500">buddy.oszillation-studio</span>
           </button>
@@ -434,14 +498,33 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
           {/* BYOK Anthropic */}
           <button
             onClick={() => onSelectMode('byok_claude')}
-            className={`p-2.5 rounded border text-left flex flex-col gap-1 transition-all ${
+            className={`p-2.5 rounded border text-left flex flex-col gap-1 transition-all relative group ${
               currentMode === 'byok_claude'
                 ? 'bg-blue-600/20 border-blue-500 text-blue-200'
                 : 'bg-[#121418] border-darkBorder/60 text-slate-400 hover:text-slate-200'
             }`}
           >
-            <div className="flex items-center gap-1.5 text-xs font-bold">
-              <Key className="w-3.5 h-3.5" /> Claude 3.7 / 3.5
+            <div className="flex items-center justify-between gap-1">
+              <div className="flex items-center gap-1.5 text-xs font-bold truncate">
+                <Key className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Claude 3.7 / 3.5</span>
+              </div>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => handleMakeDefault('byok_claude', e)}
+                onKeyDown={(e) => e.key === 'Enter' && handleMakeDefault('byok_claude', e as any)}
+                title={effectiveDefaultMode === 'byok_claude' ? 'Aktueller Standard-Provider' : 'Als Standard festlegen'}
+                className="p-0.5 rounded hover:bg-slate-800 transition-transform hover:scale-125 shrink-0 cursor-pointer"
+              >
+                <Star
+                  className={`w-3.5 h-3.5 transition-colors ${
+                    effectiveDefaultMode === 'byok_claude'
+                      ? 'fill-amber-400 text-amber-400'
+                      : 'text-slate-600 group-hover:text-slate-400 hover:!text-amber-400'
+                  }`}
+                />
+              </span>
             </div>
             <span className="text-[10px] text-slate-500">Anthropic BYOK</span>
           </button>
@@ -449,14 +532,33 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
           {/* BYOK Gemini */}
           <button
             onClick={() => onSelectMode('byok_gemini')}
-            className={`p-2.5 rounded border text-left flex flex-col gap-1 transition-all ${
+            className={`p-2.5 rounded border text-left flex flex-col gap-1 transition-all relative group ${
               currentMode === 'byok_gemini'
                 ? 'bg-blue-600/20 border-blue-500 text-blue-200'
                 : 'bg-[#121418] border-darkBorder/60 text-slate-400 hover:text-slate-200'
             }`}
           >
-            <div className="flex items-center gap-1.5 text-xs font-bold">
-              <Sparkles className="w-3.5 h-3.5" /> Gemini Flash / Pro
+            <div className="flex items-center justify-between gap-1">
+              <div className="flex items-center gap-1.5 text-xs font-bold truncate">
+                <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Gemini Flash / Pro</span>
+              </div>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => handleMakeDefault('byok_gemini', e)}
+                onKeyDown={(e) => e.key === 'Enter' && handleMakeDefault('byok_gemini', e as any)}
+                title={effectiveDefaultMode === 'byok_gemini' ? 'Aktueller Standard-Provider' : 'Als Standard festlegen'}
+                className="p-0.5 rounded hover:bg-slate-800 transition-transform hover:scale-125 shrink-0 cursor-pointer"
+              >
+                <Star
+                  className={`w-3.5 h-3.5 transition-colors ${
+                    effectiveDefaultMode === 'byok_gemini'
+                      ? 'fill-amber-400 text-amber-400'
+                      : 'text-slate-600 group-hover:text-slate-400 hover:!text-amber-400'
+                  }`}
+                />
+              </span>
             </div>
             <span className="text-[10px] text-slate-500">Google AI (Multi-Key)</span>
           </button>
@@ -464,14 +566,33 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
           {/* Local Ollama */}
           <button
             onClick={() => onSelectMode('ollama')}
-            className={`p-2.5 rounded border text-left flex flex-col gap-1 transition-all ${
+            className={`p-2.5 rounded border text-left flex flex-col gap-1 transition-all relative group ${
               currentMode === 'ollama'
                 ? 'bg-blue-600/20 border-blue-500 text-blue-200'
                 : 'bg-[#121418] border-darkBorder/60 text-slate-400 hover:text-slate-200'
             }`}
           >
-            <div className="flex items-center gap-1.5 text-xs font-bold">
-              <Cpu className="w-3.5 h-3.5" /> Ollama Local
+            <div className="flex items-center justify-between gap-1">
+              <div className="flex items-center gap-1.5 text-xs font-bold truncate">
+                <Cpu className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Ollama Local</span>
+              </div>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => handleMakeDefault('ollama', e)}
+                onKeyDown={(e) => e.key === 'Enter' && handleMakeDefault('ollama', e as any)}
+                title={effectiveDefaultMode === 'ollama' ? 'Aktueller Standard-Provider' : 'Als Standard festlegen'}
+                className="p-0.5 rounded hover:bg-slate-800 transition-transform hover:scale-125 shrink-0 cursor-pointer"
+              >
+                <Star
+                  className={`w-3.5 h-3.5 transition-colors ${
+                    effectiveDefaultMode === 'ollama'
+                      ? 'fill-amber-400 text-amber-400'
+                      : 'text-slate-600 group-hover:text-slate-400 hover:!text-amber-400'
+                  }`}
+                />
+              </span>
             </div>
             <span className="text-[10px] text-slate-500">localhost:11434</span>
           </button>
@@ -479,17 +600,36 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
           {/* External MCP Client (Universal MCP) */}
           <button
             onClick={() => onSelectMode('mcp_external')}
-            className={`p-2.5 rounded border text-left flex flex-col gap-1 transition-all ${
+            className={`p-2.5 rounded border text-left flex flex-col gap-1 transition-all relative group ${
               currentMode === 'mcp_external'
                 ? 'bg-blue-600/20 border-blue-500 text-blue-200'
                 : 'bg-[#121418] border-darkBorder/60 text-slate-400 hover:text-slate-200'
             }`}
           >
-            <div className="flex items-center gap-1.5 text-xs font-bold">
-              <Radio className="w-3.5 h-3.5" /> External MCP Client
+            <div className="flex items-center justify-between gap-1">
+              <div className="flex items-center gap-1.5 text-xs font-bold truncate">
+                <Radio className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">External MCP</span>
+              </div>
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => handleMakeDefault('mcp_external', e)}
+                onKeyDown={(e) => e.key === 'Enter' && handleMakeDefault('mcp_external', e as any)}
+                title={effectiveDefaultMode === 'mcp_external' ? 'Aktueller Standard-Provider' : 'Als Standard festlegen'}
+                className="p-0.5 rounded hover:bg-slate-800 transition-transform hover:scale-125 shrink-0 cursor-pointer"
+              >
+                <Star
+                  className={`w-3.5 h-3.5 transition-colors ${
+                    effectiveDefaultMode === 'mcp_external'
+                      ? 'fill-amber-400 text-amber-400'
+                      : 'text-slate-600 group-hover:text-slate-400 hover:!text-amber-400'
+                  }`}
+                />
+              </span>
             </div>
             <span className={`text-[10px] ${isMcpConnected ? 'text-emerald-400 font-medium' : 'text-slate-500'}`}>
-              {isMcpConnected ? '🟢 Verbunden (stdio / SSE 48124)' : '⚪ Wartet auf MCP-Client'}
+              {isMcpConnected ? '🟢 Verbunden' : '⚪ Wartet auf Client'}
             </span>
           </button>
         </div>
