@@ -180,6 +180,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
 
           const runner = new AgentRunner({
             apiKey: keyList[0] || effectiveApiKey,
+            apiKeys: keyList,
             modelName: modelName.trim() || 'gemini-2.5-flash',
             invokeTauri: (command, args) => invoke(command, args),
             onStep: (step) => {

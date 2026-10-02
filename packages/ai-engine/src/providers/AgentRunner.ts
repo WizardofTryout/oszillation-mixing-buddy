@@ -1,19 +1,22 @@
 /**
- * AgentRunner.ts – Gemini ReAct Tool-Calling Loop
+ * AgentRunner.ts – Gemini ReAct Tool-Calling Loop (v2)
  *
- * Implements the multi-step agentic loop:
- *   User Prompt → Gemini → Tool Call → Tool Result → Gemini → … → Proposal
+ * Changes vs v1:
+ *  - Role-Fix: function responses are injected as { role: 'user', parts: [{ functionResponse }] }
+ *    to avoid the "Role 'function' is not supported" 400 error from the Gemini API.
+ *  - Multi-Key Pool: accepts apiKeys: string[] and rotates on 429 / 503.
+ *  - 300 ms inter-tool delay to avoid burst quota hits on the free tier.
  *
  * Tools exposed to Gemini:
  *   1. list_tracks          – fetch live channel strips + inserts from DAW
  *   2. get_track_details    – get insert slots for a specific track
  *   3. audition_region      – locate to bar, play N seconds, stop
- *   4. propose_mix_adjustment – final output: a validated MixActionProposal
+ *   4. propose_mix_adjustment – final, validated MixActionProposal
  */
 
 import { GoogleGenerativeAI, type FunctionDeclaration, SchemaType } from '@google/generative-ai';
 import type { MixActionProposal, TrackDescriptor, MetrologyTelemetryFrame } from '@mixing-buddy/shared-types';
-import { MIXING_BUDDY_SYSTEM_PROMPT, buildAnalysisUserPrompt, type MixAnalysisContext } from '../prompts.js';
+import { MIXING_BUDDY_SYSTEM_PROMPT, type MixAnalysisContext } from '../prompts.js';
 import { normalizeProposal } from './GeminiProvider.js';
 
 // --------------------------------------------------------------------------
@@ -31,7 +34,13 @@ export interface AgentStep {
 }
 
 export interface AgentRunnerConfig {
-  apiKey: string;
+  /**
+   * Single key (backwards compat) – converted internally to a single-element pool.
+   * Prefer apiKeys for multi-key rotation.
+   */
+  apiKey?: string;
+  /** Multi-key pool: rotated on 429 / 503 */
+  apiKeys?: string[];
   modelName?: string;
   /** Invokes a Tauri command – provided by caller so this file stays framework-agnostic */
   invokeTauri: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -90,7 +99,7 @@ const TOOL_PROPOSE: FunctionDeclaration = {
   name: 'propose_mix_adjustment',
   description:
     'Submit the final, validated mix adjustment proposal. ' +
-    'Only call this AFTER you have verified the plugin slots with list_tracks or get_track_details.',
+    'Only call this AFTER you have verified plugin slots with list_tracks or get_track_details.',
   parameters: {
     type: SchemaType.OBJECT,
     properties: {
@@ -133,8 +142,31 @@ export class AgentRunner {
   private steps: AgentStep[] = [];
   private fetchedStrips: ChannelStrip[] | null = null;
 
+  /** Resolved key pool (always non-empty after construction guard) */
+  private keyPool: string[] = [];
+  /** Round-robin index into keyPool */
+  private keyIndex = 0;
+
   constructor(config: AgentRunnerConfig) {
     this.cfg = config;
+    // Build key pool from apiKeys or fall back to apiKey
+    if (config.apiKeys && config.apiKeys.length > 0) {
+      this.keyPool = config.apiKeys.filter((k) => k.trim().length > 5);
+    } else if (config.apiKey && config.apiKey.trim().length > 5) {
+      this.keyPool = [config.apiKey.trim()];
+    }
+  }
+
+  // ── Key Rotation ──────────────────────────────────────────────────────────
+
+  private currentKey(): string | null {
+    return this.keyPool.length > 0 ? this.keyPool[this.keyIndex] : null;
+  }
+
+  private rotateKey(): void {
+    if (this.keyPool.length > 1) {
+      this.keyIndex = (this.keyIndex + 1) % this.keyPool.length;
+    }
   }
 
   // ── Step helpers ──────────────────────────────────────────────────────────
@@ -265,12 +297,17 @@ export class AgentRunner {
               (ins) => ins.name.toLowerCase().includes('eq') || ins.name.toLowerCase().includes('equalizer')
             );
             const compInsert = inserts.find(
-              (ins) => ins.name.toLowerCase().includes('comp') || ins.name.toLowerCase().includes('compressor')
+              (ins) =>
+                ins.name.toLowerCase().includes('comp') || ins.name.toLowerCase().includes('compressor')
             );
             const paramName = (delta.parameterName as string).toLowerCase();
             const isEqParam =
-              paramName.includes('freq') || paramName.includes('gain') || paramName.includes('shelf') ||
-              paramName.includes('peak') || paramName.includes('cut') || paramName.includes('band');
+              paramName.includes('freq') ||
+              paramName.includes('gain') ||
+              paramName.includes('shelf') ||
+              paramName.includes('peak') ||
+              paramName.includes('cut') ||
+              paramName.includes('band');
             const isCompParam = ['threshold', 'ratio', 'attack', 'release', 'knee'].includes(paramName);
             if (isEqParam && eqInsert) {
               delta.pluginName = eqInsert.name;
@@ -313,6 +350,78 @@ export class AgentRunner {
     return { proposal, warnings };
   }
 
+  // ── Gemini call with key-rotation retry ──────────────────────────────────
+
+  /**
+   * Sends a message to the model using the current key.
+   * On 429 / 503 it rotates to the next key and retries once per available key.
+   */
+  private async sendWithRetry(
+    modelName: string,
+    systemInstruction: string,
+    history: HistoryTurn[],
+    newParts: PartUnion[]
+  ): Promise<{ response: any; history: HistoryTurn[] }> {
+    const maxAttempts = Math.max(1, this.keyPool.length);
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const key = this.currentKey();
+      if (!key) throw new Error('Kein gültiger API-Key vorhanden.');
+
+      try {
+        const genAI = new GoogleGenerativeAI(key);
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          systemInstruction,
+          tools: [
+            {
+              functionDeclarations: [
+                TOOL_LIST_TRACKS,
+                TOOL_GET_TRACK_DETAILS,
+                TOOL_AUDITION_REGION,
+                TOOL_PROPOSE
+              ]
+            }
+          ]
+        });
+
+        // Replay the full conversation history in this new session
+        const chat = model.startChat({ history: history as any });
+        const result = await chat.sendMessage(newParts as any);
+
+        // Append turns to history for subsequent calls
+        const updatedHistory: HistoryTurn[] = [
+          ...history,
+          { role: 'user' as const, parts: newParts as any[] },
+          {
+            role: 'model' as const,
+            parts: (result.response.candidates?.[0]?.content?.parts ?? []) as any[]
+          }
+        ];
+
+        return { response: result.response, history: updatedHistory };
+      } catch (err) {
+        const msg = String(err);
+        const isQuotaError =
+          msg.includes('429') ||
+          msg.includes('503') ||
+          msg.includes('ResourceExhausted') ||
+          msg.includes('high demand') ||
+          msg.includes('RESOURCE_EXHAUSTED');
+
+        if (isQuotaError && this.keyPool.length > 1) {
+          this.rotateKey();
+          // Brief back-off before retrying with next key
+          await agentDelay(800);
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    throw new Error('Alle API-Keys haben Quota-Fehler zurückgegeben. Bitte warte kurz und versuche es erneut.');
+  }
+
   // ── Main Run Loop ─────────────────────────────────────────────────────────
 
   async run(
@@ -323,8 +432,9 @@ export class AgentRunner {
   ): Promise<AgentRunResult> {
     this.steps = [];
     this.fetchedStrips = null;
+    this.keyIndex = 0;
 
-    if (!this.cfg.apiKey || this.cfg.apiKey.trim().length <= 5) {
+    if (this.keyPool.length === 0) {
       return {
         assistantText: '⚠️ Kein Gemini API-Key konfiguriert.',
         steps: this.steps
@@ -332,21 +442,7 @@ export class AgentRunner {
     }
 
     const modelName = this.cfg.modelName || 'gemini-2.5-flash';
-    const genAI = new GoogleGenerativeAI(this.cfg.apiKey);
-    const model = genAI.getGenerativeModel({
-      model: modelName,
-      systemInstruction: buildAgentSystemPrompt(tracks),
-      tools: [
-        {
-          functionDeclarations: [
-            TOOL_LIST_TRACKS,
-            TOOL_GET_TRACK_DETAILS,
-            TOOL_AUDITION_REGION,
-            TOOL_PROPOSE
-          ]
-        }
-      ]
-    });
+    const systemInstruction = buildAgentSystemPrompt(tracks);
 
     const telemetrySummary = telemetry
       ? JSON.stringify({
@@ -357,23 +453,31 @@ export class AgentRunner {
         })
       : 'No live telemetry.';
 
-    const chat = model.startChat({ history: [] });
-    const initialMessage =
+    const initialUserText =
       `Engineer request: "${userPrompt}"\n\nLive telemetry:\n${telemetrySummary}\n\n` +
-      `Instructions: First call list_tracks to inspect the DAW session, then optionally audition_region ` +
-      `to listen to a section, then propose_mix_adjustment with ONLY plugins that actually exist on the tracks.`;
+      `Instructions: First call list_tracks to inspect the DAW session, then optionally ` +
+      `audition_region to listen to a section, then propose_mix_adjustment with ONLY plugins ` +
+      `that actually exist on the tracks.`;
 
+    let history: HistoryTurn[] = [];
     let lastText = '';
     let finalProposal: MixActionProposal | undefined;
     const allWarnings: string[] = [];
     const MAX_ITERATIONS = 8;
 
     try {
-      let result = await chat.sendMessage(initialMessage);
+      // ── First turn: user prompt ────────────────────────────────────────────
+      const firstParts: PartUnion[] = [{ text: initialUserText }];
+      let { response, history: h } = await this.sendWithRetry(
+        modelName,
+        systemInstruction,
+        history,
+        firstParts
+      );
+      history = h;
 
       for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
-        const response = result.response;
-
+        // Collect text output from this model turn
         const textParts =
           response.candidates?.[0]?.content?.parts?.filter(
             (p: { text?: string }) => typeof p.text === 'string' && p.text.trim().length > 0
@@ -382,48 +486,65 @@ export class AgentRunner {
           lastText = textParts.map((p: { text?: string }) => p.text ?? '').join('');
         }
 
-        const calls = response.functionCalls();
+        // Check for function calls
+        const calls = response.functionCalls?.() ?? [];
         if (!calls || calls.length === 0) {
+          // No tool calls – model is done
           break;
         }
 
-        const toolResults: Array<{ functionResponse: { name: string; response: unknown } }> = [];
+        // ── Execute tools ──────────────────────────────────────────────────
+        const functionResponseParts: PartUnion[] = [];
 
         for (const call of calls) {
           const args = (call.args ?? {}) as Record<string, unknown>;
 
+          let toolResult: string;
           if (call.name === 'list_tracks') {
-            const res = await this.executeListTracks();
-            toolResults.push({ functionResponse: { name: 'list_tracks', response: { result: res } } });
+            toolResult = await this.executeListTracks();
           } else if (call.name === 'get_track_details') {
-            const res = await this.executeGetTrackDetails(String(args.trackName ?? ''));
-            toolResults.push({ functionResponse: { name: 'get_track_details', response: { result: res } } });
+            toolResult = await this.executeGetTrackDetails(String(args.trackName ?? ''));
           } else if (call.name === 'audition_region') {
-            const res = await this.executeAuditionRegion(
+            toolResult = await this.executeAuditionRegion(
               Number(args.startBar ?? 1),
               Number(args.durationSeconds ?? 8)
             );
-            toolResults.push({ functionResponse: { name: 'audition_region', response: { result: res } } });
           } else if (call.name === 'propose_mix_adjustment') {
             const { proposal, warnings } = this.validateProposalAgainstStrips(args, tracks);
             allWarnings.push(...warnings);
-            const normalized = normalizeProposal(proposal, tracks);
-            finalProposal = normalized;
-            toolResults.push({
-              functionResponse: {
-                name: 'propose_mix_adjustment',
-                response: { result: 'Proposal received and validated. Please provide a brief musical explanation.' }
-              }
-            });
+            finalProposal = normalizeProposal(proposal, tracks);
+            toolResult =
+              'Proposal received and validated. Please provide a brief musical explanation for the engineer.';
+          } else {
+            toolResult = JSON.stringify({ error: `Unknown tool: ${call.name}` });
           }
+
+          // Role-Fix: inject as { functionResponse } part inside a USER turn
+          functionResponseParts.push({
+            functionResponse: {
+              name: call.name,
+              response: { result: toolResult }
+            }
+          } as PartUnion);
+
+          // 300 ms inter-tool pause to spread quota load across the free tier
+          await agentDelay(300);
         }
 
-        result = await chat.sendMessage(toolResults as any);
+        // ── Send function responses back to Gemini as a USER turn ──────────
+        const { response: nextResponse, history: nextHistory } = await this.sendWithRetry(
+          modelName,
+          systemInstruction,
+          history,
+          functionResponseParts
+        );
+        response = nextResponse;
+        history = nextHistory;
 
+        // If we have a final proposal, collect the last explanatory text and stop
         if (finalProposal) {
-          const finalResponse = result.response;
           const finalParts =
-            finalResponse.candidates?.[0]?.content?.parts?.filter(
+            response.candidates?.[0]?.content?.parts?.filter(
               (p: { text?: string }) => typeof p.text === 'string' && p.text.trim().length > 0
             ) ?? [];
           if (finalParts.length > 0) {
@@ -462,7 +583,9 @@ function buildAgentSystemPrompt(tracks: TrackDescriptor[]): string {
   const trackList = tracks
     .map(
       (t) =>
-        `- "${t.name}" (${t.type}): ${t.insertSlots.filter(Boolean).map((s) => s!.pluginName).join(', ') || 'no inserts'}`
+        `- "${t.name}" (${t.type}): ${
+          t.insertSlots.filter(Boolean).map((s) => s!.pluginName).join(', ') || 'no inserts'
+        }`
     )
     .join('\n');
 
@@ -480,7 +603,7 @@ function buildAgentSystemPrompt(tracks: TrackDescriptor[]): string {
 }
 
 // --------------------------------------------------------------------------
-// Internal types for channel strip data from Tauri
+// Internal types
 // --------------------------------------------------------------------------
 
 interface InsertInfo {
@@ -492,3 +615,15 @@ interface ChannelStrip {
   trackName: string;
   inserts?: InsertInfo[];
 }
+
+/** Minimal history turn type that mirrors the Gemini SDK's Content */
+interface HistoryTurn {
+  role: 'user' | 'model';
+  parts: PartUnion[];
+}
+
+/** Union of all Part variants used by the SDK */
+type PartUnion =
+  | { text: string }
+  | { functionCall: { name: string; args: Record<string, unknown> } }
+  | { functionResponse: { name: string; response: unknown } };
