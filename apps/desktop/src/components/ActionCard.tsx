@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { MixActionProposal } from '@mixing-buddy/shared-types';
-import { Check, X, Volume2, Sparkles, Pin, RotateCcw } from 'lucide-react';
+import { Check, X, Volume2, Sparkles, Pin, RotateCcw, RotateCw } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface ActionCardProps {
@@ -10,6 +10,7 @@ interface ActionCardProps {
   onAudition: (id: string) => void;
   onTogglePin?: (id: string) => void;
   onRollbackDelta?: (proposalId: string, deltaIndex: number) => Promise<void> | void;
+  onRedoDelta?: (proposalId: string, deltaIndex: number) => Promise<void> | void;
 }
 
 export const ActionCard: React.FC<ActionCardProps> = ({
@@ -18,7 +19,8 @@ export const ActionCard: React.FC<ActionCardProps> = ({
   onReject,
   onAudition,
   onTogglePin,
-  onRollbackDelta
+  onRollbackDelta,
+  onRedoDelta
 }) => {
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(() =>
     new Set(proposal.deltas.map((_, i) => i))
@@ -189,12 +191,28 @@ export const ActionCard: React.FC<ActionCardProps> = ({
                     {delta.proposedValue.toFixed(1)} {delta.unit}
                   </span>
 
-                  {/* Nach dem Anwenden: Granularer Rollback-Button oder "Zurückgesetzt" */}
+                  {/* Nach dem Anwenden: Granularer Rollback-Button (Undo) oder Wiederherstellen (Redo) */}
                   {isApplied && (
                     isRolledBack ? (
-                      <span className="text-[10px] text-amber-400 font-sans italic px-1.5 py-0.5 rounded bg-amber-950/40 border border-amber-500/30 ml-1">
-                        Zurückgesetzt
-                      </span>
+                      <button
+                        type="button"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (onRedoDelta) {
+                            await onRedoDelta(proposal.id, idx);
+                          }
+                          setRolledBackIndices((prev) => {
+                            const next = new Set(prev);
+                            next.delete(idx);
+                            return next;
+                          });
+                        }}
+                        className="flex items-center gap-1 text-[10px] text-emerald-300 hover:text-emerald-200 font-sans px-2 py-0.5 rounded bg-emerald-950/60 hover:bg-emerald-900/70 border border-emerald-500/40 ml-1 transition-colors shadow-sm"
+                        title="Diesen Wert erneut in der DAW anwenden (Redo)"
+                      >
+                        <RotateCw className="w-3 h-3" />
+                        <span>Wiederherstellen</span>
+                      </button>
                     ) : (
                       <button
                         type="button"

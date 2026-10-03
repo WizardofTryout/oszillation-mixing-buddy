@@ -698,14 +698,10 @@ export class AgentRunner {
         const targetVal = Number(d.targetValue ?? 0);
         const deltaVal = Number(d.deltaDb ?? d.delta ?? 0);
         if (isFader && (targetVal <= -50 || deltaVal < -20 || targetVal === -100)) {
-          warnings.push(
-            `⚠️ Absenkung auf ${targetVal} dB ignoriert: Signalpegel im ausgewählten Bereich zu niedrig für Gain-Staging.`
-          );
           return false;
         }
         return true;
       });
-      warnings.push('Signalpegel im ausgewählten Bereich zu niedrig für Gain-Staging.');
     }
 
     const sanitizedDeltas = filteredDeltas.map((d) => {
@@ -721,6 +717,21 @@ export class AgentRunner {
           );
           delta.trackName = resolved;
         }
+      }
+
+      // ── Channel-Strip Parameter Guard (Punkt 1) ───────────────────────────
+      const paramNameStr = String(delta.parameterName ?? delta.parameter ?? '').toLowerCase().trim();
+      const pluginNameStr = typeof delta.pluginName === 'string' ? delta.pluginName.trim() : undefined;
+
+      const isChannelStripParam = (param: string, plugin?: string) =>
+        ['pan', 'fader_db', 'fader', 'volume', 'pegel', 'mute', 'solo'].includes(param.toLowerCase()) ||
+        plugin?.toLowerCase() === 'mixer';
+
+      if (isChannelStripParam(paramNameStr, pluginNameStr)) {
+        // Überspringe die Suche nach einem Insert-Plugin vollständig!
+        delta.pluginName = undefined;
+        delta.slotIndex = undefined;
+        return delta;
       }
 
       // ── Plugin Slot Matching ───────────────────────────────────────────────
@@ -1170,12 +1181,13 @@ export class AgentRunner {
             );
             const liveTelem = this.cfg.getTelemetry?.() ?? telemetry;
             const currentLufs = liveTelem?.loudness?.momentaryLufs ?? -70.0;
-            if (currentLufs <= -70.0) {
+            // Echter Stille-Pegel nur bei < -45 LUFS:
+            if (currentLufs < -45.0) {
               isSilentPlayback = true;
               toolResult = JSON.stringify({
                 success: true,
                 momentaryLufs: currentLufs,
-                notice: 'Signalpegel im ausgewählten Bereich zu niedrig für Gain-Staging. Schlage KEINE Absenkung auf -100 dB vor!'
+                notice: 'Signalpegel sehr niedrig (< -45 LUFS). Falls Voranhebung gewünscht, schlage ein Fader-Delta vor.'
               });
             }
           } else if (call.name === 'propose_mix_adjustment') {
@@ -1271,12 +1283,8 @@ export class AgentRunner {
     }
 
     const checkTelem = this.cfg.getTelemetry?.() ?? telemetry;
-    if (auditionExecuted && (checkTelem?.loudness?.momentaryLufs ?? -70.0) <= -70.0) {
+    if (auditionExecuted && (checkTelem?.loudness?.momentaryLufs ?? -70.0) < -45.0) {
       isSilentPlayback = true;
-    }
-
-    if (isSilentPlayback && !allWarnings.some((w) => w.includes('Signalpegel im ausgewählten Bereich zu niedrig'))) {
-      allWarnings.push('⚠️ Signalpegel im ausgewählten Bereich zu niedrig für Gain-Staging.');
     }
 
     const warningText = allWarnings.length > 0 ? '\n\n' + allWarnings.join('\n') : '';
@@ -1356,7 +1364,11 @@ function buildAgentSystemPrompt(): string {
     `   - Turn 3: Generate final 'propose_mix_adjustment'\n` +
     `3. IMMEDIATELY TERMINATE: Once 'propose_mix_adjustment' is submitted, execution stops immediately.\n` +
     `4. Always use exact track names directly from the DAW UI (e.g. 'Studio Grand', 'Motown Revisited'). NEVER invent or abbreviate names.\n` +
-    `5. Provide a clear, professional musical rationale in 'rationale' inside 'propose_mix_adjustment'.\n`
+    `5. FORMATTING REQUIREMENT (TYPOGRAPHY & RATIONALE):\n` +
+    `   In 'rationale' and 'description', format explanations using concise bullet points instead of long blocks of text. Highlight key values clearly:\n` +
+    `   - Spurnamen hervorheben (z.B. **Studio Grand**)\n` +
+    `   - Frequenzen & Pegel präzise benennen (z.B. **+1.5 dB** bei **2.5 kHz**, Pan **-25%** L)\n` +
+    `   - Keine endlosen Textblöcke ohne Zeilenumbrüche.\n`
   );
 }
 

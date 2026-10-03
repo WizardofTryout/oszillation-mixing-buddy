@@ -785,6 +785,47 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleRedoSingleDelta = async (proposalId: string, deltaIndex: number) => {
+    const proposal = proposals.find((p) => p.id === proposalId);
+    if (!proposal) return;
+    const delta = proposal.deltas[deltaIndex];
+    if (!delta) return;
+
+    const isLogic = activeDaw.toLowerCase().includes('logic');
+    const dawLabel = isLogic ? 'Logic Pro' : activeDaw === 'none' ? 'Standalone' : 'Nuendo';
+
+    try {
+      setChatLog(`↷ Wiederherstellen (${dawLabel}): Wende ${delta.trackName} › ${delta.parameterName} erneut an (${delta.proposedValue} ${delta.unit ?? 'dB'})...`);
+      await invoke('apply_daw_action', {
+        action: {
+          track: delta.trackName,
+          trackName: delta.trackName,
+          parameter: delta.parameterName || 'EQ',
+          value: delta.proposedValue ?? 0.0,
+          currentValue: delta.currentValue ?? 0.0,
+          isRestore: false,
+          unit: delta.unit ?? 'dB',
+          isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo'),
+          pluginName: delta.pluginName || null,
+          slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
+        },
+        trackName: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
+        parameter: delta.parameterName || 'EQ',
+        value: delta.proposedValue ?? 0.0,
+        currentValue: delta.currentValue ?? 0.0,
+        isRestore: false,
+        unit: delta.unit ?? 'dB',
+        isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo'),
+        pluginName: delta.pluginName || null,
+        slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
+      });
+
+      setChatLog(`✅ Wiederhergestellt: ${delta.parameterName} erneut auf ${delta.proposedValue} ${delta.unit ?? 'dB'} gesetzt.`);
+    } catch (err: unknown) {
+      setChatLog(`❌ Fehler beim Wiederherstellen: ${String(err)}`);
+    }
+  };
+
   const handleUndoLastAction = async () => {
     if (historyStack.length === 0) return;
     const [actionToUndo, ...remainingStack] = historyStack;
@@ -1692,6 +1733,7 @@ export const App: React.FC = () => {
                     onAudition={handleAuditionAction}
                     onTogglePin={handleTogglePin}
                     onRollbackDelta={handleRollbackSingleDelta}
+                    onRedoDelta={handleRedoSingleDelta}
                   />
                 ))}
               </div>
