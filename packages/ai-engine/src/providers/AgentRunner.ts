@@ -983,6 +983,8 @@ export class AgentRunner {
     // ── Punkt 2: Deterministische Lokale Audition VOR dem ersten API-Call ─────
     const auditionIntent = parseAuditionIntent(userPrompt);
     let auditionExecuted = false;
+    let detectedStartBar: number | undefined = auditionIntent?.startBar;
+    let detectedEndBar: number | undefined = auditionIntent?.endBar;
 
     if (auditionIntent) {
       const { startBar, endBar, durationSeconds } = auditionIntent;
@@ -1145,8 +1147,12 @@ export class AgentRunner {
             toolResult = await this.executeGetTrackDetails(String(args.trackName ?? ''));
           } else if (call.name === 'audition_region') {
             auditionExecuted = true;
+            const sb = Number(args.startBar ?? 1);
+            const eb = args.endBar !== undefined ? Number(args.endBar) : (sb + 4);
+            detectedStartBar = sb;
+            detectedEndBar = eb;
             toolResult = await this.executeAuditionRegion(
-              Number(args.startBar ?? 1),
+              sb,
               args.endBar !== undefined ? Number(args.endBar) : undefined,
               args.durationSeconds !== undefined ? Number(args.durationSeconds) : undefined,
               activeSignal,
@@ -1170,6 +1176,17 @@ export class AgentRunner {
             );
             allWarnings.push(...warnings);
             finalProposal = normalizeProposal(proposal, tracks);
+            if (finalProposal) {
+              const start = (args.startBar !== undefined ? Number(args.startBar) : undefined) ?? detectedStartBar;
+              const end = (args.endBar !== undefined ? Number(args.endBar) : undefined) ?? detectedEndBar ?? (start !== undefined ? start + 4 : undefined);
+              if (start !== undefined) {
+                finalProposal.startBar = start;
+                finalProposal.endBar = end;
+              }
+              if (args.description && typeof args.description === 'string') {
+                finalProposal.description = args.description;
+              }
+            }
             if (!lastText && finalProposal) {
               lastText = finalProposal.rationale || finalProposal.title || 'Vorschlag erfolgreich generiert.';
             }
@@ -1275,6 +1292,11 @@ export class AgentRunner {
       this.cfg.onUsageUpdate?.(usageStats);
     } catch (e) {
       console.warn('onUsageUpdate error:', e);
+    }
+
+    if (finalProposal && finalProposal.startBar === undefined && detectedStartBar !== undefined) {
+      finalProposal.startBar = detectedStartBar;
+      finalProposal.endBar = detectedEndBar ?? (detectedStartBar + 4);
     }
 
     return {

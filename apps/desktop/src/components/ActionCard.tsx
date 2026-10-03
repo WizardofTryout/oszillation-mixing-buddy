@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { MixActionProposal } from '@mixing-buddy/shared-types';
 import { Check, X, Volume2, Sparkles, Pin, RotateCcw } from 'lucide-react';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface ActionCardProps {
   proposal: MixActionProposal;
@@ -102,15 +103,11 @@ export const ActionCard: React.FC<ActionCardProps> = ({
       {/* Rationale – collapsible accordion with markdown rendering */}
       {(() => {
         const [rationaleOpen, setRationaleOpen] = React.useState(false);
-        const shortRationale = proposal.rationale.length > 140
-          ? proposal.rationale.slice(0, 140).replace(/\s\S*$/, '') + '…'
-          : proposal.rationale;
-        // Minimal inline markdown: **bold**, *italic*, `code`
-        const renderMarkdown = (text: string) =>
-          text
-            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.+?)\*/g, '<em>$1</em>')
-            .replace(/`(.+?)`/g, '<code class="bg-slate-800 px-1 rounded text-teal-300 text-[10px]">$1</code>');
+        const fullContent = (proposal as any).description || proposal.rationale || '';
+        const shortRationale = fullContent.length > 140
+          ? fullContent.slice(0, 140).replace(/\s\S*$/, '') + '…'
+          : fullContent;
+
         return (
           <div className="bg-[#121418] rounded border border-darkBorder/60 overflow-hidden">
             <button
@@ -118,10 +115,9 @@ export const ActionCard: React.FC<ActionCardProps> = ({
               onClick={() => setRationaleOpen((o) => !o)}
               className="w-full flex items-start justify-between gap-2 px-2.5 py-2 text-left hover:bg-slate-800/40 transition-colors"
             >
-              <p
-                className="text-xs text-slate-300 leading-relaxed flex-1"
-                dangerouslySetInnerHTML={{ __html: renderMarkdown(rationaleOpen ? proposal.rationale : shortRationale) }}
-              />
+              <div className="text-xs text-slate-300 leading-relaxed space-y-1 flex-1">
+                <MarkdownRenderer content={rationaleOpen ? fullContent : shortRationale} />
+              </div>
               <span className="text-slate-500 text-[10px] mt-0.5 shrink-0 select-none">
                 {rationaleOpen ? '▲' : '▼'}
               </span>

@@ -881,9 +881,43 @@ export const App: React.FC = () => {
     const dawLabel = isLogic ? 'Logic Pro' : 'Nuendo';
     const previousStatus = prop.status;
 
-    // Startposition aus dem Proposal oder Fallback auf Bar 9 (musikalisch relevanter Start)
-    const startBar: number = (prop as any).startBar ?? 9;
-    const endBar: number = (prop as any).endBar ?? (startBar + 4);
+    // Dynamischer Bar-Resolver für A/B Listen (kein hardcoded Takt 9!)
+    let startBar: number | undefined = (prop as any).startBar;
+
+    // Fallback A: Suche im Kartentitel oder der Beschreibung nach Taktangaben ("ab Takt 17", "Takt 25")
+    if (!startBar) {
+      const match = prop.title?.match(/(?:ab\s+Takt|Takt)\s+(\d+)/i) || 
+                    (prop as any).description?.match(/(?:ab\s+Takt|Takt)\s+(\d+)/i) ||
+                    prop.rationale?.match(/(?:ab\s+Takt|Takt)\s+(\d+)/i);
+      if (match && match[1]) {
+        startBar = parseInt(match[1], 10);
+      }
+    }
+
+    // Fallback B: Falls immer noch undefined, hole aktuellen Playhead aus Logic Pro
+    // oder nutze 1 als Default (NIEMALS hardcoded 9!)
+    if (!startBar) {
+      try {
+        const status: any = await invoke('daw_get_current_bar');
+        startBar = status?.bar ?? 1;
+      } catch (_) {
+        startBar = 1;
+      }
+    }
+    const effectiveStartBar: number = startBar ?? 1;
+    const endBar: number = (prop as any).endBar ?? (effectiveStartBar + 4);
+
+    // Snapshot aller Parameter vor dem Umschalten zur deterministischen Wiederherstellung
+    const auditionSnapshot = prop.deltas.map((delta) => ({
+      track: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
+      parameter: delta.parameterName || 'EQ',
+      previousValue: delta.currentValue ?? 0.0,
+      proposedValue: delta.proposedValue ?? 0.0,
+      pluginName: delta.pluginName || null,
+      slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null,
+      unit: delta.unit ?? 'dB',
+      isMaster: (delta.trackName || '').toLowerCase().includes('master') || (delta.trackName || '').toLowerCase().includes('stereo'),
+    }));
 
     setProposals((prev) =>
       prev.map((p) => (p.id === id ? { ...p, status: 'auditioning' } : p))
@@ -896,32 +930,36 @@ export const App: React.FC = () => {
 
         // 1. Cycle-Bereich auf den Ziel-Takt setzen, Playhead positionieren und abspielen:
         try {
-          await invoke('daw_set_cycle_region', { start: startBar, end: endBar });
+          await invoke('daw_set_cycle_region', { start: effectiveStartBar, end: endBar });
         } catch (_) {}
         try {
-          await invoke('daw_locate_bar', { bar: startBar, keepCycle: true });
+          await invoke('daw_locate_bar', { bar: effectiveStartBar, keepCycle: true });
           await invoke('daw_play');
         } catch (playErr) {
           console.warn('[A/B] Playback-Start fehlgeschlagen:', playErr);
         }
 
         for (const delta of prop.deltas) {
-          const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
-          await invoke('toggle_plugin_bypass', {
-            trackName: targetTrack,
-            slotIndex: delta.slotIndex ?? 0
-          });
+          try {
+            const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
+            await invoke('toggle_plugin_bypass', {
+              trackName: targetTrack,
+              slotIndex: delta.slotIndex ?? 0
+            });
+          } catch (bypassErr) {
+            console.warn('[A/B] toggle_plugin_bypass fehlgeschlagen:', bypassErr);
+          }
         }
       } else {
         // ── A/B via Parameter-Preview (noch nicht angewendete Karte) ───────
-        setChatLog(`🎧 A/B Audition: "${prop.title}" (${prop.deltas.length} Änderungen) – 6s Vorschau in ${dawLabel}...`);
+        setChatLog(`🎧 A/B Audition: "${prop.title}" (${prop.deltas.length} Änderungen) – 6s Vorschau in ${dawLabel} (Takt ${effectiveStartBar}-${endBar})...`);
 
         // 1. Cycle-Bereich auf den Ziel-Takt setzen, Playhead positionieren und abspielen:
         try {
-          await invoke('daw_set_cycle_region', { start: startBar, end: endBar });
+          await invoke('daw_set_cycle_region', { start: effectiveStartBar, end: endBar });
         } catch (_) {}
         try {
-          await invoke('daw_locate_bar', { bar: startBar, keepCycle: true });
+          await invoke('daw_locate_bar', { bar: effectiveStartBar, keepCycle: true });
           await invoke('daw_play');
         } catch (playErr) {
           console.warn('[A/B] Playback-Start fehlgeschlagen:', playErr);
@@ -941,24 +979,67 @@ export const App: React.FC = () => {
         }
 
         // 3. Testwerte in die DAW schreiben
-        for (const delta of prop.deltas) {
-          const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
-          await invoke('apply_daw_action', {
-            trackName: targetTrack,
-            parameter: delta.parameterName || 'EQ',
-            value: delta.proposedValue ?? 0.0,
-            currentValue: delta.currentValue ?? 0.0,
-            isRestore: false,
-            unit: delta.unit ?? 'dB',
-            isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo'),
-            pluginName: delta.pluginName || null,
-            slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
-          });
+        for (const mod of auditionSnapshot) {
+          try {
+            await invoke('apply_daw_action', {
+              action: {
+                track: mod.track,
+                trackName: mod.track,
+                parameter: mod.parameter,
+                value: mod.proposedValue,
+                currentValue: mod.previousValue,
+                pluginName: mod.pluginName,
+                slotIndex: mod.slotIndex,
+                isRestore: false,
+                unit: mod.unit,
+                isMaster: mod.isMaster
+              },
+              trackName: mod.track,
+              parameter: mod.parameter,
+              value: mod.proposedValue,
+              currentValue: mod.previousValue,
+              isRestore: false,
+              unit: mod.unit,
+              isMaster: mod.isMaster,
+              pluginName: mod.pluginName,
+              slotIndex: mod.slotIndex
+            });
+          } catch (applyErr) {
+            console.warn(`[A/B] Fehler beim Vorhören von ${mod.track} -> ${mod.parameter}:`, applyErr);
+          }
         }
       }
     } catch (err: unknown) {
       // Playback sicherheitshalber stoppen bei Fehler
-      invoke('daw_stop').catch(() => {});
+      await invoke('daw_stop').catch(() => {});
+      // Falls bereits Regler verstellt wurden, Snapshot zurückrollen
+      for (const mod of auditionSnapshot) {
+        try {
+          await invoke('apply_daw_action', {
+            action: {
+              track: mod.track,
+              trackName: mod.track,
+              parameter: mod.parameter,
+              value: mod.previousValue,
+              currentValue: mod.proposedValue,
+              pluginName: mod.pluginName,
+              slotIndex: mod.slotIndex,
+              isRestore: true,
+              unit: mod.unit,
+              isMaster: mod.isMaster
+            },
+            trackName: mod.track,
+            parameter: mod.parameter,
+            value: mod.previousValue,
+            currentValue: mod.proposedValue,
+            isRestore: true,
+            unit: mod.unit,
+            isMaster: mod.isMaster,
+            pluginName: mod.pluginName,
+            slotIndex: mod.slotIndex
+          });
+        } catch (_) {}
+      }
       setProposals((prev) =>
         prev.map((p) => (p.id === id ? { ...p, status: previousStatus } : p))
       );
@@ -970,36 +1051,54 @@ export const App: React.FC = () => {
     setTimeout(async () => {
       try {
         // 1. Playback stoppen (A/B Restore Garantie: isRestore=true, darf NIEMALS blockiert werden)
-        try {
-          await invoke('daw_stop');
-        } catch (stopErr) {
+        await invoke('daw_stop').catch((stopErr) => {
           console.warn('[A/B] daw_stop fehlgeschlagen:', stopErr);
-        }
+        });
 
         if (previousStatus === 'applied') {
           // Bypass wieder zurückschalten
           for (const delta of prop.deltas) {
-            const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
-            await invoke('toggle_plugin_bypass', {
-              trackName: targetTrack,
-              slotIndex: delta.slotIndex ?? 0
-            });
+            try {
+              const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
+              await invoke('toggle_plugin_bypass', {
+                trackName: targetTrack,
+                slotIndex: delta.slotIndex ?? 0
+              });
+            } catch (bErr) {
+              console.error(`[Restore] Fehler beim Bypass-Rücksetzen für ${delta.trackName}:`, bErr);
+            }
           }
         } else {
-          // 2. Testwerte zurückrollen (isRestore: true)
-          for (const delta of prop.deltas) {
-            const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
-            await invoke('apply_daw_action', {
-              trackName: targetTrack,
-              parameter: delta.parameterName || 'EQ',
-              value: delta.currentValue ?? 0.0,
-              currentValue: delta.proposedValue ?? 0.0,
-              isRestore: true,
-              unit: delta.unit ?? 'dB',
-              isMaster: targetTrack.toLowerCase().includes('master') || targetTrack.toLowerCase().includes('stereo'),
-              pluginName: delta.pluginName || null,
-              slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
-            });
+          // 2. Testwerte isoliert pro Parameter zurücksetzen (isRestore: true)
+          // Verhindert, dass ein Einzelfehler das Zurücksetzen anderer Regler/Fader blockiert!
+          for (const mod of auditionSnapshot) {
+            try {
+              await invoke('apply_daw_action', {
+                action: {
+                  track: mod.track,
+                  trackName: mod.track,
+                  parameter: mod.parameter,
+                  value: mod.previousValue,
+                  currentValue: mod.proposedValue,
+                  pluginName: mod.pluginName,
+                  slotIndex: mod.slotIndex,
+                  isRestore: true,
+                  unit: mod.unit,
+                  isMaster: mod.isMaster
+                },
+                trackName: mod.track,
+                parameter: mod.parameter,
+                value: mod.previousValue,
+                currentValue: mod.proposedValue,
+                isRestore: true,
+                unit: mod.unit,
+                isMaster: mod.isMaster,
+                pluginName: mod.pluginName,
+                slotIndex: mod.slotIndex
+              });
+            } catch (err) {
+              console.error(`[Restore] Fehler beim Zurücksetzen von ${mod.track} -> ${mod.parameter}:`, err);
+            }
           }
 
           // 3. Temporäres Sidechain-Routing wieder aufheben

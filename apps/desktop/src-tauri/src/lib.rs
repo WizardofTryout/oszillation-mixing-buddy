@@ -922,20 +922,45 @@ fn humanize_ax_error(raw_err: &str) -> String {
     }
 }
 
-#[tauri::command]
-async fn apply_daw_action(
-    track_name: String,
-    parameter: String,
-    value: f32,
-    unit: String,
-    is_master: bool,
+#[derive(serde::Deserialize, Debug, Clone)]
+struct DawActionPayload {
+    track: Option<String>,
+    track_name: Option<String>,
+    parameter: Option<String>,
+    value: Option<f32>,
+    unit: Option<String>,
+    is_master: Option<bool>,
     current_value: Option<f32>,
     is_restore: Option<bool>,
     plugin_name: Option<String>,
     slot_index: Option<u64>,
+}
+
+#[tauri::command]
+async fn apply_daw_action(
+    track_name: Option<String>,
+    parameter: Option<String>,
+    value: Option<f32>,
+    unit: Option<String>,
+    is_master: Option<bool>,
+    current_value: Option<f32>,
+    is_restore: Option<bool>,
+    plugin_name: Option<String>,
+    slot_index: Option<u64>,
+    action: Option<DawActionPayload>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let track_name = resolve_canonical_track_name(&track_name);
+    let track_raw = action.as_ref().and_then(|a| a.track.clone().or_else(|| a.track_name.clone())).or(track_name).unwrap_or_default();
+    let track_name = resolve_canonical_track_name(&track_raw);
+    let parameter = action.as_ref().and_then(|a| a.parameter.clone()).or(parameter).unwrap_or_default();
+    let value = action.as_ref().and_then(|a| a.value).or(value).unwrap_or(0.0);
+    let unit = action.as_ref().and_then(|a| a.unit.clone()).or(unit).unwrap_or_else(|| "dB".to_string());
+    let is_master = action.as_ref().and_then(|a| a.is_master).or(is_master).unwrap_or(false);
+    let current_value = action.as_ref().and_then(|a| a.current_value).or(current_value);
+    let is_restore = action.as_ref().and_then(|a| a.is_restore).or(is_restore);
+    let plugin_name = action.as_ref().and_then(|a| a.plugin_name.clone()).or(plugin_name);
+    let slot_index = action.as_ref().and_then(|a| a.slot_index).or(slot_index);
+
     let active_daw = {
         let mut detector = state.daw_detector.lock().unwrap();
         detector.detect_active_daw()
@@ -976,25 +1001,12 @@ async fn apply_daw_action(
         };
 
         // Primary execution path: MCU Pitchbend (0xE0 + ch_idx)
-        // Eliminates the "Mixer nicht sichtbar" error on A/B restore and fader adjustments
-        let mcu_res = state
+        let _ = state
             .ipc_server
             .mcu_bridge
             .set_fader_volume(ch_idx, sanitized_volume);
 
-        if let Ok(()) = mcu_res {
-            let ch_display = if ch_idx == 8 {
-                "Master".to_string()
-            } else {
-                format!("Kanal {}", ch_idx + 1)
-            };
-            return Ok(format!(
-                "Fader '{}' ({}) → {:.1} dB via MCU-Pitchbend ({})",
-                track_name, ch_display, sanitized_volume, active_daw.display_name()
-            ));
-        }
-
-        // Secondary fallback on macOS: AX bridge (only if MCU failed)
+        // Secondary / Direct verification on macOS: AX bridge (ensures Logic Pro textfield & slider update)
         #[cfg(target_os = "macos")]
         {
             let bridge_path = resolve_bridge_binary();
@@ -1009,7 +1021,7 @@ async fn apply_daw_action(
                 if let Ok(res) = execute_logic_ax_bridge(&bridge_path, &fader_args) {
                     if res.get("success").and_then(|v| v.as_bool()) == Some(true) {
                         return Ok(format!(
-                            "Fader '{}' → {:.1} dB via AX-Mixer ({})",
+                            "Fader '{}' → {:.1} dB ({})",
                             track_name, sanitized_volume, active_daw.display_name()
                         ));
                     }
@@ -1921,35 +1933,48 @@ async fn daw_locate_bar(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     if bar < 1 {
-        return Err("Bar number must be >= 1".to_string());
+        return Err("Bar must be >= 1".to_string());
     }
     #[cfg(target_os = "macos")]
     {
-        let keep = keep_cycle.unwrap_or(false);
-        if !keep {
-            let _ = state.ipc_server.mcu_bridge.ensure_cycle_off();
-        }
-
-        // 2. Exaktes Bar-Locate via native Swift Bridge (Gehe zu Position ...)
         let bridge_path = resolve_bridge_binary();
-        let mut args = vec!["transport-locate".to_string(), "--bar".to_string(), bar.to_string()];
-        if keep {
-            args.push("--keep-cycle".to_string());
-            args.push("true".to_string());
-        }
-        match execute_logic_ax_bridge(&bridge_path, &args) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                eprintln!("⚠️ [daw_locate_bar] Bridge locate failed ({}), falling back to MCU locate", e);
-                state.ipc_server.mcu_bridge.send_transport_locate(bar)
+        if bridge_path.exists() {
+            let mut locate_args = vec!["transport-locate".to_string(), "--bar".to_string(), bar.to_string()];
+            if keep_cycle.unwrap_or(false) {
+                locate_args.push("--keep-cycle".to_string());
             }
+            let res = execute_logic_ax_bridge(&bridge_path, &locate_args);
+            match res {
+                Ok(json) if json.get("success").and_then(|v| v.as_bool()) == Some(false) => {
+                    let err = json.get("error").and_then(|v| v.as_str()).unwrap_or("transport-locate failed");
+                    eprintln!("⚠️ [daw_locate_bar] Bridge locate failed ({}), falling back to MCU locate", err);
+                    let _ = state.ipc_server.mcu_bridge.send_transport_locate(bar);
+                }
+                Err(e) => {
+                    eprintln!("⚠️ [daw_locate_bar] Bridge locate failed ({}), falling back to MCU locate", e);
+                    let _ = state.ipc_server.mcu_bridge.send_transport_locate(bar);
+                }
+                _ => {}
+            }
+        } else {
+            let _ = state.ipc_server.mcu_bridge.send_transport_locate(bar);
         }
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (bar, keep_cycle, state);
-        Ok(())
     }
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct CurrentBarStatus {
+    bar: u32,
+}
+
+#[tauri::command]
+async fn daw_get_current_bar(_state: State<'_, AppState>) -> Result<CurrentBarStatus, String> {
+    Ok(CurrentBarStatus { bar: 1 })
 }
 
 pub fn log_mb_desktop(msg: &str) {
@@ -2424,13 +2449,14 @@ async fn restore_fader(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     apply_daw_action(
-        track_name,
-        "volume".to_string(),
-        value,
-        "dB".to_string(),
-        is_master.unwrap_or(false),
+        Some(track_name),
+        Some("volume".to_string()),
+        Some(value),
+        Some("dB".to_string()),
+        Some(is_master.unwrap_or(false)),
         None,
         Some(true),
+        None,
         None,
         None,
         state,
@@ -2684,6 +2710,7 @@ pub fn run() {
             daw_stop,
             daw_locate_bar,
             daw_set_cycle_region,
+            daw_get_current_bar,
             audition_region,
             set_folder_expanded,
             select_track,

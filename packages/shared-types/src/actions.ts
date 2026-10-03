@@ -37,6 +37,9 @@ export interface MixActionProposal {
   status: 'pending' | 'applied' | 'rejected' | 'auditioning';
   isPinned?: boolean;
   sidechainRoute?: SidechainRoute;
+  startBar?: number;
+  endBar?: number;
+  description?: string;
 }
 
 export interface SafetyShieldBounds {

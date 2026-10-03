@@ -84,12 +84,14 @@ impl SafetyGuard {
 
         // 3. Rate-limiting parameter bursts (min 5ms between modifications per track)
         let now = Instant::now();
-        if let Some(&last_time) = self.last_action_times.get(track_id) {
-            if now.duration_since(last_time) < Duration::from_millis(5) {
-                return Err(format!(
-                    "Rate Limiter: Parameter burst detected on track '{}'. Throttling.",
-                    track_id
-                ));
+        if !is_restore {
+            if let Some(&last_time) = self.last_action_times.get(track_id) {
+                if now.duration_since(last_time) < Duration::from_millis(5) {
+                    return Err(format!(
+                        "Rate Limiter: Parameter burst detected on track '{}'. Throttling.",
+                        track_id
+                    ));
+                }
             }
         }
 
