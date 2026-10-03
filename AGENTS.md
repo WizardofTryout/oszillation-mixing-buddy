@@ -103,7 +103,7 @@ In Tonstudios arbeiten Nutzer mit hohen Abhörlautstärken. Falsche Pegelsprüng
 2. **Pacing:**
    - Zwischen aufeinanderfolgenden API-Calls liegt ein Mindestabstand von 1.200 ms.
 3. **Automatischer 503-Modell-Shift:**
-   - Meldet Google einen `503 ServiceUnavailable` ("Model overloaded") für `gemini-3.8-flash`, schaltet die Session automatisch auf `gemini-2.5-flash` um, statt den Ablauf abzubrechen.
+   - Meldet Google einen `503 ServiceUnavailable` ("Model overloaded") für `gemini-3.8-flash`, schaltet die Session automatisch auf `gemini-3.5-flash-lite` (oder `gemini-3.5-flash`) um. Legacy-Modelle (2.5) sind strikt verboten!
 
 ---
 
@@ -134,7 +134,7 @@ In Tonstudios arbeiten Nutzer mit hohen Abhörlautstärken. Falsche Pegelsprüng
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Steinberg-Mixing-Buddy** (2517 symbols, 5247 relationships, 216 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Steinberg-Mixing-Buddy** (2534 symbols, 5279 relationships, 218 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

@@ -12,7 +12,7 @@ export interface TokenUsageBadgeProps {
 export const TokenUsageBadge: React.FC<TokenUsageBadgeProps> = ({
   usage,
   activeKeysCount = 1,
-  modelName = 'gemini-2.5-flash',
+  modelName = 'gemini-3.8-flash',
   onReset
 }) => {
   const [isOpen, setIsOpen] = useState(false);

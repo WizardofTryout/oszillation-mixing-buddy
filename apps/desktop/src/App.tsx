@@ -64,9 +64,9 @@ export const App: React.FC = () => {
   const [modelName, setModelName] = useState<string>(() => {
     try {
       const saved = localStorage.getItem('omb_preferred_model');
-      if (saved && saved.trim()) return saved.trim();
+      if (saved && saved.trim() && !saved.includes('2.5') && !saved.includes('1.5')) return saved.trim();
     } catch {}
-    return 'gemini-2.5-flash';
+    return 'gemini-3.8-flash';
   });
   const [apiKey, setApiKey] = useState<string>(() => {
     try {

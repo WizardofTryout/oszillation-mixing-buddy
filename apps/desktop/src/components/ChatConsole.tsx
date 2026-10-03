@@ -224,7 +224,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           const runner = new AgentRunner({
             apiKey: keyList[0] || effectiveApiKey,
             apiKeys: keyList,
-            modelName: modelName.trim() || 'gemini-2.5-flash',
+            modelName: modelName.trim() || 'gemini-3.8-flash',
             invokeTauri: (command, args) => invoke(command, args),
             onUsageUpdate: (stats) => {
               setUsageStats(stats);
@@ -524,7 +524,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           <TokenUsageBadge
             usage={usageStats}
             activeKeysCount={apiKey ? apiKey.split(/[\n,;]+/).map((k) => k.trim()).filter(Boolean).length : 1}
-            modelName={modelName.trim() || 'gemini-2.5-flash'}
+            modelName={modelName.trim() || 'gemini-3.8-flash'}
             onReset={() => {
               AgentRunner.resetSessionTokens();
               setUsageStats(null);

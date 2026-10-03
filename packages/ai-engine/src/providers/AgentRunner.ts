@@ -244,11 +244,11 @@ export class AgentRunner {
   /** Current key index in apiKeys pool */
   public currentKeyIndex = 0;
   /** Active model (supports 503 resilient fallback) */
-  public activeModel: string = 'gemini-2.5-flash';
+  public activeModel: string = 'gemini-3.8-flash';
 
   constructor(config: AgentRunnerConfig) {
     this.cfg = config;
-    this.activeModel = config.modelName || 'gemini-2.5-flash';
+    this.activeModel = config.modelName || 'gemini-3.8-flash';
     // Build key pool from apiKeys or fall back to apiKey
     if (config.apiKeys && config.apiKeys.length > 0) {
       this.apiKeys = config.apiKeys.map((k) => k.trim()).filter((k) => k.length > 5);
@@ -845,7 +845,7 @@ export class AgentRunner {
 
   /**
    * Calls model.generateContent({ contents }) with proactive key rotation,
-   * 80% quota capping (4 RPM), 1.200 ms pacing, and automatic 503 model fallback to gemini-2.5-flash.
+   * 80% quota capping (4 RPM), 1.200 ms pacing, and automatic 503 model fallback to gemini-3.5-flash-lite / gemini-3.5-flash.
    */
   private async generateContentWithRetry(
     systemInstruction: string,
@@ -898,11 +898,21 @@ export class AgentRunner {
           msg.includes('quota');
         const isQuotaOrOverload = is503 || is429;
 
-        // Resilienter Modell-Fallback bei 503 ServiceUnavailable
+        // Resilienter Modell-Fallback bei 503 ServiceUnavailable (Kaskade: 3.8-flash -> 3.5-flash-lite -> 3.5-flash)
         if (is503) {
-          if (this.activeModel !== 'gemini-2.5-flash') {
+          if (this.activeModel !== 'gemini-3.5-flash-lite' && this.activeModel !== 'gemini-3.5-flash') {
             const prevModel = this.activeModel;
-            this.activeModel = 'gemini-2.5-flash';
+            this.activeModel = 'gemini-3.5-flash-lite';
+            const fallbackStep = this.addStep(
+              '🔄',
+              `${prevModel} überlastet · Wechsle automatisch auf ${this.activeModel}...`
+            );
+            await agentDelay(800, signal);
+            this.resolveStep(fallbackStep, `Auf ${this.activeModel} umgeschaltet`);
+            continue;
+          } else if (this.activeModel === 'gemini-3.5-flash-lite') {
+            const prevModel = this.activeModel;
+            this.activeModel = 'gemini-3.5-flash';
             const fallbackStep = this.addStep(
               '🔄',
               `${prevModel} überlastet · Wechsle automatisch auf ${this.activeModel}...`
@@ -962,7 +972,7 @@ export class AgentRunner {
       };
     }
 
-    this.activeModel = this.cfg.modelName || 'gemini-2.5-flash';
+    this.activeModel = this.cfg.modelName || 'gemini-3.8-flash';
     const systemInstruction = buildAgentSystemPrompt();
 
     // ── Zero-Turn Local Prefetching (0 API tokens, 0ms latency) ──────────────

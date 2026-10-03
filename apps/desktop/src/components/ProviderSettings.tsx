@@ -130,12 +130,20 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
     message: string;
   }>({ status: 'idle', message: '' });
 
-  const [availableModels, setAvailableModels] = useState<string[]>([
-    'gemini-3.8-flash',
-    'gemini-3.5-flash-lite',
-    'gemini-2.5-flash',
-    'gemini-2.5-pro'
-  ]);
+interface GeminiModelDef {
+  id: string;
+  name: string;
+  description: string;
+}
+
+const DEFAULT_GEMINI_MODELS: GeminiModelDef[] = [
+  { id: 'gemini-3.8-flash', name: 'gemini-3.8-flash ⚡', description: 'Neuestes Standardmodell für Mixing & Tool-Calling' },
+  { id: 'gemini-3.5-flash-lite', name: 'gemini-3.5-flash-lite ⚡', description: 'Hochverfügbar, unempfindlich gegen Bursts' },
+  { id: 'gemini-3.5-flash', name: 'gemini-3.5-flash ⚡', description: 'Stabiles Multimodal-Flash' },
+  { id: 'gemini-3.1-pro', name: 'gemini-3.1-pro 🧠', description: 'Deep Reasoning & Komplexe Akustik' }
+];
+
+  const [availableModels, setAvailableModels] = useState<GeminiModelDef[]>(DEFAULT_GEMINI_MODELS);
   const [isCustomModel, setIsCustomModel] = useState(false);
 
   // Initialize structured key rows from props
@@ -256,14 +264,25 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
       setKeyRows(updatedRows);
 
       if (discoveredModelSet.size > 0) {
-        const sorted = Array.from(discoveredModelSet).sort((a, b) => {
-          const aFlash = a.includes('flash') ? 0 : 1;
-          const bFlash = b.includes('flash') ? 0 : 1;
-          return aFlash - bFlash;
+        const filtered = Array.from(discoveredModelSet)
+          .filter((m) => !m.includes('2.5') && !m.includes('1.5') && !m.includes('2.0'))
+          .sort((a, b) => {
+            const aFlash = a.includes('flash') ? 0 : 1;
+            const bFlash = b.includes('flash') ? 0 : 1;
+            return aFlash - bFlash;
+          });
+        const updatedList: GeminiModelDef[] = filtered.map((id) => {
+          const known = DEFAULT_GEMINI_MODELS.find((dm) => dm.id === id);
+          if (known) return known;
+          return {
+            id,
+            name: `${id} ${id.includes('flash') ? '⚡' : '🧠'}`,
+            description: id.includes('flash') ? 'Hochperformantes Flash-Modell' : 'Reasoning Pro-Modell'
+          };
         });
-        setAvailableModels(sorted);
-        if (!sorted.includes(modelName)) {
-          onModelNameChange?.(sorted[0]);
+        setAvailableModels(updatedList.length > 0 ? updatedList : DEFAULT_GEMINI_MODELS);
+        if (!filtered.includes(modelName)) {
+          onModelNameChange?.(filtered[0] || 'gemini-3.8-flash');
         }
       }
 
@@ -785,24 +804,34 @@ export const ProviderSettings: React.FC<ProviderSettingsProps> = ({
                 {currentMode === 'byok_gemini' ? (
                   <div className="flex items-center gap-2">
                     {!isCustomModel ? (
-                      <select
-                        value={modelName}
-                        onChange={(e) => {
-                          if (e.target.value === '__custom__') {
-                            setIsCustomModel(true);
-                          } else {
-                            onModelNameChange?.(e.target.value);
-                          }
-                        }}
-                        className="bg-[#1a1c23] border border-darkBorder px-2.5 py-1 rounded text-slate-200 font-mono text-xs focus:outline-none focus:border-blue-500"
-                      >
-                        {availableModels.map((m) => (
-                          <option key={m} value={m}>
-                            {m} {m.includes('flash') ? '⚡' : '🧠'}
-                          </option>
-                        ))}
-                        <option value="__custom__">+ Manuelles Modell...</option>
-                      </select>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={modelName}
+                          onChange={(e) => {
+                            if (e.target.value === '__custom__') {
+                              setIsCustomModel(true);
+                            } else {
+                              onModelNameChange?.(e.target.value);
+                            }
+                          }}
+                          className="bg-[#1a1c23] border border-darkBorder px-2.5 py-1 rounded text-slate-200 font-mono text-xs focus:outline-none focus:border-blue-500"
+                        >
+                          {availableModels.map((m) => (
+                            <option key={m.id} value={m.id} title={m.description}>
+                              {m.name}
+                            </option>
+                          ))}
+                          <option value="__custom__">+ Manuelles Modell...</option>
+                        </select>
+                        {(() => {
+                          const activeDesc = availableModels.find((m) => m.id === modelName)?.description;
+                          return activeDesc ? (
+                            <span className="text-[11px] text-slate-400 font-sans hidden md:inline-block max-w-[280px] truncate" title={activeDesc}>
+                              {activeDesc}
+                            </span>
+                          ) : null;
+                        })()}
+                      </div>
                     ) : (
                       <div className="flex items-center gap-1">
                         <input

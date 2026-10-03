@@ -339,7 +339,7 @@ export async function synthesizeMixingSkill(
 
     // Call Gemini API via fetch (Google AI endpoint)
     const activeKey = keyList[0] || key;
-    const model = options?.modelName || 'gemini-2.5-flash';
+    const model = options?.modelName || 'gemini-3.8-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${activeKey}`;
 
     const body = {

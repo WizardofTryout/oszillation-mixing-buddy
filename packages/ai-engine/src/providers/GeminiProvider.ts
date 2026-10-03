@@ -119,7 +119,7 @@ export class GeminiProvider implements AIProvider {
    */
   public static async fetchAvailableModels(apiKey: string): Promise<string[]> {
     if (!apiKey || apiKey.trim().length <= 5) {
-      return ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-pro'];
+      return ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-pro'];
     }
 
     try {
@@ -135,6 +135,8 @@ export class GeminiProvider implements AIProvider {
                 Array.isArray(m.supportedGenerationMethods) &&
                 m.supportedGenerationMethods.includes('generateContent') &&
                 !m.name.includes('1.5') && // Exclude legacy deprecated 1.5 models
+                !m.name.includes('2.5') && // Exclude legacy 2.5 models
+                !m.name.includes('2.0') &&
                 !m.name.includes('embedding') &&
                 !m.name.includes('aqa')
             )
@@ -154,7 +156,7 @@ export class GeminiProvider implements AIProvider {
       // Fallback to modern stable models
     }
 
-    return ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.5-pro'];
+    return ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-pro'];
   }
 
   public async analyzeMix(
@@ -179,7 +181,7 @@ export class GeminiProvider implements AIProvider {
    */
   public static async validateKey(
     key: string,
-    preferredModel = 'gemini-2.5-flash'
+    preferredModel = 'gemini-3.8-flash'
   ): Promise<KeyValidationResult> {
     const snippet = key.length > 8 ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : key;
     try {
@@ -187,7 +189,7 @@ export class GeminiProvider implements AIProvider {
       const models = await GeminiProvider.fetchAvailableModels(key);
       const testModel = models.includes(preferredModel)
         ? preferredModel
-        : models.find((m) => m.includes('flash')) || models[0] || 'gemini-2.5-flash';
+        : models.find((m) => m.includes('flash')) || models[0] || 'gemini-3.8-flash';
 
       // 2. Perform lightweight countTokens verification
       const genAI = new GoogleGenerativeAI(key);
@@ -307,13 +309,13 @@ export class GeminiProvider implements AIProvider {
     };
 
     // Candidate fallback models when flagship model hits 503 ("high demand")
-    // Dynamically populated from discovered models; strictly excludes deprecated 1.5 models
+    // Dynamically populated from discovered models; strictly excludes deprecated legacy models
     const fallbackList = this.availableModels.filter(
-      (m) => m !== this.modelName && m.includes('flash') && !m.includes('1.5')
+      (m) => m !== this.modelName && m.includes('flash') && !m.includes('1.5') && !m.includes('2.5') && !m.includes('2.0')
     );
-    const safeDefaults = ['gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+    const safeDefaults = ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.8-flash'];
     const modelCandidates = Array.from(
-      new Set([this.modelName, ...fallbackList, ...safeDefaults].filter((m) => !m.includes('1.5')))
+      new Set([this.modelName, ...fallbackList, ...safeDefaults].filter((m) => !m.includes('1.5') && !m.includes('2.5') && !m.includes('2.0')))
     );
 
     let lastError: Error | null = null;
