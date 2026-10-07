@@ -4,8 +4,10 @@ import type {
   ReferenceTrackProfile,
   MetrologyTelemetryFrame,
   MixActionProposal,
-  TrackDescriptor
+  TrackDescriptor,
+  TargetProfile
 } from '@mixing-buddy/shared-types';
+import { SpectrumAnalyzer } from './SpectrumAnalyzer.js';
 import { RtaGraph } from './RtaGraph.js';
 
 export interface SpectrumRTAProps {
@@ -17,6 +19,10 @@ export interface SpectrumRTAProps {
   liveLufs?: number;
   /** Currently active reference track profile */
   activeReference?: ReferenceTrackProfile | null;
+  /** 32-band reference spectrum override */
+  referenceSpectrum?: number[];
+  /** Target profile */
+  targetProfile?: TargetProfile | null;
   /** Callback to set or clear active reference profile */
   onSelectReference?: (profile: ReferenceTrackProfile | null) => void;
   /** Callback to open the full ReferenceTrackModal */
@@ -27,28 +33,8 @@ export interface SpectrumRTAProps {
   availableTracks?: TrackDescriptor[];
 }
 
-export const SpectrumRTA: React.FC<SpectrumRTAProps> = ({
-  spectrum,
-  telemetry,
-  liveLufs,
-  activeReference = null,
-  onSelectReference = () => {},
-  onOpenReferenceModal = () => {},
-  onGenerateProposal,
-  availableTracks
-}) => {
-  return (
-    <RtaGraph
-      spectrum={spectrum}
-      telemetry={telemetry}
-      liveLufs={liveLufs}
-      activeReference={activeReference}
-      onSelectReference={onSelectReference}
-      onOpenReferenceModal={onOpenReferenceModal}
-      onGenerateProposal={onGenerateProposal}
-      availableTracks={availableTracks}
-    />
-  );
+export const SpectrumRTA: React.FC<SpectrumRTAProps> = (props) => {
+  return <SpectrumAnalyzer {...props} />;
 };
 
-export { RtaGraph };
+export { SpectrumAnalyzer, RtaGraph };

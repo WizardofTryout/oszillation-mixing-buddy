@@ -21,7 +21,7 @@ import {
 } from '@mixing-buddy/ai-engine';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { SpectrumRTA } from './components/SpectrumRTA.js';
+import { SpectrumAnalyzer } from './components/SpectrumAnalyzer.js';
 import { LoudnessHUD } from './components/LoudnessHUD.js';
 import { ActionCard } from './components/ActionCard.js';
 import { ProviderSettings, type ProviderMode } from './components/ProviderSettings.js';
@@ -1657,7 +1657,7 @@ export const App: React.FC = () => {
             OMB
           </div>
           <span className="font-bold text-sm tracking-wide text-slate-100">OSZILLATION MIXING BUDDY</span>
-          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.8</span>
+          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.9</span>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -2081,11 +2081,13 @@ export const App: React.FC = () => {
         {/* Meters Grid: Spectrum RTA + EBU R128 HUD + Chat Console */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 flex flex-col gap-4">
-            <SpectrumRTA
+            <SpectrumAnalyzer
               spectrum={telemetry?.spectrum}
               telemetry={telemetry}
               liveLufs={telemetry?.loudness?.integratedLufs}
               activeReference={activeReferenceProfile}
+              referenceSpectrum={activeReferenceProfile?.frequencyBands ?? (activeReferenceProfile as any)?.spectrum32Bands}
+              targetProfile={activeTargetProfile}
               onSelectReference={setActiveReferenceProfile}
               onOpenReferenceModal={() => setIsReferenceModalOpen(true)}
               onGenerateProposal={handleProposalFromChat}

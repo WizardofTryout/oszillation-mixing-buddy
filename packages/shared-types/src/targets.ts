@@ -21,6 +21,8 @@ export type GenreProfileId =
   | 'acoustic_jazz'
   | 'custom_crossover';
 
+export type GenreProfile = GenreProfileId;
+
 export interface SpectralZoneTargets {
   subBassDb: number; // 20 - 60 Hz
   bassDb: number;    // 60 - 250 Hz
@@ -416,3 +418,96 @@ export function resolveScopeFromTrackName(trackName: string): TargetScope {
 
   return 'mix_bus'; // Konservativer Fallback
 }
+
+/**
+ * 32-band ISO center frequencies (Hz) from 20 Hz to 20 kHz
+ */
+export const ISO_CENTER_FREQS = [
+  20, 25, 31.5, 40, 50, 63, 80, 100,
+  125, 160, 200, 250, 315, 400, 500, 630,
+  800, 1000, 1250, 1600, 2000, 2500, 3150, 4000,
+  5000, 6300, 8000, 10000, 12500, 16000, 18000, 20000
+];
+
+/**
+ * Baseline nominal spectral curve across 32 bands at reference target loudness
+ */
+const BASELINE_SPECTRAL_CURVE_32: readonly number[] = [
+  -38.0, -32.0, -27.0, -24.0, -22.5, -22.0, -22.0, -22.5,
+  -23.5, -24.5, -25.5, -26.5, -27.5, -28.5, -29.5, -30.5,
+  -31.5, -32.5, -33.5, -34.5, -36.0, -37.5, -39.0, -41.0,
+  -43.0, -45.0, -47.0, -49.5, -52.0, -55.0, -57.5, -60.0
+];
+
+/**
+ * Hilfsfunktion: Berechnet für die 32 ISO-Centerfrequenzen (20 Hz bis 20 kHz)
+ * den mathematischen Sollpegel in dB (-60 bis -10 dB).
+ *
+ * Nutzt die Frequenz-Zonen-Offsets aus resolveTargetProfile(genre, scope)
+ * (Sub-Bass, Bass, Low-Mid, High-Mid, Air) und bildet eine glatte,
+ * stetig interpolierte Hüllkurve über alle 32 Punkte.
+ */
+export function calculateTargetCurve32Bands(
+  genre: GenreProfile,
+  scope: TargetScope
+): number[] {
+  const profile = resolveTargetProfile(genre, scope);
+  const { subBassDb, bassDb, lowMidDb, highMidDb, airDb } = profile.spectralTargets;
+
+  // Key anchor points mapping band indices to the 5 spectral target offsets
+  // Band 0: 20 Hz, Band 2: 31.5 Hz (Sub-Bass anchor)
+  // Band 7: 100 Hz (Bass anchor)
+  // Band 14: 500 Hz (Low-Mid anchor)
+  // Band 21: 2.5 kHz (High-Mid anchor)
+  // Band 27: 10 kHz (Air anchor), Band 31: 20 kHz
+  const anchors = [
+    { index: 0, offset: subBassDb },
+    { index: 2, offset: subBassDb },
+    { index: 7, offset: bassDb },
+    { index: 14, offset: lowMidDb },
+    { index: 21, offset: highMidDb },
+    { index: 27, offset: airDb },
+    { index: 31, offset: airDb }
+  ];
+
+  // Piecewise linear interpolation across the 32 bands
+  const bandOffsets: number[] = new Array(32).fill(0);
+  for (let b = 0; b < 32; b++) {
+    let lower = anchors[0];
+    let upper = anchors[anchors.length - 1];
+    for (let a = 0; a < anchors.length - 1; a++) {
+      if (b >= anchors[a].index && b <= anchors[a + 1].index) {
+        lower = anchors[a];
+        upper = anchors[a + 1];
+        break;
+      }
+    }
+
+    if (lower.index === upper.index) {
+      bandOffsets[b] = lower.offset;
+    } else {
+      const t = (b - lower.index) / (upper.index - lower.index);
+      bandOffsets[b] = lower.offset + t * (upper.offset - lower.offset);
+    }
+  }
+
+  // Combine baseline envelope with interpolated offsets
+  const rawCurve: number[] = new Array(32).fill(0);
+  for (let i = 0; i < 32; i++) {
+    rawCurve[i] = (BASELINE_SPECTRAL_CURVE_32[i] ?? -30) + bandOffsets[i];
+  }
+
+  // 3-point moving average smoothing (0.25, 0.5, 0.25)
+  const smoothed: number[] = new Array(32).fill(0);
+  for (let i = 0; i < 32; i++) {
+    const prev = i > 0 ? rawCurve[i - 1] : rawCurve[i];
+    const curr = rawCurve[i];
+    const next = i < 31 ? rawCurve[i + 1] : rawCurve[i];
+    const avg = 0.25 * prev + 0.5 * curr + 0.25 * next;
+    // Clamped strictly to -60 dB to -10 dB corridor
+    smoothed[i] = Math.max(-60, Math.min(-10, Math.round(avg * 10) / 10));
+  }
+
+  return smoothed;
+}
+
