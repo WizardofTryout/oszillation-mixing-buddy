@@ -52,6 +52,10 @@ public:
   juce::String getGenreProfile() const;
   juce::String getCustomNotes() const;
   double getTargetLufs() const;
+  // Track identity & DAW integration (Phase 3 Multi-Instance)
+  void updateTrackProperties(const TrackProperties &properties) override;
+  juce::String getInstanceId() const noexcept { return mInstanceId; }
+  juce::String getTrackName() const noexcept { return mTrackName; }
 
   // Metrology readouts
   LoudnessSnapshot getLoudnessSnapshot() const {
@@ -75,6 +79,9 @@ private:
   juce::String currentGenreProfile { "pop_radio" };
   juce::String currentCustomNotes { "" };
   double currentTargetLufs { -12.0 };
+
+  juce::String mInstanceId;
+  juce::String mTrackName { "Track" };
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PluginProcessor)
 };

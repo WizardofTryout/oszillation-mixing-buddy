@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   type MetrologyTelemetryFrame,
+  type MeterSatellite,
   type MixActionProposal,
   type TrackDescriptor,
   type TargetProfile,
@@ -34,7 +35,7 @@ import {
 } from './components/PluginVaultModal.js';
 import { SkillManagerModal } from './components/SkillManagerModal.js';
 import { SkillWizardModal } from './components/SkillWizardModal.js';
-import { Sliders, Headphones, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu } from 'lucide-react';
+import { Sliders, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<MetrologyTelemetryFrame | null>(null);
@@ -155,6 +156,62 @@ export const App: React.FC = () => {
   } | null>(null);
   const prevMeterTrackRef = useRef<string | null>(null);
   const askedClarificationTrackRef = useRef<string | null>(null);
+
+  // Phase 3: Multi-Instance Satellites State & Router
+  const [satellites, setSatellites] = useState<MeterSatellite[]>([]);
+  const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
+  const [isSatelliteDropdownOpen, setIsSatelliteDropdownOpen] = useState<boolean>(false);
+  const satelliteDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  // Fetch initial satellites and listen for satellite registry updates
+  useEffect(() => {
+    invoke<MeterSatellite[]>('get_meter_satellites')
+      .then((sats) => {
+        if (Array.isArray(sats)) {
+          setSatellites(sats);
+        }
+      })
+      .catch(() => {});
+
+    let unlisten: (() => void) | null = null;
+    listen<MeterSatellite[]>('meter_instances_changed', (event) => {
+      if (Array.isArray(event.payload)) {
+        setSatellites(event.payload);
+      }
+    }).then((un) => {
+      unlisten = un;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  // Click-outside listener for satellite dropdown
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (satelliteDropdownRef.current && !satelliteDropdownRef.current.contains(e.target as Node)) {
+        setIsSatelliteDropdownOpen(false);
+      }
+    };
+    if (isSatelliteDropdownOpen) {
+      window.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      window.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isSatelliteDropdownOpen]);
+
+  const handleSelectSatellite = async (sat: MeterSatellite) => {
+    setActiveInstanceId(sat.instance_id);
+    setActiveMeterTrack(sat.track_name);
+    setIsSatelliteDropdownOpen(false);
+    try {
+      await invoke('set_active_meter_instance', { instanceId: sat.instance_id });
+    } catch (e) {
+      console.error('Failed to set active meter instance', e);
+    }
+  };
 
   // Persistent map of user-confirmed track roles across sessions and plugin movements
   const [learnedTrackScopes, setLearnedTrackScopes] = useState<Record<string, TargetScope>>(() => {
@@ -639,6 +696,15 @@ export const App: React.FC = () => {
           setTelemetry(frame);
           setIsAudioConnected(true);
           resetStreamWatchdog();
+
+          if (frame.instanceId && !activeInstanceId) {
+            setActiveInstanceId(frame.instanceId);
+          }
+          if (frame.trackName && (!activeMeterTrack || activeInstanceId === frame.instanceId)) {
+            if (activeMeterTrack !== frame.trackName) {
+              setActiveMeterTrack(frame.trackName);
+            }
+          }
 
           if (genreProfile === 'auto_detect') {
             const detected = detectGenreFromTelemetry(frame);
@@ -1574,7 +1640,7 @@ export const App: React.FC = () => {
             OMB
           </div>
           <span className="font-bold text-sm tracking-wide text-slate-100">OSZILLATION MIXING BUDDY</span>
-          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.7</span>
+          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.8</span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -1741,20 +1807,129 @@ export const App: React.FC = () => {
             <span>Skills ({skillsCount})</span>
           </button>
 
-          <div className="flex items-center gap-1.5 text-xs text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded">
-            <Headphones className={`w-3.5 h-3.5 ${telemetry ? 'text-emerald-400' : isAudioConnected ? 'text-yellow-400' : 'text-slate-500'}`} />
-            {telemetry ? (
-              <span className="text-emerald-400 font-medium">
-                {activeMeterTrack
-                  ? (activeMeterTrack.toLowerCase().includes('stereo out') || activeMeterTrack.toLowerCase() === 'master'
-                      ? `${activeMeterTrack} (Master)`
-                      : activeMeterTrack)
-                  : 'Master Bus'} · {(telemetry.sampleRate / 1000).toFixed(1)} kHz
+          {/* Phase 3: Multi-Instance Abhörpunkt-Selektor */}
+          <div className="relative" ref={satelliteDropdownRef}>
+            <button
+              type="button"
+              onClick={() => setIsSatelliteDropdownOpen(!isSatelliteDropdownOpen)}
+              className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded transition-all cursor-pointer border ${
+                telemetry || satellites.length > 0
+                  ? 'bg-slate-800/90 hover:bg-slate-700/90 text-emerald-400 border-emerald-500/30 hover:border-emerald-500/50 shadow-sm'
+                  : isAudioConnected
+                  ? 'bg-slate-800/90 text-yellow-400 border-yellow-500/30'
+                  : 'bg-slate-800/60 text-rose-400 border-rose-500/20'
+              }`}
+              title="Aktiver Abhörpunkt / Meter-Plugin Satelliten-Manager"
+            >
+              <Target className={`w-3.5 h-3.5 shrink-0 ${telemetry || satellites.length > 0 ? 'text-emerald-400' : isAudioConnected ? 'text-yellow-400' : 'text-rose-400'}`} />
+              <span>
+                {telemetry || satellites.length > 0 ? (
+                  <>
+                    <span className="text-slate-300 font-normal">Abhörpunkt: </span>
+                    <span className="font-semibold text-emerald-300">
+                      {activeMeterTrack
+                        ? (activeMeterTrack.toLowerCase().includes('stereo out') || activeMeterTrack.toLowerCase() === 'master'
+                            ? `${activeMeterTrack} (Master)`
+                            : activeMeterTrack)
+                        : satellites[0]?.track_name || 'Master Bus'}
+                    </span>
+                    {telemetry && (
+                      <span className="text-slate-400 text-[11px] font-normal ml-1">
+                        · {(telemetry.sampleRate / 1000).toFixed(1)} kHz
+                      </span>
+                    )}
+                  </>
+                ) : isAudioConnected ? (
+                  'Streaming...'
+                ) : (
+                  'Telemetrie: Offline'
+                )}
               </span>
-            ) : isAudioConnected ? (
-              <span className="text-yellow-400 font-medium">Streaming...</span>
-            ) : (
-              <span className="text-rose-400 font-medium">Telemetrie: Offline</span>
+              <ChevronDown
+                className={`w-3.5 h-3.5 ml-0.5 text-slate-400 transition-transform duration-150 ${
+                  isSatelliteDropdownOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {/* Dropdown Menu */}
+            {isSatelliteDropdownOpen && (
+              <div className="absolute right-0 top-full mt-1.5 w-80 bg-[#16181d] border border-slate-700/90 rounded-lg shadow-2xl z-50 overflow-hidden backdrop-blur-md">
+                <div className="px-3 py-2 bg-slate-800/60 border-b border-slate-700/60 flex items-center justify-between text-[11px]">
+                  <span className="font-semibold text-slate-300 uppercase tracking-wider text-[10px]">
+                    Mess-Satelliten ({satellites.length})
+                  </span>
+                  <span className="flex items-center gap-1.5 text-emerald-400 text-[10px] font-mono">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    30 fps Live
+                  </span>
+                </div>
+
+                <div className="max-h-64 overflow-y-auto divide-y divide-slate-800/80">
+                  {satellites.length > 0 ? (
+                    satellites.map((sat) => {
+                      const isActive =
+                        sat.instance_id === activeInstanceId ||
+                        (!activeInstanceId && (sat.track_name === activeMeterTrack || sat === satellites[0]));
+                      const isMaster =
+                        sat.track_name.toLowerCase().includes('stereo out') ||
+                        sat.track_name.toLowerCase() === 'master';
+                      const label = isMaster ? `${sat.track_name} (Master)` : sat.track_name;
+                      const learned = learnedTrackScopes[sat.track_name.trim().toLowerCase()];
+
+                      return (
+                        <button
+                          key={sat.instance_id}
+                          type="button"
+                          onClick={() => handleSelectSatellite(sat)}
+                          className={`w-full text-left px-3 py-2.5 flex items-center justify-between transition-colors cursor-pointer ${
+                            isActive
+                              ? 'bg-emerald-950/40 hover:bg-emerald-950/60 text-white'
+                              : 'hover:bg-slate-800/60 text-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                            <span
+                              className={`w-2 h-2 rounded-full shrink-0 ${
+                                isActive ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-emerald-500/60'
+                              }`}
+                            />
+                            <div className="truncate">
+                              <div className="text-xs font-semibold truncate flex items-center gap-1.5">
+                                <span className={isActive ? 'text-emerald-300' : 'text-slate-200'}>
+                                  {label}
+                                </span>
+                                {learned && (
+                                  <span className="text-[10px] text-amber-300/90 font-mono bg-amber-950/60 px-1 py-0.2 rounded border border-amber-600/30">
+                                    💾 {learned}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                {(sat.sample_rate / 1000).toFixed(1)} kHz · ID: {sat.instance_id.slice(0, 8)}…
+                              </div>
+                            </div>
+                          </div>
+
+                          {isActive && (
+                            <span className="text-[10px] font-semibold tracking-wide uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
+                              Aktiver Fokus
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="px-3 py-4 text-center text-xs text-slate-400">
+                      {isAudioConnected ? (
+                        <span>Keine Multi-Instanz Satelliten erkannt.<br />Plugin auf Einzelspur aktiv.</span>
+                      ) : (
+                        <span>Kein 'MixingBuddyMeter' Plugin verbunden.<br />Bitte Plugin in Logic Pro laden.</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </div>

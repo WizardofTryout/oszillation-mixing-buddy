@@ -2782,6 +2782,17 @@ async fn set_sidechain(
     }
 }
 
+#[tauri::command]
+fn set_active_meter_instance(state: State<'_, AppState>, instance_id: String) -> Result<(), String> {
+    state.ipc_server.set_active_instance(instance_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_meter_satellites(state: State<'_, AppState>) -> Result<Vec<ipc_server::MeterSatellite>, String> {
+    Ok(state.ipc_server.get_satellites())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
@@ -2857,7 +2868,9 @@ pub fn run() {
             set_sidechain,
             restore_fader,
             set_track_state,
-            record_fader_ride
+            record_fader_ride,
+            set_active_meter_instance,
+            get_meter_satellites
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

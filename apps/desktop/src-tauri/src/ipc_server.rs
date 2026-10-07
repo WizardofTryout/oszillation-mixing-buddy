@@ -1,4 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,6 +21,14 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MeterSatellite {
+    pub instance_id: String,
+    pub track_name: String,
+    pub sample_rate: f64,
+    pub last_seen_ms: u64,
+}
+
 pub struct IPCServer {
     port: u16,
     tx: broadcast::Sender<String>,
@@ -27,6 +37,8 @@ pub struct IPCServer {
     last_telemetry_ms: Arc<AtomicU64>,
     is_streaming: Arc<AtomicBool>,
     pub mcu_bridge: Arc<McuBridge>,
+    pub satellites: Arc<Mutex<HashMap<String, MeterSatellite>>>,
+    pub active_instance_id: Arc<Mutex<Option<String>>>,
 }
 
 impl IPCServer {
@@ -41,6 +53,28 @@ impl IPCServer {
             last_telemetry_ms: Arc::new(AtomicU64::new(0)),
             is_streaming: Arc::new(AtomicBool::new(false)),
             mcu_bridge,
+            satellites: Arc::new(Mutex::new(HashMap::new())),
+            active_instance_id: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn get_satellites(&self) -> Vec<MeterSatellite> {
+        if let Ok(guard) = self.satellites.lock() {
+            guard.values().cloned().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn set_active_instance(&self, instance_id: String) {
+        if let Ok(mut guard) = self.active_instance_id.lock() {
+            *guard = Some(instance_id);
+        }
+        if let Ok(guard) = self.app_handle.lock() {
+            if let Some(ref handle) = *guard {
+                let list = self.get_satellites();
+                let _ = handle.emit("meter_instances_changed", &list);
+            }
         }
     }
 
@@ -67,6 +101,8 @@ impl IPCServer {
         let last_telemetry_ms = self.last_telemetry_ms.clone();
         let is_streaming = self.is_streaming.clone();
         let mcu_bridge = self.mcu_bridge.clone();
+        let satellites = self.satellites.clone();
+        let active_instance_id = self.active_instance_id.clone();
 
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_multi_thread()
@@ -94,10 +130,12 @@ impl IPCServer {
                     }
                 };
 
-                // Heartbeat Watchdog: if no telemetry frame arrives within > 1,500 ms, mark streaming: false
+                // Heartbeat Watchdog & Stale Satellite Cleanup (2.5s)
                 let watchdog_handle = app_handle.clone();
                 let watchdog_last_ms = last_telemetry_ms.clone();
                 let watchdog_streaming = is_streaming.clone();
+                let watchdog_satellites = satellites.clone();
+                let watchdog_active_id = active_instance_id.clone();
                 tokio::spawn(async move {
                     let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
                     loop {
@@ -116,6 +154,50 @@ impl IPCServer {
                                 }
                             }
                         }
+
+                        // Phase 3: Stale-Instance-Bereinigung (> 2500 ms)
+                        let mut changed = false;
+                        let mut sat_list = Vec::new();
+                        if let Ok(mut sats) = watchdog_satellites.lock() {
+                            let prev_len = sats.len();
+                            sats.retain(|_, sat| now.saturating_sub(sat.last_seen_ms) <= 2500);
+                            if sats.len() != prev_len {
+                                changed = true;
+                            }
+
+                            if let Ok(mut act_guard) = watchdog_active_id.lock() {
+                                let active_valid = act_guard.as_ref().map(|id| sats.contains_key(id)).unwrap_or(false);
+                                if !active_valid {
+                                    let mut best_id: Option<String> = None;
+                                    for (id, sat) in sats.iter() {
+                                        let lower = sat.track_name.to_lowercase();
+                                        if lower.contains("stereo out") || lower.contains("master") {
+                                            best_id = Some(id.clone());
+                                            break;
+                                        }
+                                    }
+                                    if best_id.is_none() {
+                                        best_id = sats.keys().next().cloned();
+                                    }
+                                    if *act_guard != best_id {
+                                        *act_guard = best_id;
+                                        changed = true;
+                                    }
+                                }
+                            }
+
+                            if changed {
+                                sat_list = sats.values().cloned().collect();
+                            }
+                        }
+
+                        if changed {
+                            if let Ok(guard) = watchdog_handle.lock() {
+                                if let Some(ref handle) = *guard {
+                                    let _ = handle.emit("meter_instances_changed", &sat_list);
+                                }
+                            }
+                        }
                     }
                 });
 
@@ -126,6 +208,8 @@ impl IPCServer {
                     let last_ms_clone = last_telemetry_ms.clone();
                     let streaming_clone = is_streaming.clone();
                     let mcu_clone = mcu_bridge.clone();
+                    let satellites_clone = satellites.clone();
+                    let active_id_clone = active_instance_id.clone();
                     tokio::spawn(async move {
                         handle_connection(
                             stream,
@@ -136,6 +220,8 @@ impl IPCServer {
                             last_ms_clone,
                             streaming_clone,
                             mcu_clone,
+                            satellites_clone,
+                            active_id_clone,
                         )
                         .await;
                     });
@@ -154,6 +240,8 @@ async fn handle_connection(
     last_telemetry_ms: Arc<AtomicU64>,
     is_streaming: Arc<AtomicBool>,
     mcu_bridge: Arc<McuBridge>,
+    satellites: Arc<Mutex<HashMap<String, MeterSatellite>>>,
+    active_instance_id: Arc<Mutex<Option<String>>>,
 ) {
     let mut peek_buf = [0u8; 1024];
     let n = match stream.peek(&mut peek_buf).await {
@@ -1064,51 +1152,27 @@ async fn handle_connection(
     while let Some(Ok(message)) = read.next().await {
         match message {
             Message::Text(text) => {
-                let _ = tx.send(text.to_string());
-                let is_project_sync = text.contains("\"project_context_sync\"") || text.contains("\"type\":\"project_context_sync\"");
-                let is_proposal = text.contains("\"deltas\"") || text.contains("\"action_proposal\"") || text.contains("\"proposal\"");
-                let is_execute = text.contains("\"execute\"") || text.contains("\"parameterName\"");
-                if !is_proposal && !is_execute && !is_project_sync {
-                    last_telemetry_ms.store(now_millis(), Ordering::Relaxed);
-                    is_streaming.store(true, Ordering::Relaxed);
-                }
-                if let Ok(guard) = app_handle.lock() {
-                    if let Some(ref handle) = *guard {
-                        if is_project_sync {
-                            let _ = handle.emit("project-context-sync", text.as_str());
-                        } else if is_proposal {
-                            let _ = handle.emit("new-action-proposal", text.as_str());
-                        } else if is_execute {
-                            let _ = handle.emit("execute-daw-action", text.as_str());
-                        } else {
-                            let _ = handle.emit("telemetry-frame", text.as_str());
-                        }
-                    }
-                }
+                process_incoming_meter_frame(
+                    &text,
+                    &satellites,
+                    &active_instance_id,
+                    &last_telemetry_ms,
+                    &is_streaming,
+                    &tx,
+                    &app_handle,
+                );
             }
             Message::Binary(bin) => {
                 if let Ok(text) = String::from_utf8(bin.to_vec()) {
-                    let _ = tx.send(text.clone());
-                    let is_project_sync = text.contains("\"project_context_sync\"") || text.contains("\"type\":\"project_context_sync\"");
-                    let is_proposal = text.contains("\"deltas\"") || text.contains("\"action_proposal\"") || text.contains("\"proposal\"");
-                    let is_execute = text.contains("\"execute\"") || text.contains("\"parameterName\"");
-                    if !is_proposal && !is_execute && !is_project_sync {
-                        last_telemetry_ms.store(now_millis(), Ordering::Relaxed);
-                        is_streaming.store(true, Ordering::Relaxed);
-                    }
-                    if let Ok(guard) = app_handle.lock() {
-                        if let Some(ref handle) = *guard {
-                            if is_project_sync {
-                                let _ = handle.emit("project-context-sync", text.as_str());
-                            } else if is_proposal {
-                                let _ = handle.emit("new-action-proposal", text.as_str());
-                            } else if is_execute {
-                                let _ = handle.emit("execute-daw-action", text.as_str());
-                            } else {
-                                let _ = handle.emit("telemetry-frame", text.as_str());
-                            }
-                        }
-                    }
+                    process_incoming_meter_frame(
+                        &text,
+                        &satellites,
+                        &active_instance_id,
+                        &last_telemetry_ms,
+                        &is_streaming,
+                        &tx,
+                        &app_handle,
+                    );
                 }
             }
             Message::Close(_) => break,
@@ -1118,6 +1182,158 @@ async fn handle_connection(
 
     forward_task.abort();
     println!("🔌 Client disconnected: {}", peer_addr);
+}
+
+fn process_incoming_meter_frame(
+    text: &str,
+    satellites: &Arc<Mutex<HashMap<String, MeterSatellite>>>,
+    active_instance_id: &Arc<Mutex<Option<String>>>,
+    last_telemetry_ms: &Arc<AtomicU64>,
+    is_streaming: &Arc<AtomicBool>,
+    tx: &broadcast::Sender<String>,
+    app_handle: &Arc<Mutex<Option<AppHandle>>>,
+) {
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
+        let msg_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        // 1. Unregister instance on plugin destructor
+        if msg_type == "instance_unregistered" {
+            if let Some(inst_id) = val.get("instanceId").and_then(|v| v.as_str()) {
+                let mut changed = false;
+                let mut sat_list = Vec::new();
+                if let Ok(mut sats) = satellites.lock() {
+                    if sats.remove(inst_id).is_some() {
+                        changed = true;
+                    }
+                    if let Ok(mut act_guard) = active_instance_id.lock() {
+                        if act_guard.as_deref() == Some(inst_id) {
+                            *act_guard = sats.keys().next().cloned();
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        sat_list = sats.values().cloned().collect();
+                    }
+                }
+                if changed {
+                    if let Ok(guard) = app_handle.lock() {
+                        if let Some(ref handle) = *guard {
+                            let _ = handle.emit("meter_instances_changed", &sat_list);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        // 2. Project Context Sync
+        if msg_type == "project_context_sync" || text.contains("\"project_context_sync\"") {
+            let _ = tx.send(text.to_string());
+            if let Ok(guard) = app_handle.lock() {
+                if let Some(ref handle) = *guard {
+                    let _ = handle.emit("project-context-sync", text);
+                }
+            }
+            return;
+        }
+
+        // 3. Action Proposal & Execute
+        if text.contains("\"deltas\"") || text.contains("\"action_proposal\"") || text.contains("\"proposal\"") {
+            let _ = tx.send(text.to_string());
+            if let Ok(guard) = app_handle.lock() {
+                if let Some(ref handle) = *guard {
+                    let _ = handle.emit("new-action-proposal", text);
+                }
+            }
+            return;
+        }
+        if text.contains("\"execute\"") || text.contains("\"parameterName\"") {
+            let _ = tx.send(text.to_string());
+            if let Ok(guard) = app_handle.lock() {
+                if let Some(ref handle) = *guard {
+                    let _ = handle.emit("execute-daw-action", text);
+                }
+            }
+            return;
+        }
+
+        // 4. Telemetry Frame
+        let is_telemetry = msg_type == "telemetry_frame" || val.get("loudness").is_some() || val.get("momentaryLufs").is_some();
+        if is_telemetry {
+            let inst_id = val.get("instanceId").and_then(|v| v.as_str()).unwrap_or("default").to_string();
+            let trk_name = val.get("trackName").and_then(|v| v.as_str()).unwrap_or("Track").to_string();
+            let srate = val.get("sampleRate").and_then(|v| v.as_f64()).unwrap_or(44100.0);
+            let now = now_millis();
+
+            let mut list_changed = false;
+            let mut sat_list = Vec::new();
+            if let Ok(mut sats) = satellites.lock() {
+                if let Some(entry) = sats.get_mut(&inst_id) {
+                    if entry.track_name != trk_name {
+                        entry.track_name = trk_name.clone();
+                        list_changed = true;
+                    }
+                    entry.sample_rate = srate;
+                    entry.last_seen_ms = now;
+                } else {
+                    sats.insert(inst_id.clone(), MeterSatellite {
+                        instance_id: inst_id.clone(),
+                        track_name: trk_name.clone(),
+                        sample_rate: srate,
+                        last_seen_ms: now,
+                    });
+                    list_changed = true;
+                }
+
+                if let Ok(mut act_guard) = active_instance_id.lock() {
+                    if act_guard.is_none() {
+                        *act_guard = Some(inst_id.clone());
+                        list_changed = true;
+                    }
+                }
+
+                if list_changed {
+                    sat_list = sats.values().cloned().collect();
+                }
+            }
+
+            if list_changed {
+                if let Ok(guard) = app_handle.lock() {
+                    if let Some(ref handle) = *guard {
+                        let _ = handle.emit("meter_instances_changed", &sat_list);
+                    }
+                }
+            }
+
+            // Route frame if it matches active_instance_id
+            let is_active = if let Ok(act_guard) = active_instance_id.lock() {
+                act_guard.as_ref() == Some(&inst_id) || act_guard.is_none()
+            } else {
+                true
+            };
+
+            if is_active {
+                last_telemetry_ms.store(now, Ordering::Relaxed);
+                is_streaming.store(true, Ordering::Relaxed);
+                let _ = tx.send(text.to_string());
+                if let Ok(guard) = app_handle.lock() {
+                    if let Some(ref handle) = *guard {
+                        let _ = handle.emit("telemetry-frame", text);
+                        let _ = handle.emit("telemetry_stream", text);
+                    }
+                }
+            }
+            return;
+        }
+    }
+
+    // Default fallback
+    let _ = tx.send(text.to_string());
+    if let Ok(guard) = app_handle.lock() {
+        if let Some(ref handle) = *guard {
+            let _ = handle.emit("telemetry-frame", text);
+        }
+    }
 }
 
 #[cfg(test)]

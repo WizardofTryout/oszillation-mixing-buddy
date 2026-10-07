@@ -31,6 +31,10 @@ public:
     void sendProjectContextSync(const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs);
     void setContextReceivedCallback(ContextCallback cb);
 
+    // Phase 3 Multi-Instance Identity
+    void setTrackIdentity(const juce::String& instanceId, const juce::String& trackName);
+    void sendInstanceUnregistered(const juce::String& instanceId);
+
     void run() override;
 
 private:
@@ -46,6 +50,10 @@ private:
     std::atomic<double> currentSampleRate { 44100.0 };
 
     juce::StreamingSocket socket;
+
+    mutable std::mutex identityMutex;
+    juce::String currentInstanceId;
+    juce::String currentTrackName { "Track" };
 
     mutable std::mutex dataMutex;
     LoudnessSnapshot latestLoudness;

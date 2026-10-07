@@ -98,6 +98,12 @@ PluginProcessor::PluginProcessor()
                            .withInput("Input", juce::AudioChannelSet::stereo(), true)
                            .withOutput("Output", juce::AudioChannelSet::stereo(), true))
 {
+    // Phase 3: Unique Satellite Instance ID & default identity
+    juce::Uuid instanceUuid;
+    mInstanceId = instanceUuid.toString();
+    mTrackName = "Track";
+    telemetryClient.setTrackIdentity(mInstanceId, mTrackName);
+
     // Register listener for project context changes from the Desktop HUD
     telemetryClient.setContextReceivedCallback([this](const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs) {
         std::lock_guard<std::mutex> lock(contextMutex);
@@ -110,7 +116,17 @@ PluginProcessor::PluginProcessor()
 
 PluginProcessor::~PluginProcessor()
 {
+    telemetryClient.sendInstanceUnregistered(mInstanceId);
     telemetryClient.stopStreaming();
+}
+
+void PluginProcessor::updateTrackProperties(const TrackProperties& properties)
+{
+    if (properties.name.has_value() && properties.name->isNotEmpty())
+    {
+        mTrackName = *properties.name;
+        telemetryClient.setTrackIdentity(mInstanceId, mTrackName);
+    }
 }
 
 void PluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)

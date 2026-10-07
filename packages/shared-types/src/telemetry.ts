@@ -45,10 +45,25 @@ export interface MeterDynamicsData {
   };
 }
 
+export interface MeterSatellite {
+  instance_id: string;
+  track_name: string;
+  sample_rate: number;
+  last_seen_ms: number;
+}
+
 export interface MetrologyTelemetryFrame {
+  type?: 'telemetry_frame';
+  instanceId?: string;
+  trackName?: string;
   version: '1.0';
   sequenceNumber: number;
   sampleRate: number;
+  momentaryLufs?: number;
+  integratedLufs?: number;
+  truePeak?: number;
+  crestFactorDb?: number;
+  correlation?: number;
   loudness: MeterLoudnessData;
   spectrum: MeterSpectrumData;
   dynamics: MeterDynamicsData;

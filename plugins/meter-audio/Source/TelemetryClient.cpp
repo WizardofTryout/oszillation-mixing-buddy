@@ -73,6 +73,26 @@ void TelemetryClient::sendProjectContextSync(const juce::String& scope, const ju
     }
 }
 
+void TelemetryClient::setTrackIdentity(const juce::String& instanceId, const juce::String& trackName)
+{
+    std::lock_guard<std::mutex> lock(identityMutex);
+    currentInstanceId = instanceId;
+    currentTrackName = trackName;
+}
+
+void TelemetryClient::sendInstanceUnregistered(const juce::String& instanceId)
+{
+    juce::String json = "{";
+    json += "\"type\":\"instance_unregistered\",";
+    json += "\"instanceId\":\"" + instanceId.replace("\"", "\\\"") + "\"";
+    json += "}";
+
+    if (connected.load())
+    {
+        sendWebSocketTextFrame(json);
+    }
+}
+
 bool TelemetryClient::attemptConnect()
 {
     if (socket.isConnected())
@@ -216,10 +236,28 @@ juce::String TelemetryClient::buildJsonPayload(uint64_t seq)
         s = latestSpectral;
     }
 
+    juce::String instId;
+    juce::String trkName;
+    {
+        std::lock_guard<std::mutex> lock(identityMutex);
+        instId = currentInstanceId;
+        trkName = currentTrackName;
+    }
+
+    float maxPeak = std::max(l.truePeakLeftDb, l.truePeakRightDb);
+
     juce::String json = "{";
+    json += "\"type\":\"telemetry_frame\",";
+    json += "\"instanceId\":\"" + instId.replace("\"", "\\\"") + "\",";
+    json += "\"trackName\":\"" + trkName.replace("\"", "\\\"") + "\",";
     json += "\"version\":\"1.0\",";
     json += "\"sequenceNumber\":" + juce::String(seq) + ",";
     json += "\"sampleRate\":" + juce::String(currentSampleRate.load()) + ",";
+    json += "\"momentaryLufs\":" + juce::String(l.momentaryLufs, 1) + ",";
+    json += "\"integratedLufs\":" + juce::String(l.integratedLufs, 1) + ",";
+    json += "\"truePeak\":" + juce::String(maxPeak, 1) + ",";
+    json += "\"crestFactorDb\":" + juce::String(s.crestFactorDb, 1) + ",";
+    json += "\"correlation\":" + juce::String(s.stereoCorrelation, 2) + ",";
 
     // Loudness block
     json += "\"loudness\":{";
