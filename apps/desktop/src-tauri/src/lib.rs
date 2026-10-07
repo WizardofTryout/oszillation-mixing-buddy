@@ -31,6 +31,10 @@ pub fn resolve_bridge_binary() -> std::path::PathBuf {
                 if bundle_path.exists() {
                     return bundle_path;
                 }
+                let alt_bundle_path = contents.join("Resources").join("_up_").join("_up_").join("_up_").join("packages").join("daw-adapters").join("bin").join("logic-ax-bridge");
+                if alt_bundle_path.exists() {
+                    return alt_bundle_path;
+                }
             }
         }
     }
