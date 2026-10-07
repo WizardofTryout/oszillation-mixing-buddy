@@ -80,6 +80,18 @@ Core Psychoacoustic Principles:
     - Act as an experienced studio mixing engineer (Tonmischmeister).
     - Provide concise, psychoacoustic reasoning structured with clear highlights.
 
+14. SCOPE-AWARENESS & TARGET SAFEGUARDS:
+    - WENN targetScope === 'mix_bus' (Master / Stereo Out / Summenmix):
+      * Das Signal ist der Summenmix.
+      * Bewerte spektrale Balance von Sub-Bass bis Air, Gesamtkompression und Ziel-LUFS (-12 bis -14 LUFS je nach Genre).
+      * Bewerte Wechselwirkungen zwischen Instrumenten (z. B. Maskierung zwischen Kick und Bass).
+    - WENN targetScope !== 'mix_bus' (Einzelspur oder Subgruppe, z. B. 'drum_bus', 'lead_vocal', 'keys_synths', 'sub_bass', 'acoustic'):
+      * KRITISCHE REGEL: Du hörst aktuell NUR DIESES EINZELSIGNAL / DIESE SUBGRUPPE!
+      * Fordere NIEMALS Master-Mix-Lautheit (-12 LUFS) für Einzelsignale. Gesunde Spurpegel liegen bei -18 bis -28 LUFS.
+      * Rüge NIEMALS fehlende Frequenzbereiche, die für dieses Instrument unnatürlich wären (z.B. kein Sub-Bass auf Vocals oder Akustikgitarre; keine Höhen über 10 kHz auf Bass).
+      * Wenn der Nutzer nach dem Zusammenspiel mit anderen Spuren fragt (z. B. 'Wie klingen Kick und Bass zusammen?'):
+        Erkläre dem Nutzer präzise, wie dieses fokussierte Signal vorbereitet werden muss (z. B. gezielter EQ-Cut oder Sidechain-Ducking), um im Gesamtmix Platz zu schaffen.
+
 Always structure your suggestions into the 'mcp__propose_mix_adjustment' tool call format.
 `.trim();
 
@@ -89,6 +101,7 @@ export interface MixAnalysisContext {
   dawName: string;
   userPrompt?: string;
   targetScope?: TargetScope;
+  activeMeterTrack?: string | null;
   targetProfile?: TargetProfile;
   customNotes?: string;
   activeSkill?: MixingSkill;
@@ -101,6 +114,8 @@ export function buildAnalysisUserPrompt(
 ): string {
   const profile = context.targetProfile;
   const activeSkill = context.activeSkill;
+  const scope = context.targetScope ?? 'mix_bus';
+  const activeTrack = context.activeMeterTrack || (scope === 'mix_bus' ? 'Stereo Out' : 'Active Channel');
 
   let skillSection = '';
   if (activeSkill) {
@@ -127,7 +142,7 @@ ${activeSkill.preferredChain.map((slot, i) => `  ${i + 1}. [${slot.slotType.toUp
 
     targetSection = `
 --- Musical Context & Target Baseline ---
-- Active Scope: ${context.targetScope ?? profile.targetScope ?? 'mix_bus'}
+- ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${scope})
 - Genre Profile: ${profile.name} (${profile.genreProfile})
 - Target Loudness: ${effectiveLufs.toFixed(1)} LUFS (Tolerance: ±${effectiveTol.toFixed(1)} LU)
 - Target Crest Factor: ${effectiveCrest.min.toFixed(1)} - ${effectiveCrest.max.toFixed(1)} dB
@@ -145,15 +160,18 @@ ${profile.typicalRemedies && profile.typicalRemedies.length > 0 ? `- Recommended
     const targetLufsVal = activeSkill ? `${activeSkill.metrologyTargets.integratedLufs.toFixed(1)} LUFS` : context.targetLufs ? `${context.targetLufs} LUFS` : 'EBU R128 (-14.0 LUFS standard)';
     targetSection = `
 --- Musical Context & Target Baseline ---
+- ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${scope})
 - Target Genre: ${context.genre ?? 'General / Modern Pop-Rock'}
 - Target Loudness: ${targetLufsVal}
-- Scope: ${context.targetScope ?? 'mix_bus'}
+- Scope: ${scope}
 `.trim();
   }
 
   return `
 Current DAW: ${context.dawName}
 User Request: ${context.userPrompt ?? 'Analyze the current mix balance and propose the most critical improvement.'}
+
+ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${scope})
 
 ${skillSection ? `${skillSection}\n\n` : ''}${targetSection}
 

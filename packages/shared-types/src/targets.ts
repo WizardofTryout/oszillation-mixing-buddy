@@ -267,6 +267,24 @@ export function resolveTargetProfile(
       airDb: -20.0
     };
     profile.crestFactorRange = { min: 4.0, max: 8.0 };
+  } else if (scope === 'keys_synths') {
+    profile.spectralTargets = {
+      subBassDb: -10.0, // Low-cut below 80 Hz for Keys/Synths to leave room for Kick & Bass
+      bassDb: -1.0,
+      lowMidDb: 0.0,
+      highMidDb: +1.5,
+      airDb: +2.0
+    };
+    profile.crestFactorRange = { min: 8.0, max: 14.0 };
+  } else if (scope === 'acoustic') {
+    profile.spectralTargets = {
+      subBassDb: -12.0, // Low-cut below 80-100 Hz for acoustic guitars & instruments
+      bassDb: -1.5,
+      lowMidDb: +0.5,
+      highMidDb: +2.0,
+      airDb: +3.0
+    };
+    profile.crestFactorRange = { min: 12.0, max: 18.0 };
   }
 
   return profile;

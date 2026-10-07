@@ -34,6 +34,7 @@ interface ChatConsoleProps {
   onProposalGenerated: (proposal: MixActionProposal) => void;
   externalLogMessage?: string | null;
   targetScope?: TargetScope;
+  activeMeterTrack?: string | null;
   targetProfile?: TargetProfile;
   activeSkill?: MixingSkill | null;
   onSelectSkill?: (skill: MixingSkill | null) => void;
@@ -51,6 +52,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   onProposalGenerated,
   externalLogMessage,
   targetScope,
+  activeMeterTrack,
   targetProfile,
   activeSkill,
   onSelectSkill,
@@ -251,6 +253,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
               dawName: dawLabel,
               userPrompt: query,
               targetScope,
+              activeMeterTrack,
               targetProfile,
               activeSkill: activeSkill || undefined
             },

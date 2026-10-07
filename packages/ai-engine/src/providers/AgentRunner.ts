@@ -15,7 +15,15 @@
  */
 
 import { GoogleGenerativeAI, type FunctionDeclaration, SchemaType } from '@google/generative-ai';
-import type { MixActionProposal, TrackDescriptor, MetrologyTelemetryFrame } from '@mixing-buddy/shared-types';
+import {
+  type MixActionProposal,
+  type TrackDescriptor,
+  type MetrologyTelemetryFrame,
+  type TargetScope,
+  type TargetProfile,
+  type GenreProfileId,
+  resolveTargetProfile
+} from '@mixing-buddy/shared-types';
 import { MIXING_BUDDY_SYSTEM_PROMPT, type MixAnalysisContext } from '../prompts.js';
 import { normalizeProposal } from './GeminiProvider.js';
 
@@ -984,7 +992,7 @@ export class AgentRunner {
     }
 
     this.activeModel = this.cfg.modelName || 'gemini-3.8-flash';
-    const systemInstruction = buildAgentSystemPrompt();
+    const systemInstruction = buildAgentSystemPrompt(context);
 
     // ── Zero-Turn Local Prefetching (0 API tokens, 0ms latency) ──────────────
     const prefetchStep = this.addStep('⚡', 'Session-Kontext & Spuren lokal vorbereiten');
@@ -1040,9 +1048,22 @@ export class AgentRunner {
       : null;
 
     // ── Single-Turn API-Call Vorbereitung (Exakt 1 Request) ───────────────────
+    const effectiveScope: TargetScope = context?.targetScope ?? 'mix_bus';
+    const genreId: GenreProfileId = (context?.genre as GenreProfileId) || 'pop_radio';
+    const targetProfile: TargetProfile = resolveTargetProfile(
+      genreId,
+      effectiveScope,
+      context?.targetProfile
+    );
+    const activeTrack = context?.activeMeterTrack || (effectiveScope === 'mix_bus' ? 'Stereo Out' : 'Active Channel');
+    const s = targetProfile.spectralTargets;
+
     const initialUserText =
       `Engineer request: "${userPrompt}"\n\n` +
+      `ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${effectiveScope})\n\n` +
       `SESSION CONTEXT (PREFETCHED):\n` +
+      `- Active Target Corridor: ${targetProfile.name} (Scope: ${effectiveScope}, Target LUFS: ${targetProfile.targetIntegratedLufs.toFixed(1)} LUFS, Crest: ${targetProfile.crestFactorRange.min.toFixed(1)}-${targetProfile.crestFactorRange.max.toFixed(1)} dB)\n` +
+      `- Target Spectral Offsets: Sub-Bass (${s.subBassDb >= 0 ? '+' : ''}${s.subBassDb} dB), Bass (${s.bassDb >= 0 ? '+' : ''}${s.bassDb} dB), Low-Mid (${s.lowMidDb >= 0 ? '+' : ''}${s.lowMidDb} dB), High-Mid (${s.highMidDb >= 0 ? '+' : ''}${s.highMidDb} dB), Air (${s.airDb >= 0 ? '+' : ''}${s.airDb} dB)\n` +
       `- Tracks & Inserts: ${JSON.stringify(compactStrips)}\n` +
       `- Measured Metrology: ${compactTelemetry ? JSON.stringify(compactTelemetry) : 'Standby / Low Signal'}\n\n` +
       `STRICT DIRECTIVE:\n` +
@@ -1353,10 +1374,29 @@ function agentDelay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-function buildAgentSystemPrompt(): string {
+function buildAgentSystemPrompt(context?: MixAnalysisContext): string {
+  const activeScope = context?.targetScope ?? 'mix_bus';
+  const activeTrack = context?.activeMeterTrack || (activeScope === 'mix_bus' ? 'Stereo Out' : 'Active Channel');
+  const isMaster = activeScope === 'mix_bus';
+
+  const scopeSafeguards = isMaster
+    ? `## ACTIVE MONITORING POINT & SCOPE SAFEGUARDS:\n` +
+      `ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${activeScope})\n` +
+      `- Das Signal ist der Summenmix (Master / Stereo Out).\n` +
+      `- Bewerte spektrale Balance von Sub-Bass bis Air, Gesamtkompression und Ziel-LUFS (-12 bis -14 LUFS je nach Genre).\n` +
+      `- Bewerte Wechselwirkungen zwischen Instrumenten (z. B. Maskierung zwischen Kick und Bass).\n`
+    : `## ACTIVE MONITORING POINT & SCOPE SAFEGUARDS:\n` +
+      `ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${activeScope})\n` +
+      `- KRITISCHE REGEL: Du hörst aktuell NUR DIESES EINZELSIGNAL / DIESE SUBGRUPPE ('${activeTrack}')!\n` +
+      `- Fordere NIEMALS Master-Mix-Lautheit (-12 LUFS) für Einzelsignale. Normale Spurpegel liegen gesund zwischen -18 und -28 LUFS.\n` +
+      `- Rüge NIEMALS fehlende Frequenzbereiche, die für dieses Instrument unnatürlich wären (z. B. kein Sub-Bass auf Vocals, Keys oder Akustikgitarre; keine Höhen über 10 kHz auf Bass).\n` +
+      `- Wenn der Nutzer nach dem Zusammenspiel mit anderen Spuren fragt: Erkläre präzise, wie dieses fokussierte Signal vorbereitet werden muss (z. B. gezielter EQ-Cut oder Sidechain-Ducking), um im Gesamtmix Platz zu schaffen.\n`;
+
   return (
     MIXING_BUDDY_SYSTEM_PROMPT +
-    `\n\n## AGENTIC GOVERNOR & TURN RULES (STRICTLY ENFORCED)\n\n` +
+    `\n\n` +
+    scopeSafeguards +
+    `\n## AGENTIC GOVERNOR & TURN RULES (STRICTLY ENFORCED)\n\n` +
     `1. TURN-BUDGET: You have a strict budget of maximum 4 turns (maxTurns = 4).\n` +
     `2. RECOMMENDED TURN SEQUENCE:\n` +
     `   - Turn 1: Capture session context & execute audition (if requested by user)\n` +

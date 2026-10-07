@@ -1454,7 +1454,7 @@ export const App: React.FC = () => {
             OMB
           </div>
           <span className="font-bold text-sm tracking-wide text-slate-100">OSZILLATION MIXING BUDDY</span>
-          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.3</span>
+          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.4</span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -1762,6 +1762,7 @@ export const App: React.FC = () => {
               onProposalGenerated={handleProposalFromChat}
               externalLogMessage={chatLog}
               targetScope={targetScope}
+              activeMeterTrack={activeMeterTrack}
               targetProfile={activeTargetProfile}
               activeSkill={activeSkill}
               onSelectSkill={setActiveSkill}
