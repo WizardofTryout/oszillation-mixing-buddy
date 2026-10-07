@@ -155,13 +155,23 @@ export const App: React.FC = () => {
     text: string;
   } | null>(null);
   const prevMeterTrackRef = useRef<string | null>(null);
+  const activeMeterTrackRef = useRef<string | null>(null);
   const askedClarificationTrackRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    activeMeterTrackRef.current = activeMeterTrack;
+  }, [activeMeterTrack]);
 
   // Phase 3: Multi-Instance Satellites State & Router
   const [satellites, setSatellites] = useState<MeterSatellite[]>([]);
   const [activeInstanceId, setActiveInstanceId] = useState<string | null>(null);
+  const activeInstanceIdRef = useRef<string | null>(null);
   const [isSatelliteDropdownOpen, setIsSatelliteDropdownOpen] = useState<boolean>(false);
   const satelliteDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    activeInstanceIdRef.current = activeInstanceId;
+  }, [activeInstanceId]);
 
   // Fetch initial satellites and listen for satellite registry updates
   useEffect(() => {
@@ -204,7 +214,9 @@ export const App: React.FC = () => {
 
   const handleSelectSatellite = async (sat: MeterSatellite) => {
     setActiveInstanceId(sat.instance_id);
+    activeInstanceIdRef.current = sat.instance_id;
     setActiveMeterTrack(sat.track_name);
+    activeMeterTrackRef.current = sat.track_name;
     setIsSatelliteDropdownOpen(false);
     try {
       await invoke('set_active_meter_instance', { instanceId: sat.instance_id });
@@ -566,8 +578,11 @@ export const App: React.FC = () => {
               }
             }
           }
-          if (meterTrack) {
-            setActiveMeterTrack(meterTrack);
+          // Phase 3 Multi-Instance Protection:
+          // Nie einen bestehenden aktiven Abhörpunkt überschreiben!
+          // Der Abhörpunkt wird primär über die echten 30-fps Telemetrie-Frames und den Satelliten-Manager gesteuert.
+          if (meterTrack && !activeMeterTrackRef.current) {
+            setActiveMeterTrack((current) => current || meterTrack);
           }
         }
       } catch {
@@ -697,12 +712,14 @@ export const App: React.FC = () => {
           setIsAudioConnected(true);
           resetStreamWatchdog();
 
-          if (frame.instanceId && !activeInstanceId) {
+          if (frame.instanceId && !activeInstanceIdRef.current) {
             setActiveInstanceId(frame.instanceId);
+            activeInstanceIdRef.current = frame.instanceId;
           }
-          if (frame.trackName && (!activeMeterTrack || activeInstanceId === frame.instanceId)) {
-            if (activeMeterTrack !== frame.trackName) {
+          if (frame.trackName && (!activeMeterTrackRef.current || activeInstanceIdRef.current === frame.instanceId)) {
+            if (activeMeterTrackRef.current !== frame.trackName) {
               setActiveMeterTrack(frame.trackName);
+              activeMeterTrackRef.current = frame.trackName;
             }
           }
 
@@ -726,7 +743,7 @@ export const App: React.FC = () => {
         const raw = event.payload;
         const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
         if (data.type === 'project_context_sync') {
-          if (!activeMeterTrack && data.targetScope) {
+          if (!activeMeterTrackRef.current && data.targetScope) {
             setTargetScope(data.targetScope);
           }
           if (data.genreProfile) setGenreProfile(data.genreProfile);
@@ -832,7 +849,7 @@ export const App: React.FC = () => {
 
             // Sprint 3: Handle project context sync from JUCE plugin
             if (data.type === 'project_context_sync') {
-              if (!activeMeterTrack && data.targetScope) {
+              if (!activeMeterTrackRef.current && data.targetScope) {
                 setTargetScope(data.targetScope);
               }
               if (data.genreProfile) setGenreProfile(data.genreProfile);
@@ -1643,10 +1660,10 @@ export const App: React.FC = () => {
           <span className="text-xs text-blue-400 font-mono ml-2">v0.5.8</span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {/* Phase 2A, 2C & Learning: Signal-Fokus mit Auto- / Audio-Detect / Gemerkt Badge */}
           <div
-            className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs"
+            className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs shrink-0"
             title="Bestimmt die spektrale Zielschablone (Master, Vocal, Drums etc.) für die Analyse des ankommenden Meter-Signals."
           >
             <Target className="w-3.5 h-3.5 text-cyan-400 mr-1" />
@@ -1731,7 +1748,7 @@ export const App: React.FC = () => {
             </select>
           </div>
 
-          <div className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs">
+          <div className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs shrink-0">
             <span className="text-gray-400 mr-1.5 font-medium">🎵 Genre:</span>
             <select
               value={genreProfile}
@@ -1764,7 +1781,7 @@ export const App: React.FC = () => {
           <button
             type="button"
             onClick={() => setIsReferenceModalOpen(true)}
-            className="flex items-center gap-1.5 bg-slate-800/90 hover:bg-slate-700 border border-slate-700/80 rounded px-2.5 py-1 text-xs text-indigo-300 hover:text-white font-medium transition-all shadow-sm"
+            className="flex items-center gap-1.5 bg-slate-800/90 hover:bg-slate-700 border border-slate-700/80 rounded px-2.5 py-1 text-xs text-indigo-300 hover:text-white font-medium transition-all shadow-sm shrink-0"
             title="Referenz-Track laden und analysieren"
           >
             <BarChart2 className="w-3.5 h-3.5 text-indigo-400" />
@@ -1775,11 +1792,11 @@ export const App: React.FC = () => {
           </button>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 shrink-0">
           <button
             type="button"
             onClick={handleLearnActivePlugin}
-            className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300 hover:text-white bg-emerald-950/60 hover:bg-emerald-800/70 border border-emerald-500/40 px-2.5 py-1 rounded transition-all shadow-sm"
+            className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300 hover:text-white bg-emerald-950/60 hover:bg-emerald-800/70 border border-emerald-500/40 px-2.5 py-1 rounded transition-all shadow-sm shrink-0"
             title="Scannt das aktuell in der DAW geöffnete Plugin-Fenster und speichert dessen Regler im Plugin Vault"
           >
             <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
@@ -1789,7 +1806,7 @@ export const App: React.FC = () => {
           <button
             type="button"
             onClick={handleOpenVaultDrawer}
-            className="flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border border-darkBorder px-2.5 py-1 rounded transition-all"
+            className="flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border border-darkBorder px-2.5 py-1 rounded transition-all shrink-0"
             title="Plugin Vault (Bibliothek der angelernten Plugins öffnen)"
           >
             <Database className="w-3.5 h-3.5 text-blue-400" />
@@ -1800,7 +1817,7 @@ export const App: React.FC = () => {
           <button
             type="button"
             onClick={() => setIsSkillModalOpen(true)}
-            className="flex items-center gap-1.5 text-xs font-medium text-amber-300 hover:text-white bg-amber-950/50 hover:bg-amber-900/60 border border-amber-500/40 px-2.5 py-1 rounded transition-all shadow-sm cursor-pointer"
+            className="flex items-center gap-1.5 text-xs font-medium text-amber-300 hover:text-white bg-amber-950/50 hover:bg-amber-900/60 border border-amber-500/40 px-2.5 py-1 rounded transition-all shadow-sm cursor-pointer shrink-0"
             title="Mixing Skill Vault (Tonmischmeister, Custom Chains & Prompts)"
           >
             <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400/30" />
@@ -1808,7 +1825,7 @@ export const App: React.FC = () => {
           </button>
 
           {/* Phase 3: Multi-Instance Abhörpunkt-Selektor */}
-          <div className="relative" ref={satelliteDropdownRef}>
+          <div className="relative shrink-0" ref={satelliteDropdownRef}>
             <button
               type="button"
               onClick={() => setIsSatelliteDropdownOpen(!isSatelliteDropdownOpen)}
