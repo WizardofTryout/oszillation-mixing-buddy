@@ -1358,9 +1358,12 @@ export const App: React.FC = () => {
 
         <div className="flex items-center gap-2">
           {/* Sprint 3: Target Scope & Genre Selectors */}
-          <div className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs">
+          <div
+            className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs"
+            title="Bestimmt die spektrale Zielschablone (Master, Vocal, Drums etc.) für die Analyse des ankommenden Meter-Signals."
+          >
             <Target className="w-3.5 h-3.5 text-cyan-400 mr-1" />
-            <span className="text-gray-400 mr-1.5 font-medium">Bus:</span>
+            <span className="text-gray-400 mr-1.5 font-medium">Signal-Fokus:</span>
             <select
               value={targetScope}
               onChange={(e) => handleTargetScopeChange(e.target.value as TargetScope)}
