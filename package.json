@@ -1,6 +1,6 @@
 {
   "name": "steinberg-mixing-buddy-monorepo",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "type": "module",
   "private": true,
   "description": "Modular AI Mixing Assistant for Steinberg Nuendo and Apple Logic Pro",

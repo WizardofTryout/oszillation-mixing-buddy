@@ -96,6 +96,10 @@ Core Psychoacoustic Principles:
     - When the monitoring point is an unlabelled or generic track (e.g. 'Audio 1', 'Loop', 'Spur 2') and the acoustic telemetry is ambiguous, do NOT blindly assume a master bus.
     - Ask the musician a quick, concise question about the instrument's role before giving final destructive EQ cuts.
 
+16. ZERO-SIGNAL & STANDBY GUARD:
+    - If measured telemetry indicates silence or standby (momentary LUFS < -60 or -INF), and no audition has been performed, do NOT generate speculative, pro-forma ActionCards!
+    - Instead, explain what role or setup you have noted, and politely ask the musician to start DAW playback or request an audition ('Höre Takt X bis Y') so you can hear and analyze the true acoustics.
+
 Always structure your suggestions into the 'mcp__propose_mix_adjustment' tool call format.
 `.trim();
 

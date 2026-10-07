@@ -184,7 +184,12 @@ export const App: React.FC = () => {
 
           if (acousticResult.confidence >= 0.75) {
             setScopeDetectionSource('audio');
-            setPendingClarification(null);
+            if (pendingClarification) {
+              setPendingClarification({
+                trackName: activeMeterTrack,
+                text: `Akustisch erkannt als ${acousticResult.scope.replace('_', ' ').toUpperCase()} (${Math.round(acousticResult.confidence * 100)}%). Bestätigen oder Rolle wählen:`
+              });
+            }
             if (acousticResult.scope !== targetScope) {
               setTargetScope(acousticResult.scope);
               const updated = resolveTargetProfile(effectiveGenre, acousticResult.scope, customProfile);
@@ -597,11 +602,13 @@ export const App: React.FC = () => {
         const raw = event.payload;
         const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
         if (data.type === 'project_context_sync') {
-          if (data.targetScope) setTargetScope(data.targetScope);
+          if (!activeMeterTrack && data.targetScope) {
+            setTargetScope(data.targetScope);
+          }
           if (data.genreProfile) setGenreProfile(data.genreProfile);
           if (data.customNotes !== undefined) setCustomNotes(data.customNotes);
           if (data.targetProfile) setCustomProfile(data.targetProfile);
-          setChatLog(`🔄 DAW-Projekt-Persistenz geladen: Scope "${data.targetScope}", Genre "${data.genreProfile}"`);
+          console.log(`[OMB] DAW-Projekt-Persistenz synchronisiert: Scope "${data.targetScope}", Genre "${data.genreProfile}"`);
         }
       } catch (err) {
         console.error('Error handling project-context-sync', err);
@@ -701,11 +708,13 @@ export const App: React.FC = () => {
 
             // Sprint 3: Handle project context sync from JUCE plugin
             if (data.type === 'project_context_sync') {
-              if (data.targetScope) setTargetScope(data.targetScope);
+              if (!activeMeterTrack && data.targetScope) {
+                setTargetScope(data.targetScope);
+              }
               if (data.genreProfile) setGenreProfile(data.genreProfile);
               if (data.customNotes !== undefined) setCustomNotes(data.customNotes);
               if (data.targetProfile) setCustomProfile(data.targetProfile);
-              setChatLog(`🔄 DAW-Projekt-Persistenz geladen: Scope "${data.targetScope}", Genre "${data.genreProfile}"`);
+              console.log(`[OMB] DAW-Projekt-Persistenz synchronisiert: Scope "${data.targetScope}", Genre "${data.genreProfile}"`);
               return;
             }
 
@@ -1507,7 +1516,7 @@ export const App: React.FC = () => {
             OMB
           </div>
           <span className="font-bold text-sm tracking-wide text-slate-100">OSZILLATION MIXING BUDDY</span>
-          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.5</span>
+          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.6</span>
         </div>
 
         <div className="flex items-center gap-2">

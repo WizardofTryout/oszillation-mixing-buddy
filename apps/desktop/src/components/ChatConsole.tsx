@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, AlertCircle, Copy, Check, MessageSquarePlus, Loader2, CheckCircle2, XCircle, Square } from 'lucide-react';
+import { Send, Bot, User, Sparkles, AlertCircle, Info, Copy, Check, MessageSquarePlus, Loader2, CheckCircle2, XCircle, Square } from 'lucide-react';
 import type {
   MetrologyTelemetryFrame,
   MixActionProposal,
@@ -14,6 +14,29 @@ import { TokenUsageBadge } from './TokenUsageBadge.js';
 import { MarkdownRenderer } from './MarkdownRenderer.js';
 import { invoke } from '@tauri-apps/api/core';
 import type { ProviderMode } from './ProviderSettings.js';
+
+function detectRoleFromUserInput(text: string): { scope: TargetScope; scopeLabel: string } | null {
+  const t = text.trim().toLowerCase();
+  if (/^(bass|subbass|sub[- ]?bass|808|e[- ]?bass|bassline|es ist (ein )?bass)$/i.test(t)) {
+    return { scope: 'sub_bass', scopeLabel: 'Bass / Sub-Bass' };
+  }
+  if (/^(drums|drum|schlagzeug|percussion|beats?|drum[- ]?bus|es sind (die )?drums)$/i.test(t)) {
+    return { scope: 'drum_bus', scopeLabel: 'Drums / Percussion' };
+  }
+  if (/^(vocal|vocals|voice|stimme|gesang|lead[- ]?vocal|es sind (die )?vocals)$/i.test(t)) {
+    return { scope: 'lead_vocal', scopeLabel: 'Lead Vocal' };
+  }
+  if (/^(keys|synth|synths|synthesizer|piano|klavier|keyboard|orgel|rhodes)$/i.test(t)) {
+    return { scope: 'keys_synths', scopeLabel: 'Keys / Synths' };
+  }
+  if (/^(akustik|acoustic|git|gitarre|guitar|acoustic[- ]?guitar)$/i.test(t)) {
+    return { scope: 'acoustic', scopeLabel: 'Akustik / Gitarre' };
+  }
+  if (/^(master|mix|summe|mix[- ]?bus|stereo[- ]?out)$/i.test(t)) {
+    return { scope: 'mix_bus', scopeLabel: 'Master / Mix Bus' };
+  }
+  return null;
+}
 
 export interface ChatMessage {
   id: string;
@@ -204,6 +227,28 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
 
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
+
+    // Phase 2C+: Check if query is declaring a track role directly (e.g. "Bass", "Drums", etc.)
+    const roleMatch = detectRoleFromUserInput(query);
+    if (roleMatch) {
+      if (onSelectClarificationScope) {
+        onSelectClarificationScope(roleMatch.scope, roleMatch.scopeLabel);
+      }
+      const isSilent = !telemetry || (telemetry.loudness?.momentaryLufs ?? -100) < -60;
+      if (isSilent) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `msg_role_ack_${Date.now()}`,
+            sender: 'assistant',
+            text: `Alles klar! Ich habe den Signal-Fokus für **${pendingClarification?.trackName || activeMeterTrack || 'diese Spur'}** auf **${roleMatch.scopeLabel}** gesetzt ✓.\n\nAktuell ist die Wiedergabe in ${dawLabel} noch gestoppt (Stille / Standby). Bitte starte die Wiedergabe in der DAW oder sag mir z. B. *'Höre Takt 9 bis 13'*, damit ich das Signal akustisch analysieren und fundierte Mix-Entscheidungen vorschlagen kann!`,
+            timestamp: Date.now()
+          }
+        ]);
+        return;
+      }
+    }
+
     setIsAnalyzing(true);
 
     const controller = new AbortController();
@@ -576,40 +621,56 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
 
       {/* Messages Scroll Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[140px] text-xs">
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            className={`flex items-start gap-2 max-w-[90%] ${
-              m.sender === 'user' ? 'ml-auto flex-row-reverse' : ''
-            }`}
-          >
-            <div
-              className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${
-                m.sender === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : m.sender === 'system'
-                  ? 'bg-amber-600/30 text-amber-400 border border-amber-500/40'
-                  : 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30'
-              }`}
-            >
-              {m.sender === 'user' ? (
-                <User className="w-3.5 h-3.5" />
-              ) : m.sender === 'system' ? (
-                <AlertCircle className="w-3.5 h-3.5" />
-              ) : (
-                <Bot className="w-3.5 h-3.5" />
-              )}
-            </div>
+        {messages.map((m) => {
+          const isSystemError =
+            m.sender === 'system' &&
+            (m.text.includes('❌') ||
+              m.text.includes('⚠️') ||
+              m.text.toLowerCase().includes('fehler') ||
+              m.text.toLowerCase().includes('error'));
 
+          return (
             <div
-              className={`group relative p-2.5 pr-8 rounded-lg leading-relaxed select-text ${
-                m.sender === 'user'
-                  ? 'bg-blue-600 text-white rounded-br-none'
-                  : m.sender === 'system'
-                  ? 'bg-amber-950/40 border border-amber-500/30 text-amber-200 rounded-bl-none font-mono text-[11px]'
-                  : 'bg-[#181a20] border border-darkBorder/60 text-slate-200 rounded-bl-none'
+              key={m.id}
+              className={`flex items-start gap-2 max-w-[90%] ${
+                m.sender === 'user' ? 'ml-auto flex-row-reverse' : ''
               }`}
             >
+              <div
+                className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${
+                  m.sender === 'user'
+                    ? 'bg-blue-600 text-white'
+                    : m.sender === 'system'
+                    ? isSystemError
+                      ? 'bg-amber-600/30 text-amber-400 border border-amber-500/40'
+                      : 'bg-blue-600/20 text-blue-300 border border-blue-500/30'
+                    : 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30'
+                }`}
+              >
+                {m.sender === 'user' ? (
+                  <User className="w-3.5 h-3.5" />
+                ) : m.sender === 'system' ? (
+                  isSystemError ? (
+                    <AlertCircle className="w-3.5 h-3.5" />
+                  ) : (
+                    <Info className="w-3.5 h-3.5" />
+                  )
+                ) : (
+                  <Bot className="w-3.5 h-3.5" />
+                )}
+              </div>
+
+              <div
+                className={`group relative p-2.5 pr-8 rounded-lg leading-relaxed select-text ${
+                  m.sender === 'user'
+                    ? 'bg-blue-600 text-white rounded-br-none'
+                    : m.sender === 'system'
+                    ? isSystemError
+                      ? 'bg-amber-950/40 border border-amber-500/30 text-amber-200 rounded-bl-none font-mono text-[11px]'
+                      : 'bg-slate-800/80 border border-slate-700/60 text-slate-200 rounded-bl-none text-xs'
+                    : 'bg-[#181a20] border border-darkBorder/60 text-slate-200 rounded-bl-none'
+                }`}
+              >
               {/* Persistent Step Tokens attached to this message */}
               {m.steps && m.steps.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-2 pb-2 border-b border-darkBorder/50">
@@ -644,7 +705,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
                 <span className="whitespace-pre-wrap">{m.content || m.text || ''}</span>
               )}
               <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
-                {m.sender === 'system' && (
+                {isSystemError && (
                   <button
                     type="button"
                     onClick={() => handleAskAboutMessage(m.text)}
@@ -669,7 +730,8 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
               </div>
             </div>
           </div>
-        ))}
+        );
+      })}
 
         {/* Agent Step Badges */}
         {agentSteps.length > 0 && (
@@ -723,9 +785,10 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           <div className="flex flex-wrap gap-1.5 pt-0.5">
             {[
               { label: '🥁 Drums', scope: 'drum_bus' as TargetScope, scopeLabel: 'Drums / Percussion' },
-              { label: '🎸 Akustik / Git', scope: 'acoustic' as TargetScope, scopeLabel: 'Akustik / Git' },
+              { label: '🔊 Bass / 808', scope: 'sub_bass' as TargetScope, scopeLabel: 'Bass / Sub-Bass' },
               { label: '🎹 Keys / Synth', scope: 'keys_synths' as TargetScope, scopeLabel: 'Keys / Synths' },
               { label: '🎤 Vocal', scope: 'lead_vocal' as TargetScope, scopeLabel: 'Lead Vocal' },
+              { label: '🎸 Akustik / Git', scope: 'acoustic' as TargetScope, scopeLabel: 'Akustik / Git' },
               { label: '🎧 Master Mix', scope: 'mix_bus' as TargetScope, scopeLabel: 'Master / Mix Bus' }
             ].map((chip) => (
               <button

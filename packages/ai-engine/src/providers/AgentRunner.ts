@@ -1058,6 +1058,8 @@ export class AgentRunner {
     const activeTrack = context?.activeMeterTrack || (effectiveScope === 'mix_bus' ? 'Stereo Out' : 'Active Channel');
     const s = targetProfile.spectralTargets;
 
+    const isSilentSignal = !compactTelemetry || compactTelemetry.lufs < -60;
+
     const initialUserText =
       `Engineer request: "${userPrompt}"\n\n` +
       `ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${effectiveScope})\n\n` +
@@ -1069,6 +1071,10 @@ export class AgentRunner {
       `STRICT DIRECTIVE:\n` +
       (auditionExecuted
         ? `Audition has ALREADY been completed locally (playback of bars ${auditionIntent?.startBar} to ${auditionIntent?.endBar} for ${auditionIntent?.durationSeconds}s). Telemetry is attached above. You MUST respond with \`propose_mix_adjustment\` directly in this single response!`
+        : isSilentSignal
+        ? `Note: Measured audio telemetry indicates silence or standby (< -60 LUFS). ` +
+          `Do NOT generate speculative or pro-forma \`propose_mix_adjustment\` ActionCards without real audio signal! ` +
+          `Instead, answer the user constructively, acknowledge the track role, and politely prompt the engineer to start playback in the DAW (or ask "Höre Takt X bis Y") so you can measure actual acoustic dynamics before proposing mixing decisions.`
         : `Audition has ALREADY been completed locally. Telemetry is attached above. You MUST respond with \`propose_mix_adjustment\` in this single response!`);
 
     // Turn 1 (User): initial user request with measured telemetry
