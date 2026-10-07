@@ -1418,7 +1418,7 @@ export const App: React.FC = () => {
             OMB
           </div>
           <span className="font-bold text-sm tracking-wide text-slate-100">OSZILLATION MIXING BUDDY</span>
-          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.0</span>
+          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.1</span>
         </div>
 
         <div className="flex items-center gap-2">
