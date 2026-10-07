@@ -40,6 +40,11 @@ interface ChatConsoleProps {
   onSelectSkill?: (skill: MixingSkill | null) => void;
   onSelectSkillId?: (id: string) => void;
   availableSkills?: MixingSkillSummary[];
+  pendingClarification?: {
+    trackName: string;
+    text: string;
+  } | null;
+  onSelectClarificationScope?: (scope: TargetScope, scopeLabel: string) => void;
 }
 
 export const ChatConsole: React.FC<ChatConsoleProps> = ({
@@ -57,7 +62,9 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   activeSkill,
   onSelectSkill,
   onSelectSkillId,
-  availableSkills
+  availableSkills,
+  pendingClarification,
+  onSelectClarificationScope
 }) => {
   const getDawDisplayName = (daw: string) => {
     const d = daw.toLowerCase();
@@ -705,6 +712,47 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           </div>
         )}
       </div>
+
+      {/* Co-Producer Interactive Ambiguous Scope Clarification Banner */}
+      {pendingClarification && (
+        <div className="mx-3 mb-2 p-2.5 bg-gradient-to-r from-blue-950/80 via-slate-900 to-indigo-950/80 border border-blue-500/40 rounded-lg shadow-md flex flex-col gap-2">
+          <div className="flex items-center gap-2 text-cyan-300 font-medium text-xs">
+            <Sparkles className="w-4 h-4 text-cyan-400 shrink-0 animate-pulse" />
+            <span>{pendingClarification.text}</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5 pt-0.5">
+            {[
+              { label: '🥁 Drums', scope: 'drum_bus' as TargetScope, scopeLabel: 'Drums / Percussion' },
+              { label: '🎸 Akustik / Git', scope: 'acoustic' as TargetScope, scopeLabel: 'Akustik / Git' },
+              { label: '🎹 Keys / Synth', scope: 'keys_synths' as TargetScope, scopeLabel: 'Keys / Synths' },
+              { label: '🎤 Vocal', scope: 'lead_vocal' as TargetScope, scopeLabel: 'Lead Vocal' },
+              { label: '🎧 Master Mix', scope: 'mix_bus' as TargetScope, scopeLabel: 'Master / Mix Bus' }
+            ].map((chip) => (
+              <button
+                key={chip.scope}
+                type="button"
+                onClick={() => {
+                  if (onSelectClarificationScope) {
+                    onSelectClarificationScope(chip.scope, chip.scopeLabel);
+                  }
+                  setMessages((prev) => [
+                    ...prev,
+                    {
+                      id: `msg_clarify_${Date.now()}`,
+                      sender: 'system',
+                      text: `Signal-Fokus auf '${chip.scopeLabel}' gesetzt ✓`,
+                      timestamp: Date.now()
+                    }
+                  ]);
+                }}
+                className="px-2.5 py-1 text-xs bg-slate-800/90 hover:bg-cyan-600/30 border border-slate-600 hover:border-cyan-400 text-slate-200 hover:text-cyan-200 rounded-md font-medium transition-all shadow-sm cursor-pointer flex items-center gap-1.5 active:scale-95"
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Input Bar / External MCP Banner */}
       {providerMode === 'mcp_external' ? (

@@ -13,6 +13,11 @@ import {
   detectGenreFromTelemetry,
   resolveScopeFromTrackName
 } from '@mixing-buddy/shared-types';
+import {
+  isAmbiguousTrackName,
+  classifySignalAcoustically,
+  type AcousticTelemetrySnapshot
+} from '@mixing-buddy/ai-engine';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { SpectrumRTA } from './components/SpectrumRTA.js';
@@ -140,36 +145,84 @@ export const App: React.FC = () => {
   const [activeReferenceProfile, setActiveReferenceProfile] = useState<ReferenceTrackProfile | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Phase 2A: Active Meter Track & Auto-Scope Override State
+  // Phase 2A & 2C: Active Meter Track, Auto-Scope & Acoustic Classification State
   const [activeMeterTrack, setActiveMeterTrack] = useState<string | null>(null);
   const [isManualScopeOverride, setIsManualScopeOverride] = useState<boolean>(false);
+  const [scopeDetectionSource, setScopeDetectionSource] = useState<'text' | 'audio' | 'manual'>('text');
+  const [pendingClarification, setPendingClarification] = useState<{
+    trackName: string;
+    text: string;
+  } | null>(null);
   const prevMeterTrackRef = useRef<string | null>(null);
+  const askedClarificationTrackRef = useRef<string | null>(null);
 
   const effectiveGenre = genreProfile === 'auto_detect' ? (detectedGenre || 'pop_radio') : genreProfile;
   const activeTargetProfile = useMemo(() => {
     return resolveTargetProfile(effectiveGenre, targetScope, customProfile);
   }, [effectiveGenre, targetScope, customProfile]);
 
-  // Phase 2A: Auto-Scope Synchronisation when activeMeterTrack changes
+  // Phase 2A & 2C: Auto-Scope & Acoustic Telemetry Detection when activeMeterTrack changes
   useEffect(() => {
     if (activeMeterTrack) {
-      // Wenn der Musiker das Meter in Logic Pro auf eine andere Spur verschiebt,
-      // reaktivieren wir den Auto-Fokus für diese neue Spur automatisch!
       if (prevMeterTrackRef.current && prevMeterTrackRef.current !== activeMeterTrack) {
         setIsManualScopeOverride(false);
+        askedClarificationTrackRef.current = null;
+        setPendingClarification(null);
       }
       prevMeterTrackRef.current = activeMeterTrack;
 
       if (!isManualScopeOverride) {
-        const autoScope = resolveScopeFromTrackName(activeMeterTrack);
-        if (autoScope !== targetScope) {
-          setTargetScope(autoScope);
-          const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
-          syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+        // Prüfe ob der Spurname mehrdeutig / generisch ist (z. B. "Audio 1", "Spur 2", "Loop")
+        if (isAmbiguousTrackName(activeMeterTrack)) {
+          const snapshot: AcousticTelemetrySnapshot = {
+            spectrum32Bands: telemetry?.spectrum?.frequencyBands,
+            crestFactorDb: telemetry?.dynamics?.crestFactorDb,
+            integratedLufs: telemetry?.loudness?.integratedLufs,
+            momentaryLufs: telemetry?.loudness?.momentaryLufs
+          };
+          const acousticResult = classifySignalAcoustically(snapshot, activeMeterTrack);
+
+          if (acousticResult.confidence >= 0.75) {
+            setScopeDetectionSource('audio');
+            setPendingClarification(null);
+            if (acousticResult.scope !== targetScope) {
+              setTargetScope(acousticResult.scope);
+              const updated = resolveTargetProfile(effectiveGenre, acousticResult.scope, customProfile);
+              syncContextToPlugin(acousticResult.scope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+            }
+          } else {
+            // Signal unklar (confidence < 0.75): Interaktive System-Rückfrage im Chat anbieten
+            if (askedClarificationTrackRef.current !== activeMeterTrack) {
+              askedClarificationTrackRef.current = activeMeterTrack;
+              setPendingClarification({
+                trackName: activeMeterTrack,
+                text: `Ich höre auf der Spur '${activeMeterTrack}' ein dynamisches Signal, das nicht eindeutig benannt ist. Welche Rolle hat diese Spur?`
+              });
+            }
+          }
+        } else {
+          // Eindeutiger Text-Name (z. B. "Studio Grand", "Kick", "Lead Vocal")
+          const autoScope = resolveScopeFromTrackName(activeMeterTrack);
+          setScopeDetectionSource('text');
+          setPendingClarification(null);
+          if (autoScope !== targetScope) {
+            setTargetScope(autoScope);
+            const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
+            syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+          }
         }
       }
     }
-  }, [activeMeterTrack, isManualScopeOverride, effectiveGenre, genreProfile, customNotes, customProfile, targetScope]);
+  }, [activeMeterTrack, isManualScopeOverride, effectiveGenre, genreProfile, customNotes, customProfile, targetScope, telemetry]);
+
+  const handleSelectClarificationScope = (scope: TargetScope) => {
+    setIsManualScopeOverride(true);
+    setScopeDetectionSource('manual');
+    setPendingClarification(null);
+    setTargetScope(scope);
+    const updated = resolveTargetProfile(effectiveGenre, scope, customProfile);
+    syncContextToPlugin(scope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+  };
 
   const syncContextToPlugin = (
     scope: TargetScope,
@@ -1454,11 +1507,11 @@ export const App: React.FC = () => {
             OMB
           </div>
           <span className="font-bold text-sm tracking-wide text-slate-100">OSZILLATION MIXING BUDDY</span>
-          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.4</span>
+          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.5</span>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Phase 2A: Signal-Fokus mit Auto-Detection Badge */}
+          {/* Phase 2A & 2C: Signal-Fokus mit Auto- / Audio-Detect Badge */}
           <div
             className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs"
             title="Bestimmt die spektrale Zielschablone (Master, Vocal, Drums etc.) für die Analyse des ankommenden Meter-Signals."
@@ -1468,9 +1521,13 @@ export const App: React.FC = () => {
             {!isManualScopeOverride && activeMeterTrack ? (
               <span
                 className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 rounded font-mono font-medium"
-                title={`Automatisch erkannt von Spur "${activeMeterTrack}"`}
+                title={
+                  scopeDetectionSource === 'audio'
+                    ? `Akustisch erkannt von Signal auf Spur "${activeMeterTrack}"`
+                    : `Automatisch erkannt von Spur "${activeMeterTrack}"`
+                }
               >
-                ⚡ Auto
+                {scopeDetectionSource === 'audio' ? '⚡ Audio-Detect' : '⚡ Auto'}
               </span>
             ) : isManualScopeOverride && activeMeterTrack ? (
               <button
@@ -1768,6 +1825,8 @@ export const App: React.FC = () => {
               onSelectSkill={setActiveSkill}
               onSelectSkillId={handleSelectSkillById}
               availableSkills={availableSkills}
+              pendingClarification={pendingClarification}
+              onSelectClarificationScope={handleSelectClarificationScope}
             />
           </div>
           <div className="lg:col-span-1">
