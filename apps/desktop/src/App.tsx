@@ -312,11 +312,47 @@ export const App: React.FC = () => {
       try {
         let json: any = null;
         try {
-          // 1. Native Tauri IPC: direkt, ohne Browser-CORS oder Local-Network-Sperren
+          // 1. Native Tauri IPC: get_tracks
           json = await invoke('get_tracks');
-        } catch {
-          // 2. HTTP Fallback
+        } catch (ipcErr) {
+          console.warn('[App] Native get_tracks failed:', ipcErr);
+        }
+
+        if (!json || (!json.tracks?.length && !json.active_meter_track)) {
           try {
+            // 2. Native Tauri IPC fallback: list_channel_strips
+            const rawStrips: any = await invoke('list_channel_strips');
+            if (rawStrips && (rawStrips.channelStrips || rawStrips.active_meter_track)) {
+              const strips = rawStrips.channelStrips || [];
+              const tracks = strips.map((s: any, idx: number) => ({
+                id: `track_${idx + 1}`,
+                index: idx,
+                name: s.trackName || `Track ${idx + 1}`,
+                type: (s.trackName || '').toLowerCase().includes('stereo out') ? 'master' : 'audio',
+                volumeDb: s.faderDb || 0,
+                pan: s.pan || 0,
+                isMuted: !!s.mute,
+                isSoloed: !!s.solo,
+                isSelected: idx === 0,
+                insertSlots: (s.inserts || []).map((ins: any) => ({
+                  slotIndex: ins.slot || 1,
+                  pluginName: ins.name || 'Plugin',
+                  isEnabled: true,
+                })),
+              }));
+              json = {
+                tracks,
+                active_meter_track: rawStrips.active_meter_track,
+              };
+            }
+          } catch (stripErr) {
+            console.warn('[App] Native list_channel_strips fallback failed:', stripErr);
+          }
+        }
+
+        if (!json || (!json.tracks?.length && !json.active_meter_track)) {
+          try {
+            // 3. HTTP Fallback
             const res = await fetch('http://127.0.0.1:48123/api/tracks');
             if (res.ok) {
               json = await res.json();
@@ -1418,7 +1454,7 @@ export const App: React.FC = () => {
             OMB
           </div>
           <span className="font-bold text-sm tracking-wide text-slate-100">OSZILLATION MIXING BUDDY</span>
-          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.1</span>
+          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.2</span>
         </div>
 
         <div className="flex items-center gap-2">

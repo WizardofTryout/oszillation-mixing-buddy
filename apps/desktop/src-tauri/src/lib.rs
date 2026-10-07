@@ -1840,39 +1840,89 @@ async fn list_channel_strips() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 async fn get_tracks() -> Result<serde_json::Value, String> {
-    let mut detector = crate::daw_detector::DAWDetector::new();
-    let daw = detector.detect_active_daw();
-    let mut scanned = Vec::new();
-    if daw == crate::daw_detector::DetectedDAW::LogicPro {
-        scanned = detector.scan_logic_pro_tracks();
-    }
+    #[cfg(target_os = "macos")]
+    {
+        match list_channel_strips().await {
+            Ok(val) => {
+                let active_meter_track = val
+                    .get("active_meter_track")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
 
-    let mut active_meter_track: Option<String> = None;
-    for t in &scanned {
-        let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        if let Some(inserts) = t.get("insertSlots").and_then(|ins| ins.as_array()) {
-            for ins in inserts {
-                let p_name = ins.get("pluginName").and_then(|v| v.as_str()).unwrap_or("");
-                let p_lower = p_name.to_lowercase();
-                if p_lower.contains("mixingbuddymeter")
-                    || p_lower.contains("mixingbuddy")
-                    || p_lower.contains("mixingbudd")
-                    || p_lower.contains("the ear")
-                {
-                    active_meter_track = Some(name.to_string());
-                    break;
+                let strips = val
+                    .get("channelStrips")
+                    .or_else(|| val.get("channel_strips"))
+                    .and_then(|cs| cs.as_array());
+
+                let mut tracks: Vec<serde_json::Value> = Vec::new();
+                if let Some(strips) = strips {
+                    for (idx, s) in strips.iter().enumerate() {
+                        let track_name = s
+                            .get("trackName")
+                            .or_else(|| s.get("name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Track");
+                        let lower = track_name.to_lowercase();
+                        let is_master = lower.contains("stereo out") || lower == "master";
+
+                        let inserts = s
+                            .get("inserts")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        let insert_slots: Vec<serde_json::Value> = inserts
+                            .iter()
+                            .map(|ins| {
+                                let slot = ins.get("slot").and_then(|v| v.as_i64()).unwrap_or(1);
+                                let name = ins
+                                    .get("name")
+                                    .or_else(|| ins.get("pluginName"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("Plugin");
+                                serde_json::json!({
+                                    "slotIndex": slot,
+                                    "pluginName": name,
+                                    "isEnabled": true,
+                                    "parameters": []
+                                })
+                            })
+                            .collect();
+
+                        tracks.push(serde_json::json!({
+                            "id": if is_master { "track_master".to_string() } else { format!("track_{}", idx + 1) },
+                            "index": idx,
+                            "name": track_name,
+                            "type": if is_master { "master" } else { "audio" },
+                            "volumeDb": s.get("faderDb").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            "pan": s.get("pan").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            "isMuted": s.get("mute").and_then(|v| v.as_bool()).unwrap_or(false),
+                            "isSoloed": s.get("solo").and_then(|v| v.as_bool()).unwrap_or(false),
+                            "isSelected": idx == 0,
+                            "insertSlots": insert_slots
+                        }));
+                    }
                 }
+
+                Ok(serde_json::json!({
+                    "tracks": tracks,
+                    "active_meter_track": active_meter_track
+                }))
+            }
+            Err(e) => {
+                let detector = crate::daw_detector::DAWDetector::new();
+                let scanned = detector.scan_logic_pro_tracks();
+                Ok(serde_json::json!({
+                    "tracks": scanned,
+                    "active_meter_track": serde_json::Value::Null,
+                    "error": e
+                }))
             }
         }
-        if active_meter_track.is_some() {
-            break;
-        }
     }
-
-    Ok(serde_json::json!({
-        "tracks": scanned,
-        "active_meter_track": active_meter_track
-    }))
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(serde_json::json!({ "tracks": [], "active_meter_track": null }))
+    }
 }
 
 #[tauri::command]
