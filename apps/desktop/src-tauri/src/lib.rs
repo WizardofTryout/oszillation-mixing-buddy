@@ -1784,12 +1784,57 @@ async fn list_channel_strips() -> Result<serde_json::Value, String> {
             ));
         }
         let args = vec!["list-channel-strips".to_string()];
-        execute_logic_ax_bridge(&bridge_path, &args)
+        let mut val = execute_logic_ax_bridge(&bridge_path, &args)?;
+
+        let mut active_meter_track: Option<String> = None;
+        if let Some(strips) = val
+            .get("channelStrips")
+            .or_else(|| val.get("channel_strips"))
+            .and_then(|cs| cs.as_array())
+        {
+            for s in strips {
+                let track_name = s
+                    .get("trackName")
+                    .or_else(|| s.get("name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if let Some(inserts) = s.get("inserts").and_then(|ins| ins.as_array()) {
+                    for ins in inserts {
+                        let plugin_name = ins
+                            .get("name")
+                            .or_else(|| ins.get("pluginName"))
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("");
+                        let p_lower = plugin_name.to_lowercase();
+                        if p_lower.contains("mixingbuddymeter")
+                            || p_lower.contains("mixingbuddy")
+                            || p_lower.contains("mixingbudd")
+                            || p_lower.contains("the ear")
+                        {
+                            active_meter_track = Some(track_name.to_string());
+                            break;
+                        }
+                    }
+                }
+                if active_meter_track.is_some() {
+                    break;
+                }
+            }
+        }
+
+        if let Some(obj) = val.as_object_mut() {
+            obj.insert(
+                "active_meter_track".to_string(),
+                serde_json::to_value(&active_meter_track).unwrap_or(serde_json::Value::Null),
+            );
+        }
+
+        Ok(val)
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        Ok(serde_json::json!({ "success": true, "channelStrips": [] }))
+        Ok(serde_json::json!({ "success": true, "channelStrips": [], "active_meter_track": null }))
     }
 }
 

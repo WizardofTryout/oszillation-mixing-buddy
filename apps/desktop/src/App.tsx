@@ -10,7 +10,8 @@ import {
   type MixingSkill,
   type MixingSkillSummary,
   resolveTargetProfile,
-  detectGenreFromTelemetry
+  detectGenreFromTelemetry,
+  resolveScopeFromTrackName
 } from '@mixing-buddy/shared-types';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -139,10 +140,26 @@ export const App: React.FC = () => {
   const [activeReferenceProfile, setActiveReferenceProfile] = useState<ReferenceTrackProfile | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
+  // Phase 2A: Active Meter Track & Auto-Scope Override State
+  const [activeMeterTrack, setActiveMeterTrack] = useState<string | null>(null);
+  const [isManualScopeOverride, setIsManualScopeOverride] = useState<boolean>(false);
+
   const effectiveGenre = genreProfile === 'auto_detect' ? (detectedGenre || 'pop_radio') : genreProfile;
   const activeTargetProfile = useMemo(() => {
     return resolveTargetProfile(effectiveGenre, targetScope, customProfile);
   }, [effectiveGenre, targetScope, customProfile]);
+
+  // Phase 2A: Auto-Scope Synchronisation when activeMeterTrack changes
+  useEffect(() => {
+    if (activeMeterTrack && !isManualScopeOverride) {
+      const autoScope = resolveScopeFromTrackName(activeMeterTrack);
+      if (autoScope !== targetScope) {
+        setTargetScope(autoScope);
+        const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
+        syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+      }
+    }
+  }, [activeMeterTrack, isManualScopeOverride, effectiveGenre, genreProfile, customNotes, customProfile, targetScope]);
 
   const syncContextToPlugin = (
     scope: TargetScope,
@@ -294,6 +311,30 @@ export const App: React.FC = () => {
           if (tracks.length > 0) {
             setLiveTracks(tracks);
             setLastTrackFetch(Date.now());
+          }
+
+          let meterTrack: string | null = json.active_meter_track || null;
+          if (!meterTrack && tracks.length > 0) {
+            for (const t of tracks) {
+              if (
+                t.insertSlots &&
+                t.insertSlots.some((s) => {
+                  const p = (s?.pluginName || '').toLowerCase();
+                  return (
+                    p.includes('mixingbuddymeter') ||
+                    p.includes('mixingbuddy') ||
+                    p.includes('mixingbudd') ||
+                    p.includes('the ear')
+                  );
+                })
+              ) {
+                meterTrack = t.name;
+                break;
+              }
+            }
+          }
+          if (meterTrack) {
+            setActiveMeterTrack(meterTrack);
           }
         }
       } catch {
@@ -1357,16 +1398,27 @@ export const App: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Sprint 3: Target Scope & Genre Selectors */}
+          {/* Phase 2A: Signal-Fokus mit Auto-Detection Badge */}
           <div
             className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs"
             title="Bestimmt die spektrale Zielschablone (Master, Vocal, Drums etc.) für die Analyse des ankommenden Meter-Signals."
           >
             <Target className="w-3.5 h-3.5 text-cyan-400 mr-1" />
             <span className="text-gray-400 mr-1.5 font-medium">Signal-Fokus:</span>
+            {!isManualScopeOverride && activeMeterTrack && (
+              <span
+                className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 rounded font-mono font-medium"
+                title={`Automatisch erkannt von Spur "${activeMeterTrack}"`}
+              >
+                ⚡ Auto
+              </span>
+            )}
             <select
               value={targetScope}
-              onChange={(e) => handleTargetScopeChange(e.target.value as TargetScope)}
+              onChange={(e) => {
+                setIsManualScopeOverride(true);
+                handleTargetScopeChange(e.target.value as TargetScope);
+              }}
               className="bg-transparent text-cyan-300 font-semibold focus:outline-none cursor-pointer"
             >
               <option value="mix_bus" className="bg-[#1a1c23] text-white">Master / Mix Bus</option>
@@ -1456,9 +1508,19 @@ export const App: React.FC = () => {
 
           <div className="flex items-center gap-1.5 text-xs text-slate-400 bg-slate-800/80 px-2.5 py-1 rounded">
             <Headphones className={`w-3.5 h-3.5 ${telemetry ? 'text-emerald-400' : isAudioConnected ? 'text-yellow-400' : 'text-slate-500'}`} />
-            <span className={telemetry ? 'text-emerald-400 font-medium' : ''}>
-              Master Bus: {telemetry ? `Online (${telemetry.sampleRate / 1000} kHz)` : isAudioConnected ? 'Streaming' : 'Offline'}
-            </span>
+            {telemetry ? (
+              <span className="text-emerald-400 font-medium">
+                {activeMeterTrack
+                  ? (activeMeterTrack.toLowerCase().includes('stereo out') || activeMeterTrack.toLowerCase() === 'master'
+                      ? `${activeMeterTrack} (Master)`
+                      : activeMeterTrack)
+                  : 'Master Bus'} · {(telemetry.sampleRate / 1000).toFixed(1)} kHz
+              </span>
+            ) : isAudioConnected ? (
+              <span className="text-yellow-400 font-medium">Streaming...</span>
+            ) : (
+              <span className="text-rose-400 font-medium">Telemetrie: Offline</span>
+            )}
           </div>
         </div>
       </header>

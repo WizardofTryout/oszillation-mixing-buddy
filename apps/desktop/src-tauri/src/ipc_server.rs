@@ -288,9 +288,31 @@ async fn handle_connection(
                     }
                 }
             };
+            let mut active_meter_track: Option<String> = None;
+            for t in &track_list {
+                let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                if let Some(inserts) = t.get("insertSlots").and_then(|ins| ins.as_array()) {
+                    for ins in inserts {
+                        let p_name = ins.get("pluginName").and_then(|v| v.as_str()).unwrap_or("");
+                        let p_lower = p_name.to_lowercase();
+                        if p_lower.contains("mixingbuddymeter")
+                            || p_lower.contains("mixingbuddy")
+                            || p_lower.contains("mixingbudd")
+                            || p_lower.contains("the ear")
+                        {
+                            active_meter_track = Some(name.to_string());
+                            break;
+                        }
+                    }
+                }
+                if active_meter_track.is_some() {
+                    break;
+                }
+            }
 
             let body = serde_json::json!({
-                "tracks": track_list
+                "tracks": track_list,
+                "active_meter_track": active_meter_track
             }).to_string();
 
             let resp = format!(

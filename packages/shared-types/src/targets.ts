@@ -334,3 +334,67 @@ export function validateMixPlausibility(
 
   return { isPlausible: true };
 }
+
+/**
+ * Heuristische Zuordnung von Spurnamen zu TargetScope (Sprint Phase 2A)
+ */
+export function resolveScopeFromTrackName(trackName: string): TargetScope {
+  const lower = trackName.toLowerCase();
+
+  // Master / Gesamtmix
+  if (
+    lower.includes('stereo out') ||
+    lower.includes('master') ||
+    lower.includes('mix') ||
+    lower.includes('print')
+  ) {
+    return 'mix_bus';
+  }
+  // Vocals
+  if (
+    lower.includes('vox') ||
+    lower.includes('vocal') ||
+    lower.includes('lead') ||
+    lower.includes('voice')
+  ) {
+    return 'lead_vocal';
+  }
+  // Drums / Percussion
+  if (
+    lower.includes('drum') ||
+    lower.includes('kit') ||
+    lower.includes('snare') ||
+    lower.includes('kick') ||
+    lower.includes('beat') ||
+    lower.includes('perc')
+  ) {
+    return 'drum_bus';
+  }
+  // Bass / Low End
+  if (lower.includes('bass') || lower.includes('808') || lower.includes('sub')) {
+    return 'sub_bass';
+  }
+  // Keys & Synths
+  if (
+    lower.includes('grand') ||
+    lower.includes('piano') ||
+    lower.includes('key') ||
+    lower.includes('synth') ||
+    lower.includes('organ') ||
+    lower.includes('pad')
+  ) {
+    return 'keys_synths';
+  }
+  // Akustik & Saiten
+  if (
+    lower.includes('git') ||
+    lower.includes('acoustic') ||
+    lower.includes('string') ||
+    lower.includes('horn') ||
+    lower.includes('brass')
+  ) {
+    return 'acoustic';
+  }
+
+  return 'mix_bus'; // Konservativer Fallback
+}
