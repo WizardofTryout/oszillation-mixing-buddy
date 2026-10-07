@@ -23,6 +23,8 @@ export interface MeterSpectrumData {
   timestamp: number;
   /** 32 logarithmic frequency bin magnitudes (-100 dB to 0 dB) */
   frequencyBands: number[];
+  /** 128 high-resolution logarithmic frequency bin magnitudes (-90 dB to 0 dB) */
+  spectrum128Bands?: number[];
   /** Center frequencies for the 32 bands in Hz */
   centerFrequenciesHz: number[];
   /** Top detected spectral resonance peaks */
@@ -64,7 +66,12 @@ export interface MetrologyTelemetryFrame {
   truePeak?: number;
   crestFactorDb?: number;
   correlation?: number;
+  /** 128 high-resolution logarithmic frequency bin magnitudes (-90 dB to 0 dB) */
+  spectrum128Bands?: number[];
   loudness: MeterLoudnessData;
   spectrum: MeterSpectrumData;
   dynamics: MeterDynamicsData;
 }
+
+export type TelemetryFrame = MetrologyTelemetryFrame;
+

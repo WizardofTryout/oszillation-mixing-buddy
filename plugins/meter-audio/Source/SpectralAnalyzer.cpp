@@ -35,6 +35,7 @@ void SpectralAnalyzer::reset()
     fftData.fill(0.0f);
     magnitudeSpectrum.fill(-100.0f);
     smoothedBands.fill(-100.0f);
+    smoothed128Bands.fill(-90.0f);
 
     sumL2 = 0.0;
     sumR2 = 0.0;
@@ -44,6 +45,7 @@ void SpectralAnalyzer::reset()
 
     std::lock_guard<std::mutex> lock(snapshotMutex);
     latestSnapshot.frequencyBands.fill(-100.0f);
+    latestSnapshot.spectrum128Bands.fill(-90.0f);
     latestSnapshot.centerFrequenciesHz = standardFrequencies;
     latestSnapshot.resonances.clear();
     latestSnapshot.stereoCorrelation = 1.0f;
@@ -179,8 +181,35 @@ void SpectralAnalyzer::binSpectrum()
         currentBands[b] = smoothedBands[b];
     }
 
+    // 128 Logarithmically spaced high-resolution bands (20 Hz to 20 kHz)
+    std::array<float, 128> current128Bands {};
+    for (size_t i = 0; i < 128; ++i)
+    {
+        const float fLow = 20.0f * std::pow(1000.0f, static_cast<float>(i) / 127.0f);
+        const float fHigh = 20.0f * std::pow(1000.0f, static_cast<float>(i + 1) / 127.0f);
+
+        int binStart = std::clamp(static_cast<int>(std::floor(fLow / binWidthHz)), 1, (fftSize / 2) - 1);
+        int binEnd = std::clamp(static_cast<int>(std::ceil(fHigh / binWidthHz)), 1, (fftSize / 2) - 1);
+        if (binEnd < binStart) binEnd = binStart;
+
+        float maxMag = -100.0f;
+        for (int k = binStart; k <= binEnd; ++k)
+        {
+            maxMag = std::max(maxMag, magnitudeSpectrum[static_cast<size_t>(k)]);
+        }
+
+        const float valDb = std::clamp(maxMag, -90.0f, 0.0f);
+        if (valDb > smoothed128Bands[i])
+            smoothed128Bands[i] = 0.6f * valDb + 0.4f * smoothed128Bands[i];
+        else
+            smoothed128Bands[i] = 0.2f * valDb + 0.8f * smoothed128Bands[i];
+
+        current128Bands[i] = smoothed128Bands[i];
+    }
+
     std::lock_guard<std::mutex> lock(snapshotMutex);
     latestSnapshot.frequencyBands = currentBands;
+    latestSnapshot.spectrum128Bands = current128Bands;
     latestSnapshot.centerFrequenciesHz = standardFrequencies;
 }
 

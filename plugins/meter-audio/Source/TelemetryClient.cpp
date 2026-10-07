@@ -278,6 +278,13 @@ juce::String TelemetryClient::buildJsonPayload(uint64_t seq)
         if (i < 31) json += ",";
     }
     json += "],";
+    json += "\"spectrum128Bands\":[";
+    for (size_t i = 0; i < 128; ++i)
+    {
+        json += juce::String(s.spectrum128Bands[i], 1);
+        if (i < 127) json += ",";
+    }
+    json += "],";
     json += "\"spectralResonances\":[";
     for (size_t i = 0; i < s.resonances.size(); ++i)
     {
@@ -286,6 +293,13 @@ juce::String TelemetryClient::buildJsonPayload(uint64_t seq)
         if (i + 1 < s.resonances.size()) json += ",";
     }
     json += "]},";
+    json += "\"spectrum128Bands\":[";
+    for (size_t i = 0; i < 128; ++i)
+    {
+        json += juce::String(s.spectrum128Bands[i], 1);
+        if (i < 127) json += ",";
+    }
+    json += "],";
 
     // Dynamics block
     json += "\"dynamics\":{";

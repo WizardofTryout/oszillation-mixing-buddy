@@ -19,6 +19,7 @@ struct SpectralResonance
 struct SpectralSnapshot
 {
     std::array<float, 32> frequencyBands;       // 32 1/3-octave bands (-100 dB to 0 dB)
+    std::array<float, 128> spectrum128Bands;    // 128 high-res log bands (-90 dB to 0 dB)
     std::array<float, 32> centerFrequenciesHz;  // Center frequencies in Hz
     std::vector<SpectralResonance> resonances;  // Top detected resonance peaks
     float stereoCorrelation { 1.0f };           // -1.0 (anti-phase) to +1.0 (mono)
@@ -70,6 +71,7 @@ private:
 
     // Smoothed logarithmic band magnitudes
     std::array<float, 32> smoothedBands {};
+    std::array<float, 128> smoothed128Bands {};
 
     // Correlation & dynamics accumulators
     double sumL2 { 0.0 };

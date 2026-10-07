@@ -67,7 +67,7 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   // Display toggles
-  const [viewMode, setViewMode] = useState<'led' | 'spline'>('led');
+  const [viewMode, setViewMode] = useState<'led' | 'highres' | 'spline'>('led');
   const [showTargetEnvelope, setShowTargetEnvelope] = useState<boolean>(true);
   const [showReference, setShowReference] = useState<boolean>(true);
 
@@ -86,13 +86,40 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
     Array.from({ length: 32 }, () => ({ db: -70, holdFrames: 0 }))
   );
 
+  // Peak-Hold State across 128 high-res bands
+  const highResPeaksRef = useRef<PeakHoldState[]>(
+    Array.from({ length: 128 }, () => ({ db: -90, holdFrames: 0 }))
+  );
+
   // Latest live data references for high-speed animation loop
   const latestSpectrumRef = useRef<number[]>(new Array(32).fill(-70));
+  const latest128BandsRef = useRef<number[]>(new Array(128).fill(-90));
+
   useEffect(() => {
     if (spectrum?.frequencyBands && spectrum.frequencyBands.length > 0) {
       latestSpectrumRef.current = spectrum.frequencyBands;
     }
-  }, [spectrum]);
+
+    // Direct 128-band telemetry frame or smooth interpolation fallback from 32 bands
+    const raw128 = telemetry?.spectrum128Bands ?? telemetry?.spectrum?.spectrum128Bands;
+    if (raw128 && raw128.length === 128) {
+      latest128BandsRef.current = raw128;
+    } else {
+      const src32 = spectrum?.frequencyBands ?? latestSpectrumRef.current;
+      if (src32 && src32.length > 0) {
+        const interp: number[] = new Array(128);
+        for (let j = 0; j < 128; j++) {
+          const t = (j / 127.0) * 31.0;
+          const idx = Math.floor(t);
+          const frac = t - idx;
+          const v0 = src32[idx] ?? -90;
+          const v1 = src32[Math.min(31, idx + 1)] ?? -90;
+          interp[j] = v0 + frac * (v1 - v0);
+        }
+        latest128BandsRef.current = interp;
+      }
+    }
+  }, [spectrum, telemetry]);
 
   // Target Curve calculation for 32 bands
   const targetCurve32 = useMemo<number[]>(() => {
@@ -408,6 +435,88 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
             ctx.restore();
           }
         }
+      } else if (viewMode === 'highres') {
+        // [ ⚡ High-Res ] MODE (AudioMotion Minimal Ästhetik — 128 Nadeln)
+        const live128 = latest128BandsRef.current;
+        const paddingLeft = plotLeft;
+        const usableWidth = plotWidth;
+        const needleWidth = Math.max(1.5, Math.min(2.0, (usableWidth / 128) - 1.0));
+
+        // Create vertical needle gradient from baselineY (-60 dB) to topY (0 dB)
+        // Unten: Gesundes Neon-Grün (#22c55e)
+        // Mitte (-24 dB bis -12 dB): Warmes Gelb/Bernstein (#eab308 bis #f59e0b)
+        // Spitze (> -6 dB): Signal-Rot (#ef4444)
+        const needleGrad = ctx.createLinearGradient(0, baselineY, 0, topY);
+        needleGrad.addColorStop(0.0, '#22c55e');   // -60 dB (Neon-Grün)
+        needleGrad.addColorStop(0.5, '#4ade80');   // -30 dB (Grün-Hell)
+        needleGrad.addColorStop(0.60, '#eab308');  // -24 dB (Warmes Gelb)
+        needleGrad.addColorStop(0.80, '#f59e0b');  // -12 dB (Bernstein)
+        needleGrad.addColorStop(0.90, '#ef4444');  // -6 dB (Signal-Rot)
+        needleGrad.addColorStop(1.0, '#dc2626');   // 0 dB (Tiefrot)
+
+        // Phosphor Glow-Effekt
+        ctx.save();
+        ctx.shadowBlur = 3;
+        ctx.shadowColor = '#22c55e';
+        ctx.fillStyle = needleGrad;
+
+        for (let i = 0; i < 128; i++) {
+          const currentDb = Math.max(-60, Math.min(0, live128[i] ?? -60));
+          const norm = (currentDb - (-60)) / 60.0;
+          const needleHeight = norm * plotHeight;
+          const x = paddingLeft + (i / 127.0) * usableWidth;
+          const needleY = baselineY - needleHeight;
+
+          ctx.fillRect(x - needleWidth / 2, needleY, needleWidth, needleHeight);
+        }
+        ctx.restore();
+
+        // Peak-Hold Sparkle Dots (128 schwebende Nadelköpfe)
+        // Bei neuem Maximalwert: peak.db = currentDb; peak.holdFrames = 12;
+        // Nach Haltezeit: Absinken mit 1.5 dB pro Frame
+        for (let i = 0; i < 128; i++) {
+          const currentDb = Math.max(-60, Math.min(0, live128[i] ?? -60));
+          const peak = highResPeaksRef.current[i];
+          if (currentDb > peak.db) {
+            peak.db = currentDb;
+            peak.holdFrames = 12;
+          } else if (peak.holdFrames > 0) {
+            peak.holdFrames--;
+          } else {
+            peak.db = Math.max(-60, peak.db - 1.5);
+          }
+
+          if (peak.db > -58) {
+            const peakNorm = (peak.db - (-60)) / 60.0;
+            const peakY = baselineY - peakNorm * plotHeight;
+            const x = paddingLeft + (i / 127.0) * usableWidth;
+
+            ctx.save();
+            ctx.shadowBlur = 4;
+            ctx.shadowColor = peak.db > -6 ? '#ef4444' : peak.db > -18 ? '#f59e0b' : '#22c55e';
+            ctx.fillStyle = peak.db > -6 ? '#fca5a5' : peak.db > -18 ? '#fef08a' : '#ffffff';
+            ctx.fillRect(x - 1, peakY - 2, 2, 2);
+            ctx.restore();
+          }
+        }
+
+        // Boden-Reflexion: Feine, nach unten invertierte Nadel-Reflexion (10 px Höhe mit abfallender Deckkraft 0.25 -> 0.0)
+        ctx.save();
+        const reflGrad = ctx.createLinearGradient(0, baselineY, 0, baselineY + 10);
+        reflGrad.addColorStop(0.0, 'rgba(34, 197, 94, 0.25)');
+        reflGrad.addColorStop(1.0, 'rgba(34, 197, 94, 0.00)');
+        ctx.fillStyle = reflGrad;
+
+        for (let i = 0; i < 128; i++) {
+          const currentDb = Math.max(-60, Math.min(0, live128[i] ?? -60));
+          const norm = (currentDb - (-60)) / 60.0;
+          if (norm > 0.05) {
+            const reflH = Math.min(10, norm * 10);
+            const x = paddingLeft + (i / 127.0) * usableWidth;
+            ctx.fillRect(x - needleWidth / 2, baselineY + 1, needleWidth, reflH);
+          }
+        }
+        ctx.restore();
       } else {
         // MODERN SPLINE MODE (FabFilter Smooth Bezier Curve with Translucent Fill)
         const splinePoints: Array<{ x: number; y: number }> = [];
@@ -555,7 +664,7 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
         <div className="flex items-center gap-2">
           <Music className="w-4 h-4 text-cyan-400" />
           <span className="text-xs font-semibold tracking-wider text-slate-200 uppercase">
-            Real-Time Spectrum (RTA — 32 Bands)
+            {viewMode === 'highres' ? 'Real-Time Spectrum (FFT — 128 Needles)' : 'Real-Time Spectrum (RTA — 32 Bands)'}
           </span>
           <span className="text-[10px] bg-cyan-950/60 text-cyan-300 border border-cyan-800/50 px-1.5 py-0.5 rounded font-mono font-bold">
             30 FPS LIVE
@@ -564,7 +673,7 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
 
         {/* Action Controls & Toggles */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* LED vs Spline Mode Toggle */}
+          {/* 3-Tab View Mode Toggle: 32 LED / High-Res / Spline */}
           <div className="flex items-center bg-[#0d1117] p-0.5 rounded-lg border border-[#21262d]">
             <button
               type="button"
@@ -574,9 +683,21 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
                   ? 'bg-[#161b22] text-cyan-400 border border-cyan-500/30 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
-              title="Segmentierte Hardware-LED Matrix"
+              title="Segmentierte Hardware-LED Matrix (32 Bänder)"
             >
-              <span>▦</span> LED
+              <span>▦</span> 32 LED
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('highres')}
+              className={`px-2.5 py-1 text-xs font-mono font-medium rounded transition-all flex items-center gap-1.5 ${
+                viewMode === 'highres'
+                  ? 'bg-[#161b22] text-emerald-400 border border-emerald-500/30 shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="High-Resolution FFT Spektrum (128 Nadeln mit Phosphor-Glow)"
+            >
+              <span>⚡</span> High-Res
             </button>
             <button
               type="button"
@@ -747,8 +868,12 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
       <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-400 font-mono pt-1 px-1">
         <div className="flex items-center gap-4 flex-wrap">
           <div className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-sm bg-cyan-400 shadow-[0_0_6px_rgba(6,182,212,0.6)]" />
-            <span>Live Mix (30 fps)</span>
+            <span className={`w-2.5 h-2.5 rounded-sm ${
+              viewMode === 'highres'
+                ? 'bg-emerald-400 shadow-[0_0_6px_rgba(34,197,94,0.6)]'
+                : 'bg-cyan-400 shadow-[0_0_6px_rgba(6,182,212,0.6)]'
+            }`} />
+            <span>{viewMode === 'highres' ? '128 FFT Nadeln' : 'Live Mix (30 fps)'}</span>
           </div>
 
           {showTargetEnvelope && (
@@ -777,7 +902,7 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
         </div>
 
         <div className="text-[10px] text-slate-500 font-mono">
-          ISO 1/3 Octave (20 Hz - 20 kHz)
+          {viewMode === 'highres' ? '128 Log-Bänder (20 Hz - 20 kHz) · Phosphor Glow' : 'ISO 1/3 Octave (20 Hz - 20 kHz)'}
         </div>
       </div>
     </div>
