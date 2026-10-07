@@ -143,6 +143,7 @@ export const App: React.FC = () => {
   // Phase 2A: Active Meter Track & Auto-Scope Override State
   const [activeMeterTrack, setActiveMeterTrack] = useState<string | null>(null);
   const [isManualScopeOverride, setIsManualScopeOverride] = useState<boolean>(false);
+  const prevMeterTrackRef = useRef<string | null>(null);
 
   const effectiveGenre = genreProfile === 'auto_detect' ? (detectedGenre || 'pop_radio') : genreProfile;
   const activeTargetProfile = useMemo(() => {
@@ -151,12 +152,21 @@ export const App: React.FC = () => {
 
   // Phase 2A: Auto-Scope Synchronisation when activeMeterTrack changes
   useEffect(() => {
-    if (activeMeterTrack && !isManualScopeOverride) {
-      const autoScope = resolveScopeFromTrackName(activeMeterTrack);
-      if (autoScope !== targetScope) {
-        setTargetScope(autoScope);
-        const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
-        syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+    if (activeMeterTrack) {
+      // Wenn der Musiker das Meter in Logic Pro auf eine andere Spur verschiebt,
+      // reaktivieren wir den Auto-Fokus für diese neue Spur automatisch!
+      if (prevMeterTrackRef.current && prevMeterTrackRef.current !== activeMeterTrack) {
+        setIsManualScopeOverride(false);
+      }
+      prevMeterTrackRef.current = activeMeterTrack;
+
+      if (!isManualScopeOverride) {
+        const autoScope = resolveScopeFromTrackName(activeMeterTrack);
+        if (autoScope !== targetScope) {
+          setTargetScope(autoScope);
+          const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
+          syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+        }
       }
     }
   }, [activeMeterTrack, isManualScopeOverride, effectiveGenre, genreProfile, customNotes, customProfile, targetScope]);
@@ -300,9 +310,23 @@ export const App: React.FC = () => {
 
     const fetchTracks = async () => {
       try {
-        const res = await fetch('http://127.0.0.1:48123/api/tracks');
-        if (res.ok) {
-          const json = await res.json();
+        let json: any = null;
+        try {
+          // 1. Native Tauri IPC: direkt, ohne Browser-CORS oder Local-Network-Sperren
+          json = await invoke('get_tracks');
+        } catch {
+          // 2. HTTP Fallback
+          try {
+            const res = await fetch('http://127.0.0.1:48123/api/tracks');
+            if (res.ok) {
+              json = await res.json();
+            }
+          } catch {
+            // Silently wait if IPC is starting up
+          }
+        }
+
+        if (json) {
           const tracks: TrackDescriptor[] = Array.isArray(json.tracks)
             ? json.tracks
             : Array.isArray(json)
@@ -338,7 +362,7 @@ export const App: React.FC = () => {
           }
         }
       } catch {
-        // IPC server not yet running — silently wait
+        // Silently wait
       }
       timer = setTimeout(fetchTracks, 2000);
     };
@@ -1405,22 +1429,50 @@ export const App: React.FC = () => {
           >
             <Target className="w-3.5 h-3.5 text-cyan-400 mr-1" />
             <span className="text-gray-400 mr-1.5 font-medium">Signal-Fokus:</span>
-            {!isManualScopeOverride && activeMeterTrack && (
+            {!isManualScopeOverride && activeMeterTrack ? (
               <span
                 className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 rounded font-mono font-medium"
                 title={`Automatisch erkannt von Spur "${activeMeterTrack}"`}
               >
                 ⚡ Auto
               </span>
-            )}
+            ) : isManualScopeOverride && activeMeterTrack ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsManualScopeOverride(false);
+                  const autoScope = resolveScopeFromTrackName(activeMeterTrack);
+                  setTargetScope(autoScope);
+                  const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
+                  syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+                }}
+                className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-slate-700/80 hover:bg-cyan-950/80 border border-slate-600 hover:border-cyan-500/50 text-slate-300 hover:text-cyan-300 rounded font-mono transition-colors cursor-pointer"
+                title={`Klicken um Auto-Fokus für "${activeMeterTrack}" wieder zu aktivieren`}
+              >
+                ⚡ Auto reaktivieren
+              </button>
+            ) : null}
             <select
-              value={targetScope}
+              value={!isManualScopeOverride && activeMeterTrack ? '__auto__' : targetScope}
               onChange={(e) => {
-                setIsManualScopeOverride(true);
-                handleTargetScopeChange(e.target.value as TargetScope);
+                if (e.target.value === '__auto__' && activeMeterTrack) {
+                  setIsManualScopeOverride(false);
+                  const autoScope = resolveScopeFromTrackName(activeMeterTrack);
+                  setTargetScope(autoScope);
+                  const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
+                  syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+                } else {
+                  setIsManualScopeOverride(true);
+                  handleTargetScopeChange(e.target.value as TargetScope);
+                }
               }}
               className="bg-transparent text-cyan-300 font-semibold focus:outline-none cursor-pointer"
             >
+              {activeMeterTrack && (
+                <option value="__auto__" className="bg-[#1a1c23] text-cyan-400 font-bold">
+                  ⚡ Auto ({activeMeterTrack})
+                </option>
+              )}
               <option value="mix_bus" className="bg-[#1a1c23] text-white">Master / Mix Bus</option>
               <option value="lead_vocal" className="bg-[#1a1c23] text-white">Lead Vocal</option>
               <option value="drum_bus" className="bg-[#1a1c23] text-white">Drum Bus / Rhythm</option>

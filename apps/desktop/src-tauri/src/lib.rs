@@ -1839,6 +1839,43 @@ async fn list_channel_strips() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+async fn get_tracks() -> Result<serde_json::Value, String> {
+    let mut detector = crate::daw_detector::DAWDetector::new();
+    let daw = detector.detect_active_daw();
+    let mut scanned = Vec::new();
+    if daw == crate::daw_detector::DetectedDAW::LogicPro {
+        scanned = detector.scan_logic_pro_tracks();
+    }
+
+    let mut active_meter_track: Option<String> = None;
+    for t in &scanned {
+        let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(inserts) = t.get("insertSlots").and_then(|ins| ins.as_array()) {
+            for ins in inserts {
+                let p_name = ins.get("pluginName").and_then(|v| v.as_str()).unwrap_or("");
+                let p_lower = p_name.to_lowercase();
+                if p_lower.contains("mixingbuddymeter")
+                    || p_lower.contains("mixingbuddy")
+                    || p_lower.contains("mixingbudd")
+                    || p_lower.contains("the ear")
+                {
+                    active_meter_track = Some(name.to_string());
+                    break;
+                }
+            }
+        }
+        if active_meter_track.is_some() {
+            break;
+        }
+    }
+
+    Ok(serde_json::json!({
+        "tracks": scanned,
+        "active_meter_track": active_meter_track
+    }))
+}
+
+#[tauri::command]
 async fn read_audio_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| format!("Failed to read audio file '{}': {}", path, e))
 }
@@ -2742,6 +2779,7 @@ pub fn run() {
             delete_learned_plugin,
             update_plugin_tags,
             list_channel_strips,
+            get_tracks,
             read_audio_file,
             save_reference_profile,
             list_reference_profiles,
