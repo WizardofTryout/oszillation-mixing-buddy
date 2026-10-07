@@ -17,8 +17,8 @@ import type { ProviderMode } from './ProviderSettings.js';
 
 function detectRoleFromUserInput(text: string): { scope: TargetScope; scopeLabel: string } | null {
   const t = text.trim().toLowerCase();
-  if (/^(bass|subbass|sub[- ]?bass|808|e[- ]?bass|bassline|es ist (ein )?bass)$/i.test(t)) {
-    return { scope: 'sub_bass', scopeLabel: 'Bass / Sub-Bass' };
+  if (/^(bass|subbass|sub[- ]?bass|e[- ]?bass|ebass|bassline|es ist (ein )?bass|e-bass)$/i.test(t)) {
+    return { scope: 'sub_bass', scopeLabel: 'Bass / E-Bass' };
   }
   if (/^(drums|drum|schlagzeug|percussion|beats?|drum[- ]?bus|es sind (die )?drums)$/i.test(t)) {
     return { scope: 'drum_bus', scopeLabel: 'Drums / Percussion' };
@@ -241,7 +241,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           {
             id: `msg_role_ack_${Date.now()}`,
             sender: 'assistant',
-            text: `Alles klar! Ich habe den Signal-Fokus für **${pendingClarification?.trackName || activeMeterTrack || 'diese Spur'}** auf **${roleMatch.scopeLabel}** gesetzt ✓.\n\nAktuell ist die Wiedergabe in ${dawLabel} noch gestoppt (Stille / Standby). Bitte starte die Wiedergabe in der DAW oder sag mir z. B. *'Höre Takt 9 bis 13'*, damit ich das Signal akustisch analysieren und fundierte Mix-Entscheidungen vorschlagen kann!`,
+            text: `Alles klar! Ich habe den Signal-Fokus für **${pendingClarification?.trackName || activeMeterTrack || 'diese Spur'}** dauerhaft auf **${roleMatch.scopeLabel}** gemerkt und gespeichert ✓.\n\nAktuell ist die Wiedergabe in ${dawLabel} noch gestoppt (Stille / Standby). Bitte starte die Wiedergabe in der DAW oder sag mir z. B. *'Höre Takt 9 bis 13'*, damit ich das Signal akustisch analysieren und fundierte Mix-Entscheidungen vorschlagen kann!`,
             timestamp: Date.now()
           }
         ]);
@@ -785,7 +785,7 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           <div className="flex flex-wrap gap-1.5 pt-0.5">
             {[
               { label: '🥁 Drums', scope: 'drum_bus' as TargetScope, scopeLabel: 'Drums / Percussion' },
-              { label: '🔊 Bass / 808', scope: 'sub_bass' as TargetScope, scopeLabel: 'Bass / Sub-Bass' },
+              { label: '🎸 Bass / E-Bass', scope: 'sub_bass' as TargetScope, scopeLabel: 'Bass / E-Bass' },
               { label: '🎹 Keys / Synth', scope: 'keys_synths' as TargetScope, scopeLabel: 'Keys / Synths' },
               { label: '🎤 Vocal', scope: 'lead_vocal' as TargetScope, scopeLabel: 'Lead Vocal' },
               { label: '🎸 Akustik / Git', scope: 'acoustic' as TargetScope, scopeLabel: 'Akustik / Git' },

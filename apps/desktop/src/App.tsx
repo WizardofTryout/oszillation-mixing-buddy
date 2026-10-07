@@ -145,10 +145,10 @@ export const App: React.FC = () => {
   const [activeReferenceProfile, setActiveReferenceProfile] = useState<ReferenceTrackProfile | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Phase 2A & 2C: Active Meter Track, Auto-Scope & Acoustic Classification State
+  // Phase 2A, 2C & Learning: Active Meter Track, Auto-Scope & Acoustic Classification State
   const [activeMeterTrack, setActiveMeterTrack] = useState<string | null>(null);
   const [isManualScopeOverride, setIsManualScopeOverride] = useState<boolean>(false);
-  const [scopeDetectionSource, setScopeDetectionSource] = useState<'text' | 'audio' | 'manual'>('text');
+  const [scopeDetectionSource, setScopeDetectionSource] = useState<'text' | 'audio' | 'manual' | 'learned'>('text');
   const [pendingClarification, setPendingClarification] = useState<{
     trackName: string;
     text: string;
@@ -156,20 +156,71 @@ export const App: React.FC = () => {
   const prevMeterTrackRef = useRef<string | null>(null);
   const askedClarificationTrackRef = useRef<string | null>(null);
 
+  // Persistent map of user-confirmed track roles across sessions and plugin movements
+  const [learnedTrackScopes, setLearnedTrackScopes] = useState<Record<string, TargetScope>>(() => {
+    try {
+      const saved = localStorage.getItem('mixing_buddy_learned_track_scopes');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const rememberTrackScope = (trackName: string, scope: TargetScope) => {
+    const key = trackName.trim().toLowerCase();
+    setLearnedTrackScopes((prev) => {
+      const next = { ...prev, [key]: scope };
+      try {
+        localStorage.setItem('mixing_buddy_learned_track_scopes', JSON.stringify(next));
+      } catch (e) {
+        console.error('Failed to save learned track scope', e);
+      }
+      return next;
+    });
+  };
+
+  const unlearnTrackScope = (trackName: string) => {
+    const key = trackName.trim().toLowerCase();
+    setLearnedTrackScopes((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      try {
+        localStorage.setItem('mixing_buddy_learned_track_scopes', JSON.stringify(next));
+      } catch (e) {
+        console.error('Failed to unlearn track scope', e);
+      }
+      return next;
+    });
+  };
+
   const effectiveGenre = genreProfile === 'auto_detect' ? (detectedGenre || 'pop_radio') : genreProfile;
   const activeTargetProfile = useMemo(() => {
     return resolveTargetProfile(effectiveGenre, targetScope, customProfile);
   }, [effectiveGenre, targetScope, customProfile]);
 
-  // Phase 2A & 2C: Auto-Scope & Acoustic Telemetry Detection when activeMeterTrack changes
+  // Phase 2A, 2C & Learning: Auto-Scope & Acoustic Telemetry Detection when activeMeterTrack changes
   useEffect(() => {
     if (activeMeterTrack) {
+      const trackKey = activeMeterTrack.trim().toLowerCase();
       if (prevMeterTrackRef.current && prevMeterTrackRef.current !== activeMeterTrack) {
         setIsManualScopeOverride(false);
         askedClarificationTrackRef.current = null;
         setPendingClarification(null);
       }
       prevMeterTrackRef.current = activeMeterTrack;
+
+      // 1. Höchste Priorität: Haben wir uns die Rolle für diese Spur bereits gemerkt?
+      const savedScope = learnedTrackScopes[trackKey];
+      if (savedScope) {
+        setScopeDetectionSource('learned');
+        setPendingClarification(null);
+        if (savedScope !== targetScope) {
+          setTargetScope(savedScope);
+          const updated = resolveTargetProfile(effectiveGenre, savedScope, customProfile);
+          syncContextToPlugin(savedScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+        }
+        return;
+      }
 
       if (!isManualScopeOverride) {
         // Prüfe ob der Spurname mehrdeutig / generisch ist (z. B. "Audio 1", "Spur 2", "Loop")
@@ -218,12 +269,15 @@ export const App: React.FC = () => {
         }
       }
     }
-  }, [activeMeterTrack, isManualScopeOverride, effectiveGenre, genreProfile, customNotes, customProfile, targetScope, telemetry]);
+  }, [activeMeterTrack, isManualScopeOverride, effectiveGenre, genreProfile, customNotes, customProfile, targetScope, telemetry, learnedTrackScopes]);
 
   const handleSelectClarificationScope = (scope: TargetScope) => {
     setIsManualScopeOverride(true);
-    setScopeDetectionSource('manual');
+    setScopeDetectionSource('learned');
     setPendingClarification(null);
+    if (activeMeterTrack) {
+      rememberTrackScope(activeMeterTrack, scope);
+    }
     setTargetScope(scope);
     const updated = resolveTargetProfile(effectiveGenre, scope, customProfile);
     syncContextToPlugin(scope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
@@ -251,6 +305,10 @@ export const App: React.FC = () => {
 
   const handleTargetScopeChange = (newScope: TargetScope) => {
     setTargetScope(newScope);
+    if (activeMeterTrack) {
+      rememberTrackScope(activeMeterTrack, newScope);
+      setScopeDetectionSource('learned');
+    }
     const updated = resolveTargetProfile(effectiveGenre, newScope, customProfile);
     syncContextToPlugin(newScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
   };
@@ -1516,18 +1574,36 @@ export const App: React.FC = () => {
             OMB
           </div>
           <span className="font-bold text-sm tracking-wide text-slate-100">OSZILLATION MIXING BUDDY</span>
-          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.6</span>
+          <span className="text-xs text-blue-400 font-mono ml-2">v0.5.7</span>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Phase 2A & 2C: Signal-Fokus mit Auto- / Audio-Detect Badge */}
+          {/* Phase 2A, 2C & Learning: Signal-Fokus mit Auto- / Audio-Detect / Gemerkt Badge */}
           <div
             className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs"
             title="Bestimmt die spektrale Zielschablone (Master, Vocal, Drums etc.) für die Analyse des ankommenden Meter-Signals."
           >
             <Target className="w-3.5 h-3.5 text-cyan-400 mr-1" />
             <span className="text-gray-400 mr-1.5 font-medium">Signal-Fokus:</span>
-            {!isManualScopeOverride && activeMeterTrack ? (
+            {learnedTrackScopes[activeMeterTrack?.trim().toLowerCase() || ''] ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (activeMeterTrack) {
+                    unlearnTrackScope(activeMeterTrack);
+                    setIsManualScopeOverride(false);
+                    const autoScope = resolveScopeFromTrackName(activeMeterTrack);
+                    setTargetScope(autoScope);
+                    const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
+                    syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+                  }
+                }}
+                className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-emerald-950/80 hover:bg-slate-700/80 border border-emerald-500/50 hover:border-slate-500 text-emerald-300 hover:text-white rounded font-mono font-medium transition-colors cursor-pointer"
+                title={`Spur-Rolle für "${activeMeterTrack}" ist dauerhaft gemerkt. Klicken um Zuweisung zu vergessen und Auto-Erkennung neu zu starten`}
+              >
+                💾 Gemerkt ↺
+              </button>
+            ) : !isManualScopeOverride && activeMeterTrack ? (
               <span
                 className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 rounded font-mono font-medium"
                 title={
@@ -1555,9 +1631,14 @@ export const App: React.FC = () => {
               </button>
             ) : null}
             <select
-              value={!isManualScopeOverride && activeMeterTrack ? '__auto__' : targetScope}
+              value={
+                !isManualScopeOverride && activeMeterTrack && !learnedTrackScopes[activeMeterTrack.trim().toLowerCase()]
+                  ? '__auto__'
+                  : targetScope
+              }
               onChange={(e) => {
                 if (e.target.value === '__auto__' && activeMeterTrack) {
+                  unlearnTrackScope(activeMeterTrack);
                   setIsManualScopeOverride(false);
                   const autoScope = resolveScopeFromTrackName(activeMeterTrack);
                   setTargetScope(autoScope);
@@ -1572,13 +1653,13 @@ export const App: React.FC = () => {
             >
               {activeMeterTrack && (
                 <option value="__auto__" className="bg-[#1a1c23] text-cyan-400 font-bold">
-                  ⚡ Auto ({activeMeterTrack})
+                  ⚡ Auto ({activeMeterTrack}{learnedTrackScopes[activeMeterTrack.trim().toLowerCase()] ? ' - Gemerkt' : ''})
                 </option>
               )}
               <option value="mix_bus" className="bg-[#1a1c23] text-white">Master / Mix Bus</option>
               <option value="lead_vocal" className="bg-[#1a1c23] text-white">Lead Vocal</option>
               <option value="drum_bus" className="bg-[#1a1c23] text-white">Drum Bus / Rhythm</option>
-              <option value="sub_bass" className="bg-[#1a1c23] text-white">Sub Bass / 808</option>
+              <option value="sub_bass" className="bg-[#1a1c23] text-white">Bass / E-Bass</option>
               <option value="keys_synths" className="bg-[#1a1c23] text-white">Keys & Synths</option>
               <option value="acoustic" className="bg-[#1a1c23] text-white">Acoustic / Guitars</option>
             </select>
