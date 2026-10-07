@@ -70,6 +70,8 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
   const [viewMode, setViewMode] = useState<'led' | 'highres' | 'spline'>('led');
   const [showTargetEnvelope, setShowTargetEnvelope] = useState<boolean>(true);
   const [showReference, setShowReference] = useState<boolean>(true);
+  const [isLegendOpen, setIsLegendOpen] = useState<boolean>(false);
+  const legendRef = useRef<HTMLDivElement | null>(null);
 
   // Reference persistence state
   const [savedReferences, setSavedReferences] = useState<ReferenceProfileSummary[]>([]);
@@ -173,14 +175,17 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
         setIsDropdownOpen(false);
       }
+      if (legendRef.current && !legendRef.current.contains(e.target as Node)) {
+        setIsLegendOpen(false);
+      }
     };
-    if (isDropdownOpen) {
+    if (isDropdownOpen || isLegendOpen) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [isDropdownOpen]);
+  }, [isDropdownOpen, isLegendOpen]);
 
   const handleSelectSummary = async (summary: ReferenceProfileSummary) => {
     setIsDropdownOpen(false);
@@ -743,6 +748,136 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
           >
             <span>📊</span> Referenz
           </button>
+
+          {/* Legende Button & Popover */}
+          <div className="relative" ref={legendRef}>
+            <button
+              type="button"
+              onClick={() => setIsLegendOpen(!isLegendOpen)}
+              className={`px-2 py-1 text-xs rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer ${
+                isLegendOpen 
+                  ? 'bg-slate-700 text-cyan-300 border-cyan-500/50 shadow-sm' 
+                  : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700'
+              }`}
+              title="Farblegende und Analyse-Erklärung öffnen"
+            >
+              <span>ℹ️</span>
+              <span>Legende</span>
+              <span className="text-[10px] text-slate-400">{isLegendOpen ? '▲' : '▼'}</span>
+            </button>
+
+            {isLegendOpen && (
+              <div className="absolute right-0 top-full mt-2 w-80 md:w-96 bg-slate-900/95 border border-slate-700 rounded-xl shadow-2xl p-4 text-xs backdrop-blur-md space-y-3 z-50 text-slate-200">
+                {/* Kopfbereich */}
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <div className="flex items-center gap-2 font-semibold text-slate-100 text-sm">
+                    <span className="text-cyan-400">📊</span>
+                    <span>Spektral- & Heatmap-Legende</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsLegendOpen(false)}
+                    className="p-1 text-slate-400 hover:text-white rounded transition-colors cursor-pointer"
+                    title="Schließen"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Sektion 1: 32 LED & Spline Heatmap */}
+                <div className="space-y-1.5">
+                  <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                    32 LED & Spline Heatmap
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-start gap-2">
+                      <span className="w-3.5 h-3.5 rounded-xs bg-[#06b6d4] shadow-[0_0_6px_rgba(6,182,212,0.6)] shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-cyan-300">Cyan (#06b6d4): </span>
+                        <span>Sollbereich / Ausgewogen (innerhalb Zielkorridor)</span>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="w-3.5 h-3.5 rounded-xs bg-[#f59e0b] shadow-[0_0_6px_rgba(245,158,11,0.6)] shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-amber-300">Bernstein (#f59e0b): </span>
+                        <span>+2.0 dB über Soll (leichte Überhöhung / Dichte)</span>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="w-3.5 h-3.5 rounded-xs bg-[#f43f5e] shadow-[0_0_6px_rgba(244,63,94,0.6)] shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-rose-300">Signal-Rot (#f43f5e): </span>
+                        <span>&gt; +3.5 dB über Soll (Kritische Maskierung / Resonanz)</span>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="w-3.5 h-1.5 rounded-xs bg-amber-400 border border-rose-500 shadow-[0_0_6px_rgba(251,191,36,0.6)] shrink-0 mt-1.5" />
+                      <div>
+                        <span className="font-semibold text-amber-200">Schwebende Kappe: </span>
+                        <span>Spitzenpegel (Peak-Hold mit 500 ms Fall)</span>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="w-3.5 h-3.5 rounded-xs bg-white/5 border border-white/10 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-slate-400">Dunkelgrau: </span>
+                        <span>Inaktive Geister-LEDs (Display-Headroom)</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sektion 2: High-Res Modus (128 Nadeln) */}
+                <div className="space-y-1.5 border-t border-slate-800/80 pt-2">
+                  <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                    High-Res Modus (128 Nadeln)
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-start gap-2">
+                      <span className="w-3.5 h-3.5 rounded-xs bg-gradient-to-t from-emerald-500 via-amber-500 to-rose-500 shrink-0 mt-0.5 shadow-[0_0_6px_rgba(34,197,94,0.4)]" />
+                      <div>
+                        <span className="font-semibold text-emerald-300">Grün → Bernstein → Rot: </span>
+                        <span>Vertikaler Pegelgradient (-60 dB bis 0 dB)</span>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="w-2 h-2 rounded-full bg-white shadow-[0_0_6px_rgba(255,255,255,0.8)] shrink-0 ml-0.5 mt-1" />
+                      <div>
+                        <span className="font-semibold text-slate-100">Sparkle Dots: </span>
+                        <span>Schwebende Transienten-Spitzen</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sektion 3: Overlays */}
+                <div className="space-y-1.5 border-t border-slate-800/80 pt-2">
+                  <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                    Overlays
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex items-start gap-2">
+                      <span className="w-3.5 h-0.5 bg-sky-400 border-b border-dashed border-sky-300 shadow-[0_0_6px_rgba(56,189,248,0.8)] shrink-0 mt-2" />
+                      <div>
+                        <span className="font-semibold text-sky-300">Cyan gestrichelt: </span>
+                        <span>
+                          Soll-Envelope (Genre: {targetProfile?.name ?? 'Pop / Modern Radio'} / Scope: {targetProfile?.targetScope ?? 'Master'})
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <span className="w-3.5 h-0.5 bg-purple-400 shadow-[0_0_6px_rgba(192,132,252,0.8)] shrink-0 mt-2" />
+                      <div>
+                        <span className="font-semibold text-purple-300">Lila Linie (#c084fc): </span>
+                        <span>Referenz-Track Spektrum</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Reference Track Dropdown Selector */}
           <div className="relative" ref={dropdownRef}>
