@@ -79,7 +79,7 @@ echo "🚀 Pushe sauberes Release auf ${PUBLIC_REMOTE}/${PUBLIC_BRANCH}..."
 git push "${PUBLIC_REMOTE}" "${RELEASE_BRANCH}:${PUBLIC_BRANCH}" --force
 
 # 10. Aufräumen: Zurück zum Entwicklungs-Branch und Export-Branch löschen
-git checkout "${CURRENT_BRANCH}"
+git checkout -f "${CURRENT_BRANCH}"
 git branch -D "${RELEASE_BRANCH}"
 
 echo "============================================================"
