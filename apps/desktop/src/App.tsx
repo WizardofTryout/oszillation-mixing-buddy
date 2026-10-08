@@ -35,7 +35,36 @@ import {
 } from './components/PluginVaultModal.js';
 import { SkillManagerModal } from './components/SkillManagerModal.js';
 import { SkillWizardModal } from './components/SkillWizardModal.js';
-import { Sliders, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu } from 'lucide-react';
+import { Sliders, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu, Search } from 'lucide-react';
+
+const SatelliteMiniMeter: React.FC<{ lufs?: number }> = ({ lufs }) => {
+  const level = lufs ?? -100;
+  const isSilent = level < -55;
+  const pct = Math.max(0, Math.min(100, ((level + 60) / 60) * 100));
+
+  let barColor = 'bg-emerald-500';
+  if (level > -6) {
+    barColor = 'bg-rose-500';
+  } else if (level > -18) {
+    barColor = 'bg-amber-400';
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 shrink-0" title={isSilent ? 'Kein Signal' : `${level.toFixed(1)} LUFS`}>
+      <div className="w-10 h-1.5 bg-slate-800 rounded-full overflow-hidden border border-slate-700/60 flex">
+        {!isSilent && (
+          <div
+            className={`h-full ${barColor} transition-[width] duration-75 ease-out rounded-full`}
+            style={{ width: `${pct}%` }}
+          />
+        )}
+      </div>
+      <span className="text-[9px] font-mono w-9 text-right text-slate-400">
+        {isSilent ? 'off' : `${level.toFixed(1)}`}
+      </span>
+    </div>
+  );
+};
 
 export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<MetrologyTelemetryFrame | null>(null);
@@ -267,6 +296,19 @@ export const App: React.FC = () => {
       return next;
     });
   };
+
+  // Satellite search filter state & client-side filtered list
+  const [satelliteSearchQuery, setSatelliteSearchQuery] = useState<string>('');
+
+  const filteredSatellites = useMemo(() => {
+    if (!satelliteSearchQuery.trim()) return satellites;
+    const q = satelliteSearchQuery.toLowerCase();
+    return satellites.filter((sat) => {
+      const nameMatch = sat.track_name.toLowerCase().includes(q);
+      const roleMatch = (learnedTrackScopes[sat.track_name.trim().toLowerCase()] || '').toLowerCase().includes(q);
+      return nameMatch || roleMatch;
+    });
+  }, [satellites, satelliteSearchQuery, learnedTrackScopes]);
 
   const effectiveGenre = genreProfile === 'auto_detect' ? (detectedGenre || 'pop_radio') : genreProfile;
   const activeTargetProfile = useMemo(() => {
@@ -1665,7 +1707,7 @@ export const App: React.FC = () => {
           <span className="font-bold text-xs sm:text-sm tracking-wide text-slate-100 hidden sm:inline">
             OSZILLATION MIXING BUDDY
           </span>
-          <span className="text-xs text-blue-400 font-mono ml-1 sm:ml-2">v0.6.2</span>
+          <span className="text-xs text-blue-400 font-mono ml-1 sm:ml-2">v0.6.3</span>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -1899,7 +1941,7 @@ export const App: React.FC = () => {
 
             {/* Dropdown Menu für Satelliten */}
             {isSatelliteDropdownOpen && (
-              <div className="absolute right-0 top-full mt-1.5 w-80 bg-[#16181d] border border-slate-700/90 rounded-lg shadow-2xl z-50 overflow-hidden backdrop-blur-md">
+              <div className="absolute right-0 top-full mt-1.5 w-84 bg-[#16181d] border border-slate-700/90 rounded-lg shadow-2xl z-50 overflow-hidden backdrop-blur-md">
                 <div className="px-3 py-2 bg-slate-800/60 border-b border-slate-700/60 flex items-center justify-between text-[11px]">
                   <span className="font-semibold text-slate-300 uppercase tracking-wider text-[10px]">
                     Mess-Satelliten ({satellites.length})
@@ -1910,9 +1952,33 @@ export const App: React.FC = () => {
                   </span>
                 </div>
 
+                {/* Suchfilter für Satelliten */}
+                <div className="p-2 border-b border-slate-800 bg-slate-900/60">
+                  <div className="relative flex items-center">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={satelliteSearchQuery}
+                      onChange={(e) => setSatelliteSearchQuery(e.target.value)}
+                      placeholder="Spur oder Rolle suchen..."
+                      className="w-full bg-slate-950/80 border border-slate-700/80 rounded pl-8 pr-7 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                    />
+                    {satelliteSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setSatelliteSearchQuery('')}
+                        className="absolute right-2 text-slate-400 hover:text-white text-xs cursor-pointer"
+                        title="Suche zurücksetzen"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 <div className="max-h-64 overflow-y-auto divide-y divide-slate-800/80">
-                  {satellites.length > 0 ? (
-                    satellites.map((sat) => {
+                  {filteredSatellites.length > 0 ? (
+                    filteredSatellites.map((sat) => {
                       const isActive =
                         sat.instance_id === activeInstanceId ||
                         (!activeInstanceId && (sat.track_name === activeMeterTrack || sat === satellites[0]));
@@ -1956,21 +2022,35 @@ export const App: React.FC = () => {
                             </div>
                           </div>
 
-                          {isActive && (
-                            <span className="text-[10px] font-semibold tracking-wide uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
-                              Aktiver Fokus
-                            </span>
-                          )}
+                          <div className="flex items-center gap-2 shrink-0">
+                            <SatelliteMiniMeter lufs={sat.momentary_lufs} />
+                            {isActive && (
+                              <span className="text-[10px] font-semibold tracking-wide uppercase px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
+                                Fokus
+                              </span>
+                            )}
+                          </div>
                         </button>
                       );
                     })
-                  ) : (
+                  ) : satellites.length === 0 ? (
                     <div className="px-3 py-4 text-center text-xs text-slate-400">
                       {isAudioConnected ? (
                         <span>Keine Multi-Instanz Satelliten erkannt.<br />Plugin auf Einzelspur aktiv.</span>
                       ) : (
                         <span>Kein 'MixingBuddyMeter' Plugin verbunden.<br />Bitte Plugin in Logic Pro laden.</span>
                       )}
+                    </div>
+                  ) : (
+                    <div className="px-3 py-4 text-center text-xs text-slate-400 space-y-1">
+                      <div>Keine Satelliten für „{satelliteSearchQuery}“ gefunden.</div>
+                      <button
+                        type="button"
+                        onClick={() => setSatelliteSearchQuery('')}
+                        className="text-cyan-400 hover:underline text-[11px] cursor-pointer"
+                      >
+                        Filter zurücksetzen
+                      </button>
                     </div>
                   )}
                 </div>
@@ -2029,9 +2109,31 @@ export const App: React.FC = () => {
                     )}
                   </div>
 
-                  <div className="max-h-36 overflow-y-auto divide-y divide-slate-800/80 rounded-lg bg-slate-950/60 border border-slate-800">
-                    {satellites.length > 0 ? (
-                      satellites.map((sat) => {
+                  {/* Suchfilter für Satelliten */}
+                  <div className="relative flex items-center">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={satelliteSearchQuery}
+                      onChange={(e) => setSatelliteSearchQuery(e.target.value)}
+                      placeholder="Spur oder Rolle suchen..."
+                      className="w-full bg-slate-950/80 border border-slate-700/80 rounded pl-8 pr-7 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500"
+                    />
+                    {satelliteSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setSatelliteSearchQuery('')}
+                        className="absolute right-2 text-slate-400 hover:text-white text-xs cursor-pointer"
+                        title="Suche zurücksetzen"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="max-h-40 overflow-y-auto divide-y divide-slate-800/80 rounded-lg bg-slate-950/60 border border-slate-800">
+                    {filteredSatellites.length > 0 ? (
+                      filteredSatellites.map((sat) => {
                         const isActive =
                           sat.instance_id === activeInstanceId ||
                           (!activeInstanceId && (sat.track_name === activeMeterTrack || sat === satellites[0]));
@@ -2077,17 +2179,31 @@ export const App: React.FC = () => {
                                 </div>
                               </div>
                             </div>
-                            {isActive && (
-                              <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
-                                Aktiv
-                              </span>
-                            )}
+                            <div className="flex items-center gap-2 shrink-0">
+                              <SatelliteMiniMeter lufs={sat.momentary_lufs} />
+                              {isActive && (
+                                <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
+                                  Aktiv
+                                </span>
+                              )}
+                            </div>
                           </button>
                         );
                       })
-                    ) : (
+                    ) : satellites.length === 0 ? (
                       <div className="px-3 py-3 text-center text-xs text-slate-400">
                         {isAudioConnected ? 'Plugin auf Einzelspur aktiv' : 'Kein Meter-Plugin verbunden'}
+                      </div>
+                    ) : (
+                      <div className="px-3 py-3 text-center text-xs text-slate-400 space-y-1">
+                        <div>Keine Treffer für „{satelliteSearchQuery}“</div>
+                        <button
+                          type="button"
+                          onClick={() => setSatelliteSearchQuery('')}
+                          className="text-cyan-400 hover:underline text-[11px] cursor-pointer"
+                        >
+                          Zurücksetzen
+                        </button>
                       </div>
                     )}
                   </div>
@@ -2242,7 +2358,7 @@ export const App: React.FC = () => {
                 {/* Fußzeile: Status & Version */}
                 <div className="border-t border-slate-800/80 pt-2 flex items-center justify-between text-[10px] text-slate-400 font-mono">
                   <span>DAW: {activeDaw === 'none' ? 'Apple Logic Pro (Bereit)' : activeDaw}</span>
-                  <span className="text-blue-400 font-bold">v0.6.2</span>
+                  <span className="text-blue-400 font-bold">v0.6.3</span>
                 </div>
               </div>
             )}

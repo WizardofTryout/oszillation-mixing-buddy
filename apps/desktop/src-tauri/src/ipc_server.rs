@@ -27,6 +27,8 @@ pub struct MeterSatellite {
     pub track_name: String,
     pub sample_rate: f64,
     pub last_seen_ms: u64,
+    pub momentary_lufs: Option<f32>,
+    pub true_peak_db: Option<f32>,
 }
 
 pub struct IPCServer {
@@ -1265,6 +1267,26 @@ fn process_incoming_meter_frame(
             let srate = val.get("sampleRate").and_then(|v| v.as_f64()).unwrap_or(44100.0);
             let now = now_millis();
 
+            let mom_lufs = val.get("loudness")
+                .and_then(|l| l.get("momentaryLufs"))
+                .and_then(|v| v.as_f64())
+                .map(|v| v as f32)
+                .or_else(|| val.get("momentaryLufs").and_then(|v| v.as_f64()).map(|v| v as f32));
+
+            let tp_db = val.get("loudness")
+                .and_then(|l| l.get("truePeakDb"))
+                .and_then(|tp| {
+                    if let Some(n) = tp.as_f64() {
+                        Some(n as f32)
+                    } else {
+                        let l = tp.get("left").and_then(|v| v.as_f64())?;
+                        let r = tp.get("right").and_then(|v| v.as_f64()).unwrap_or(l);
+                        Some(l.max(r) as f32)
+                    }
+                })
+                .or_else(|| val.get("truePeak").and_then(|v| v.as_f64()).map(|v| v as f32))
+                .or_else(|| val.get("truePeakDb").and_then(|v| v.as_f64()).map(|v| v as f32));
+
             let mut list_changed = false;
             let mut sat_list = Vec::new();
             if let Ok(mut sats) = satellites.lock() {
@@ -1275,12 +1297,16 @@ fn process_incoming_meter_frame(
                     }
                     entry.sample_rate = srate;
                     entry.last_seen_ms = now;
+                    entry.momentary_lufs = mom_lufs;
+                    entry.true_peak_db = tp_db;
                 } else {
                     sats.insert(inst_id.clone(), MeterSatellite {
                         instance_id: inst_id.clone(),
                         track_name: trk_name.clone(),
                         sample_rate: srate,
                         last_seen_ms: now,
+                        momentary_lufs: mom_lufs,
+                        true_peak_db: tp_db,
                     });
                     list_changed = true;
                 }
@@ -1292,12 +1318,15 @@ fn process_incoming_meter_frame(
                     }
                 }
 
-                if list_changed {
-                    sat_list = sats.values().cloned().collect();
-                }
+                sat_list = sats.values().cloned().collect();
             }
 
-            if list_changed {
+            static LAST_METER_EMIT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let last_emit = LAST_METER_EMIT_MS.load(Ordering::Relaxed);
+            let should_emit = list_changed || (now.saturating_sub(last_emit) >= 66);
+
+            if should_emit {
+                LAST_METER_EMIT_MS.store(now, Ordering::Relaxed);
                 if let Ok(guard) = app_handle.lock() {
                     if let Some(ref handle) = *guard {
                         let _ = handle.emit("meter_instances_changed", &sat_list);

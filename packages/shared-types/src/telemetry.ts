@@ -52,6 +52,8 @@ export interface MeterSatellite {
   track_name: string;
   sample_rate: number;
   last_seen_ms: number;
+  momentary_lufs?: number;
+  true_peak_db?: number;
 }
 
 export interface MetrologyTelemetryFrame {
