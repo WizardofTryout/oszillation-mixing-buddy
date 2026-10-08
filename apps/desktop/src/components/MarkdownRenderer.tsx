@@ -14,6 +14,22 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
     return tokens.map((token, index) => {
       if (token.startsWith('`') && token.endsWith('`') && token.length >= 2) {
         const codeText = token.slice(1, -1);
+        const hexMatch = codeText.match(/^\(?#([0-9a-fA-F]{6})\)?$/);
+        if (hexMatch) {
+          const hex = `#${hexMatch[1]}`;
+          return (
+            <span
+              key={index}
+              className="inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-slate-800/80 border border-slate-700/60 align-middle my-0.5"
+              title={hex}
+            >
+              <span
+                className="w-2.5 h-2.5 rounded-full shrink-0"
+                style={{ backgroundColor: hex, boxShadow: `0 0 6px ${hex}aa` }}
+              />
+            </span>
+          );
+        }
         return (
           <code
             key={index}
@@ -39,6 +55,32 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
           <em key={index} className="italic text-slate-300">
             {italicText}
           </em>
+        );
+      }
+      if (typeof token === 'string' && /\(?#[0-9a-fA-F]{6}\)?/.test(token)) {
+        const parts = token.split(/(\(?#[0-9a-fA-F]{6}\)?)/g);
+        return (
+          <React.Fragment key={index}>
+            {parts.map((part, pIdx) => {
+              const hexMatch = part.match(/^\(?#([0-9a-fA-F]{6})\)?$/);
+              if (hexMatch) {
+                const hex = `#${hexMatch[1]}`;
+                return (
+                  <span
+                    key={`${index}_${pIdx}`}
+                    className="inline-flex items-center gap-1.5 px-1 py-0.5 rounded bg-slate-800/60 border border-slate-700/40 align-middle mx-1"
+                    title={hex}
+                  >
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: hex, boxShadow: `0 0 6px ${hex}aa` }}
+                    />
+                  </span>
+                );
+              }
+              return part;
+            })}
+          </React.Fragment>
         );
       }
       return token;

@@ -791,35 +791,35 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
                   </div>
                   <div className="space-y-1.5">
                     <div className="flex items-start gap-2">
-                      <span className="w-3.5 h-3.5 rounded-xs bg-[#06b6d4] shadow-[0_0_6px_rgba(6,182,212,0.6)] shrink-0 mt-0.5" />
+                      <span className="w-3 h-3 rounded-full bg-[#06b6d4] shadow-[0_0_8px_rgba(6,182,212,0.7)] shrink-0 mt-0.5" />
                       <div>
-                        <span className="font-semibold text-cyan-300">Cyan (#06b6d4): </span>
+                        <span className="font-semibold text-cyan-300">Cyan: </span>
                         <span>Sollbereich / Ausgewogen (innerhalb Zielkorridor)</span>
                       </div>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="w-3.5 h-3.5 rounded-xs bg-[#f59e0b] shadow-[0_0_6px_rgba(245,158,11,0.6)] shrink-0 mt-0.5" />
+                      <span className="w-3 h-3 rounded-full bg-[#f59e0b] shadow-[0_0_8px_rgba(245,158,11,0.7)] shrink-0 mt-0.5" />
                       <div>
-                        <span className="font-semibold text-amber-300">Bernstein (#f59e0b): </span>
+                        <span className="font-semibold text-amber-300">Bernstein: </span>
                         <span>+2.0 dB über Soll (leichte Überhöhung / Dichte)</span>
                       </div>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="w-3.5 h-3.5 rounded-xs bg-[#f43f5e] shadow-[0_0_6px_rgba(244,63,94,0.6)] shrink-0 mt-0.5" />
+                      <span className="w-3 h-3 rounded-full bg-[#f43f5e] shadow-[0_0_8px_rgba(244,63,94,0.7)] shrink-0 mt-0.5" />
                       <div>
-                        <span className="font-semibold text-rose-300">Signal-Rot (#f43f5e): </span>
+                        <span className="font-semibold text-rose-300">Signal-Rot: </span>
                         <span>&gt; +3.5 dB über Soll (Kritische Maskierung / Resonanz)</span>
                       </div>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="w-3.5 h-1.5 rounded-xs bg-amber-400 border border-rose-500 shadow-[0_0_6px_rgba(251,191,36,0.6)] shrink-0 mt-1.5" />
+                      <span className="w-3 h-1.5 rounded-full bg-amber-400 border border-rose-500 shadow-[0_0_6px_rgba(251,191,36,0.7)] shrink-0 mt-1.5" />
                       <div>
                         <span className="font-semibold text-amber-200">Schwebende Kappe: </span>
                         <span>Spitzenpegel (Peak-Hold mit 500 ms Fall)</span>
                       </div>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="w-3.5 h-3.5 rounded-xs bg-white/5 border border-white/10 shrink-0 mt-0.5" />
+                      <span className="w-3 h-3 rounded-full bg-white/5 border border-white/10 shrink-0 mt-0.5" />
                       <div>
                         <span className="font-semibold text-slate-400">Dunkelgrau: </span>
                         <span>Inaktive Geister-LEDs (Display-Headroom)</span>
@@ -835,7 +835,7 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
                   </div>
                   <div className="space-y-1.5">
                     <div className="flex items-start gap-2">
-                      <span className="w-3.5 h-3.5 rounded-xs bg-gradient-to-t from-emerald-500 via-amber-500 to-rose-500 shrink-0 mt-0.5 shadow-[0_0_6px_rgba(34,197,94,0.4)]" />
+                      <span className="w-3 h-3 rounded-full bg-gradient-to-t from-emerald-500 via-amber-500 to-rose-500 shrink-0 mt-0.5 shadow-[0_0_8px_rgba(34,197,94,0.5)]" />
                       <div>
                         <span className="font-semibold text-emerald-300">Grün → Bernstein → Rot: </span>
                         <span>Vertikaler Pegelgradient (-60 dB bis 0 dB)</span>
@@ -867,9 +867,9 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
                       </div>
                     </div>
                     <div className="flex items-start gap-2">
-                      <span className="w-3.5 h-0.5 bg-purple-400 shadow-[0_0_6px_rgba(192,132,252,0.8)] shrink-0 mt-2" />
+                      <span className="w-3 h-3 rounded-full bg-[#c084fc] shadow-[0_0_8px_rgba(192,132,252,0.7)] shrink-0 mt-0.5" />
                       <div>
-                        <span className="font-semibold text-purple-300">Lila Linie (#c084fc): </span>
+                        <span className="font-semibold text-purple-300">Lila Linie: </span>
                         <span>Referenz-Track Spektrum</span>
                       </div>
                     </div>
