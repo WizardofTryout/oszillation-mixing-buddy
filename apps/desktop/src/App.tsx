@@ -168,6 +168,8 @@ export const App: React.FC = () => {
   const activeInstanceIdRef = useRef<string | null>(null);
   const [isSatelliteDropdownOpen, setIsSatelliteDropdownOpen] = useState<boolean>(false);
   const satelliteDropdownRef = useRef<HTMLDivElement | null>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState<boolean>(false);
+  const mobileMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     activeInstanceIdRef.current = activeInstanceId;
@@ -183,7 +185,7 @@ export const App: React.FC = () => {
       })
       .catch(() => {});
 
-    let unlisten: (() => void) | null = null;
+  let unlisten: (() => void) | null = null;
     listen<MeterSatellite[]>('meter_instances_changed', (event) => {
       if (Array.isArray(event.payload)) {
         setSatellites(event.payload);
@@ -197,20 +199,23 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Click-outside listener for satellite dropdown
+  // Click-outside listener for satellite dropdown & mobile hamburger menu
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (satelliteDropdownRef.current && !satelliteDropdownRef.current.contains(e.target as Node)) {
         setIsSatelliteDropdownOpen(false);
       }
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(e.target as Node)) {
+        setIsMobileMenuOpen(false);
+      }
     };
-    if (isSatelliteDropdownOpen) {
+    if (isSatelliteDropdownOpen || isMobileMenuOpen) {
       window.addEventListener('mousedown', handleClickOutside);
     }
     return () => {
       window.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [isSatelliteDropdownOpen]);
+  }, [isSatelliteDropdownOpen, isMobileMenuOpen]);
 
   const handleSelectSatellite = async (sat: MeterSatellite) => {
     setActiveInstanceId(sat.instance_id);
@@ -218,6 +223,7 @@ export const App: React.FC = () => {
     setActiveMeterTrack(sat.track_name);
     activeMeterTrackRef.current = sat.track_name;
     setIsSatelliteDropdownOpen(false);
+    setIsMobileMenuOpen(false);
     try {
       await invoke('set_active_meter_instance', { instanceId: sat.instance_id });
     } catch (e) {
@@ -1651,185 +1657,189 @@ export const App: React.FC = () => {
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-darkBg text-slate-100">
       {/* Top Navbar */}
-      <header className="h-12 border-b border-darkBorder bg-[#14161a] px-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-6 rounded bg-blue-600 flex items-center justify-center font-bold text-xs text-white">
+      <header className="h-12 border-b border-darkBorder bg-[#14161a] px-3 sm:px-4 flex items-center justify-between relative">
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="w-8 h-6 rounded bg-blue-600 flex items-center justify-center font-bold text-xs text-white shrink-0">
             OMB
           </div>
-          <span className="font-bold text-sm tracking-wide text-slate-100">OSZILLATION MIXING BUDDY</span>
-          <span className="text-xs text-blue-400 font-mono ml-2">v0.6.1</span>
+          <span className="font-bold text-xs sm:text-sm tracking-wide text-slate-100 hidden sm:inline">
+            OSZILLATION MIXING BUDDY
+          </span>
+          <span className="text-xs text-blue-400 font-mono ml-1 sm:ml-2">v0.6.2</span>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {/* Phase 2A, 2C & Learning: Signal-Fokus mit Auto- / Audio-Detect / Gemerkt Badge */}
-          <div
-            className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs shrink-0"
-            title="Bestimmt die spektrale Zielschablone (Master, Vocal, Drums etc.) für die Analyse des ankommenden Meter-Signals."
-          >
-            <Target className="w-3.5 h-3.5 text-cyan-400 mr-1" />
-            <span className="text-gray-400 mr-1.5 font-medium">Signal-Fokus:</span>
-            {learnedTrackScopes[activeMeterTrack?.trim().toLowerCase() || ''] ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (activeMeterTrack) {
+          {/* Desktop Toolbar (>= 1280px xl:flex) */}
+          <div className="hidden xl:flex items-center gap-2 shrink-0">
+            {/* Phase 2A, 2C & Learning: Signal-Fokus mit Auto- / Audio-Detect / Gemerkt Badge */}
+            <div
+              className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs shrink-0"
+              title="Bestimmt die spektrale Zielschablone (Master, Vocal, Drums etc.) für die Analyse des ankommenden Meter-Signals."
+            >
+              <Target className="w-3.5 h-3.5 text-cyan-400 mr-1" />
+              <span className="text-gray-400 mr-1.5 font-medium">Signal-Fokus:</span>
+              {learnedTrackScopes[activeMeterTrack?.trim().toLowerCase() || ''] ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (activeMeterTrack) {
+                      unlearnTrackScope(activeMeterTrack);
+                      setIsManualScopeOverride(false);
+                      const autoScope = resolveScopeFromTrackName(activeMeterTrack);
+                      setTargetScope(autoScope);
+                      const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
+                      syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+                    }
+                  }}
+                  className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-emerald-950/80 hover:bg-slate-700/80 border border-emerald-500/50 hover:border-slate-500 text-emerald-300 hover:text-white rounded font-mono font-medium transition-colors cursor-pointer"
+                  title={`Spur-Rolle für "${activeMeterTrack}" ist dauerhaft gemerkt. Klicken um Zuweisung zu vergessen und Auto-Erkennung neu zu starten`}
+                >
+                  💾 Gemerkt ↺
+                </button>
+              ) : !isManualScopeOverride && activeMeterTrack ? (
+                <span
+                  className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 rounded font-mono font-medium"
+                  title={
+                    scopeDetectionSource === 'audio'
+                      ? `Akustisch erkannt von Signal auf Spur "${activeMeterTrack}"`
+                      : `Automatisch erkannt von Spur "${activeMeterTrack}"`
+                  }
+                >
+                  {scopeDetectionSource === 'audio' ? '⚡ Audio-Detect' : '⚡ Auto'}
+                </span>
+              ) : isManualScopeOverride && activeMeterTrack ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsManualScopeOverride(false);
+                    const autoScope = resolveScopeFromTrackName(activeMeterTrack);
+                    setTargetScope(autoScope);
+                    const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
+                    syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+                  }}
+                  className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-slate-700/80 hover:bg-cyan-950/80 border border-slate-600 hover:border-cyan-500/50 text-slate-300 hover:text-cyan-300 rounded font-mono transition-colors cursor-pointer"
+                  title={`Klicken um Auto-Fokus für "${activeMeterTrack}" wieder zu aktivieren`}
+                >
+                  ⚡ Auto reaktivieren
+                </button>
+              ) : null}
+              <select
+                value={
+                  !isManualScopeOverride && activeMeterTrack && !learnedTrackScopes[activeMeterTrack.trim().toLowerCase()]
+                    ? '__auto__'
+                    : targetScope
+                }
+                onChange={(e) => {
+                  if (e.target.value === '__auto__' && activeMeterTrack) {
                     unlearnTrackScope(activeMeterTrack);
                     setIsManualScopeOverride(false);
                     const autoScope = resolveScopeFromTrackName(activeMeterTrack);
                     setTargetScope(autoScope);
                     const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
                     syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+                  } else {
+                    setIsManualScopeOverride(true);
+                    handleTargetScopeChange(e.target.value as TargetScope);
                   }
                 }}
-                className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-emerald-950/80 hover:bg-slate-700/80 border border-emerald-500/50 hover:border-slate-500 text-emerald-300 hover:text-white rounded font-mono font-medium transition-colors cursor-pointer"
-                title={`Spur-Rolle für "${activeMeterTrack}" ist dauerhaft gemerkt. Klicken um Zuweisung zu vergessen und Auto-Erkennung neu zu starten`}
+                className="bg-transparent text-cyan-300 font-semibold focus:outline-none cursor-pointer"
               >
-                💾 Gemerkt ↺
-              </button>
-            ) : !isManualScopeOverride && activeMeterTrack ? (
-              <span
-                className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 rounded font-mono font-medium"
-                title={
-                  scopeDetectionSource === 'audio'
-                    ? `Akustisch erkannt von Signal auf Spur "${activeMeterTrack}"`
-                    : `Automatisch erkannt von Spur "${activeMeterTrack}"`
-                }
+                {activeMeterTrack && (
+                  <option value="__auto__" className="bg-[#1a1c23] text-cyan-400 font-bold">
+                    ⚡ Auto ({activeMeterTrack}{learnedTrackScopes[activeMeterTrack.trim().toLowerCase()] ? ' - Gemerkt' : ''})
+                  </option>
+                )}
+                <option value="mix_bus" className="bg-[#1a1c23] text-white">Master / Mix Bus</option>
+                <option value="lead_vocal" className="bg-[#1a1c23] text-white">Lead Vocal</option>
+                <option value="drum_bus" className="bg-[#1a1c23] text-white">Drum Bus / Rhythm</option>
+                <option value="sub_bass" className="bg-[#1a1c23] text-white">Bass / E-Bass</option>
+                <option value="keys_synths" className="bg-[#1a1c23] text-white">Keys & Synths</option>
+                <option value="acoustic" className="bg-[#1a1c23] text-white">Acoustic / Guitars</option>
+              </select>
+            </div>
+
+            <div className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs shrink-0">
+              <span className="text-gray-400 mr-1.5 font-medium">🎵 Genre:</span>
+              <select
+                value={genreProfile}
+                onChange={(e) => handleGenreProfileChange(e.target.value as GenreProfileId)}
+                className="bg-transparent text-amber-300 font-semibold focus:outline-none cursor-pointer"
               >
-                {scopeDetectionSource === 'audio' ? '⚡ Audio-Detect' : '⚡ Auto'}
-              </span>
-            ) : isManualScopeOverride && activeMeterTrack ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setIsManualScopeOverride(false);
-                  const autoScope = resolveScopeFromTrackName(activeMeterTrack);
-                  setTargetScope(autoScope);
-                  const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
-                  syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
-                }}
-                className="mr-1.5 px-1.5 py-0.5 text-[10px] bg-slate-700/80 hover:bg-cyan-950/80 border border-slate-600 hover:border-cyan-500/50 text-slate-300 hover:text-cyan-300 rounded font-mono transition-colors cursor-pointer"
-                title={`Klicken um Auto-Fokus für "${activeMeterTrack}" wieder zu aktivieren`}
-              >
-                ⚡ Auto reaktivieren
-              </button>
-            ) : null}
-            <select
-              value={
-                !isManualScopeOverride && activeMeterTrack && !learnedTrackScopes[activeMeterTrack.trim().toLowerCase()]
-                  ? '__auto__'
-                  : targetScope
-              }
-              onChange={(e) => {
-                if (e.target.value === '__auto__' && activeMeterTrack) {
-                  unlearnTrackScope(activeMeterTrack);
-                  setIsManualScopeOverride(false);
-                  const autoScope = resolveScopeFromTrackName(activeMeterTrack);
-                  setTargetScope(autoScope);
-                  const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
-                  syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
-                } else {
-                  setIsManualScopeOverride(true);
-                  handleTargetScopeChange(e.target.value as TargetScope);
-                }
-              }}
-              className="bg-transparent text-cyan-300 font-semibold focus:outline-none cursor-pointer"
-            >
-              {activeMeterTrack && (
-                <option value="__auto__" className="bg-[#1a1c23] text-cyan-400 font-bold">
-                  ⚡ Auto ({activeMeterTrack}{learnedTrackScopes[activeMeterTrack.trim().toLowerCase()] ? ' - Gemerkt' : ''})
+                <option value="auto_detect" className="bg-[#1a1c23] text-white">
+                  ✨ Auto-Detect {detectedGenre ? `(${detectedGenre})` : '(KI)'}
                 </option>
+                <option value="pop_radio" className="bg-[#1a1c23] text-white">Pop / Radio</option>
+                <option value="hiphop_trap" className="bg-[#1a1c23] text-white">Hip-Hop / Trap</option>
+                <option value="rock_metal" className="bg-[#1a1c23] text-white">Rock / Metal</option>
+                <option value="edm_club" className="bg-[#1a1c23] text-white">EDM / Club</option>
+                <option value="acoustic_jazz" className="bg-[#1a1c23] text-white">Acoustic / Jazz</option>
+                <option value="custom_crossover" className="bg-[#1a1c23] text-white">⚙️ Individuell / Crossover...</option>
+              </select>
+              {genreProfile === 'custom_crossover' && (
+                <button
+                  type="button"
+                  onClick={() => setIsCrossoverModalOpen(true)}
+                  className="ml-1.5 text-[11px] text-cyan-400 hover:text-cyan-200 underline font-medium"
+                  title="Crossover-Details bearbeiten"
+                >
+                  Edit
+                </button>
               )}
-              <option value="mix_bus" className="bg-[#1a1c23] text-white">Master / Mix Bus</option>
-              <option value="lead_vocal" className="bg-[#1a1c23] text-white">Lead Vocal</option>
-              <option value="drum_bus" className="bg-[#1a1c23] text-white">Drum Bus / Rhythm</option>
-              <option value="sub_bass" className="bg-[#1a1c23] text-white">Bass / E-Bass</option>
-              <option value="keys_synths" className="bg-[#1a1c23] text-white">Keys & Synths</option>
-              <option value="acoustic" className="bg-[#1a1c23] text-white">Acoustic / Guitars</option>
-            </select>
-          </div>
+            </div>
 
-          <div className="flex items-center bg-slate-800/90 border border-slate-700/80 rounded px-2.5 py-1 text-xs shrink-0">
-            <span className="text-gray-400 mr-1.5 font-medium">🎵 Genre:</span>
-            <select
-              value={genreProfile}
-              onChange={(e) => handleGenreProfileChange(e.target.value as GenreProfileId)}
-              className="bg-transparent text-amber-300 font-semibold focus:outline-none cursor-pointer"
+            {/* Sprint 4.1: Referenz-Track Button */}
+            <button
+              type="button"
+              onClick={() => setIsReferenceModalOpen(true)}
+              className="flex items-center gap-1.5 bg-slate-800/90 hover:bg-slate-700 border border-slate-700/80 rounded px-2.5 py-1 text-xs text-indigo-300 hover:text-white font-medium transition-all shadow-sm shrink-0 cursor-pointer"
+              title="Referenz-Track laden und analysieren"
             >
-              <option value="auto_detect" className="bg-[#1a1c23] text-white">
-                ✨ Auto-Detect {detectedGenre ? `(${detectedGenre})` : '(KI)'}
-              </option>
-              <option value="pop_radio" className="bg-[#1a1c23] text-white">Pop / Radio</option>
-              <option value="hiphop_trap" className="bg-[#1a1c23] text-white">Hip-Hop / Trap</option>
-              <option value="rock_metal" className="bg-[#1a1c23] text-white">Rock / Metal</option>
-              <option value="edm_club" className="bg-[#1a1c23] text-white">EDM / Club</option>
-              <option value="acoustic_jazz" className="bg-[#1a1c23] text-white">Acoustic / Jazz</option>
-              <option value="custom_crossover" className="bg-[#1a1c23] text-white">⚙️ Individuell / Crossover...</option>
-            </select>
-            {genreProfile === 'custom_crossover' && (
-              <button
-                type="button"
-                onClick={() => setIsCrossoverModalOpen(true)}
-                className="ml-1.5 text-[11px] text-cyan-400 hover:text-cyan-200 underline font-medium"
-                title="Crossover-Details bearbeiten"
-              >
-                Edit
-              </button>
-            )}
+              <BarChart2 className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Referenz-Track</span>
+              {activeReferenceProfile && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5" title={`Aktiv: ${activeReferenceProfile.name}`} />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleLearnActivePlugin}
+              className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300 hover:text-white bg-emerald-950/60 hover:bg-emerald-800/70 border border-emerald-500/40 px-2.5 py-1 rounded transition-all shadow-sm shrink-0 cursor-pointer"
+              title="Scannt das aktuell in der DAW geöffnete Plugin-Fenster und speichert dessen Regler im Plugin Vault"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+              <span>✨ Plugin anlernen</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenVaultDrawer}
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border border-darkBorder px-2.5 py-1 rounded transition-all shrink-0 cursor-pointer"
+              title="Plugin Vault (Bibliothek der angelernten Plugins öffnen)"
+            >
+              <Database className="w-3.5 h-3.5 text-blue-400" />
+              <span>Plugin Vault ({vaultPlugins.length})</span>
+            </button>
+
+            {/* Sprint 5.2: Mixing Skills Toolbar Button */}
+            <button
+              type="button"
+              onClick={() => setIsSkillModalOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-medium text-amber-300 hover:text-white bg-amber-950/50 hover:bg-amber-900/60 border border-amber-500/40 px-2.5 py-1 rounded transition-all shadow-sm cursor-pointer shrink-0"
+              title="Mixing Skill Vault (Tonmischmeister, Custom Chains & Prompts)"
+            >
+              <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400/30" />
+              <span>Skills ({skillsCount})</span>
+            </button>
           </div>
 
-          {/* Sprint 4.1: Referenz-Track Button */}
-          <button
-            type="button"
-            onClick={() => setIsReferenceModalOpen(true)}
-            className="flex items-center gap-1.5 bg-slate-800/90 hover:bg-slate-700 border border-slate-700/80 rounded px-2.5 py-1 text-xs text-indigo-300 hover:text-white font-medium transition-all shadow-sm shrink-0"
-            title="Referenz-Track laden und analysieren"
-          >
-            <BarChart2 className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Referenz-Track</span>
-            {activeReferenceProfile && (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5" title={`Aktiv: ${activeReferenceProfile.name}`} />
-            )}
-          </button>
-        </div>
-
-        <div className="flex items-center gap-2.5 shrink-0">
-          <button
-            type="button"
-            onClick={handleLearnActivePlugin}
-            className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300 hover:text-white bg-emerald-950/60 hover:bg-emerald-800/70 border border-emerald-500/40 px-2.5 py-1 rounded transition-all shadow-sm shrink-0"
-            title="Scannt das aktuell in der DAW geöffnete Plugin-Fenster und speichert dessen Regler im Plugin Vault"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-            <span>✨ Plugin anlernen</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleOpenVaultDrawer}
-            className="flex items-center gap-1.5 text-xs font-medium text-slate-300 hover:text-white bg-slate-800/80 hover:bg-slate-700/80 border border-darkBorder px-2.5 py-1 rounded transition-all shrink-0"
-            title="Plugin Vault (Bibliothek der angelernten Plugins öffnen)"
-          >
-            <Database className="w-3.5 h-3.5 text-blue-400" />
-            <span>Plugin Vault ({vaultPlugins.length})</span>
-          </button>
-
-          {/* Sprint 5.2: Mixing Skills Toolbar Button */}
-          <button
-            type="button"
-            onClick={() => setIsSkillModalOpen(true)}
-            className="flex items-center gap-1.5 text-xs font-medium text-amber-300 hover:text-white bg-amber-950/50 hover:bg-amber-900/60 border border-amber-500/40 px-2.5 py-1 rounded transition-all shadow-sm cursor-pointer shrink-0"
-            title="Mixing Skill Vault (Tonmischmeister, Custom Chains & Prompts)"
-          >
-            <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400/30" />
-            <span>Skills ({skillsCount})</span>
-          </button>
-
-          {/* Phase 3: Multi-Instance Abhörpunkt-Selektor */}
+          {/* Pinned Abhörpunkt-Garantie & Satelliten-Manager */}
           <div className="relative shrink-0" ref={satelliteDropdownRef}>
+            {/* Desktop Full Button (>= 1280px) */}
             <button
               type="button"
               onClick={() => setIsSatelliteDropdownOpen(!isSatelliteDropdownOpen)}
-              className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded transition-all cursor-pointer border ${
+              className={`hidden xl:flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded transition-all cursor-pointer border ${
                 telemetry || satellites.length > 0
                   ? 'bg-slate-800/90 hover:bg-slate-700/90 text-emerald-400 border-emerald-500/30 hover:border-emerald-500/50 shadow-sm'
                   : isAudioConnected
@@ -1869,7 +1879,25 @@ export const App: React.FC = () => {
               />
             </button>
 
-            {/* Dropdown Menu */}
+            {/* Immer sichtbare Abhörpunkt-Pille für Schmal-/Mittel-Bildschirme (< 1280px) */}
+            <button
+              type="button"
+              onClick={() => setIsSatelliteDropdownOpen(!isSatelliteDropdownOpen)}
+              className="flex xl:hidden px-2.5 py-1 text-xs rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-emerald-300 items-center gap-1.5 hover:bg-emerald-900/50 transition shrink-0 cursor-pointer"
+              title="Aktiver Abhörpunkt (Mess-Satellit) auswählen"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <span className="font-medium truncate max-w-[110px] sm:max-w-[160px]">
+                {activeMeterTrack
+                  ? (activeMeterTrack.toLowerCase().includes('stereo out') || activeMeterTrack.toLowerCase() === 'master'
+                      ? `${activeMeterTrack} (Master)`
+                      : activeMeterTrack)
+                  : satellites[0]?.track_name || 'Stereo Out'}
+              </span>
+              <span className="text-[10px] text-emerald-400/70">▾</span>
+            </button>
+
+            {/* Dropdown Menu für Satelliten */}
             {isSatelliteDropdownOpen && (
               <div className="absolute right-0 top-full mt-1.5 w-80 bg-[#16181d] border border-slate-700/90 rounded-lg shadow-2xl z-50 overflow-hidden backdrop-blur-md">
                 <div className="px-3 py-2 bg-slate-800/60 border-b border-slate-700/60 flex items-center justify-between text-[11px]">
@@ -1945,6 +1973,276 @@ export const App: React.FC = () => {
                       )}
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Adaptives Hamburger- & Overflow-Menü (< 1280px xl:hidden) */}
+          <div className="relative shrink-0 xl:hidden" ref={mobileMenuRef}>
+            <button
+              type="button"
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className={`px-2.5 py-1 text-xs rounded-lg border flex items-center gap-1.5 transition shrink-0 cursor-pointer ${
+                isMobileMenuOpen
+                  ? 'bg-slate-700 text-cyan-300 border-cyan-500/50 shadow-sm'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+              }`}
+              title="HUD-Menü und Session-Tools öffnen"
+            >
+              <span className="text-sm">☰</span>
+              <span className="hidden sm:inline font-medium">Menü</span>
+              <span className="text-[10px] text-slate-400">{isMobileMenuOpen ? '▲' : '▼'}</span>
+            </button>
+
+            {/* Schwebendes Hamburger-Panel (Floating Glassmorphism Card) */}
+            {isMobileMenuOpen && (
+              <div className="absolute right-0 top-full mt-2 w-84 sm:w-96 bg-slate-900/98 border border-slate-700/80 rounded-2xl shadow-2xl p-4 text-xs backdrop-blur-xl space-y-4 z-50 text-slate-200">
+                {/* Kopfbereich */}
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                  <div className="flex items-center gap-2 font-semibold text-slate-100 text-sm">
+                    <span className="text-cyan-400">🎛️</span>
+                    <span>HUD & Session Manager</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className="p-1 text-slate-400 hover:text-white rounded transition-colors cursor-pointer"
+                    title="Schließen"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* Sektion 1: Aktiver Abhörpunkt (Mess-Satelliten) */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                    <span className="flex items-center gap-1.5">
+                      <Target className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Mess-Satelliten ({satellites.length})</span>
+                    </span>
+                    {telemetry && (
+                      <span className="text-emerald-400 text-[10px] font-mono flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        30 fps Live
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="max-h-36 overflow-y-auto divide-y divide-slate-800/80 rounded-lg bg-slate-950/60 border border-slate-800">
+                    {satellites.length > 0 ? (
+                      satellites.map((sat) => {
+                        const isActive =
+                          sat.instance_id === activeInstanceId ||
+                          (!activeInstanceId && (sat.track_name === activeMeterTrack || sat === satellites[0]));
+                        const isMaster =
+                          sat.track_name.toLowerCase().includes('stereo out') ||
+                          sat.track_name.toLowerCase() === 'master';
+                        const label = isMaster ? `${sat.track_name} (Master)` : sat.track_name;
+                        const learned = learnedTrackScopes[sat.track_name.trim().toLowerCase()];
+
+                        return (
+                          <button
+                            key={sat.instance_id}
+                            type="button"
+                            onClick={() => {
+                              handleSelectSatellite(sat);
+                              setIsMobileMenuOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 flex items-center justify-between transition-colors cursor-pointer ${
+                              isActive
+                                ? 'bg-emerald-950/40 text-white'
+                                : 'hover:bg-slate-800/60 text-slate-300'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0 pr-2">
+                              <span
+                                className={`w-2 h-2 rounded-full shrink-0 ${
+                                  isActive ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-emerald-500/60'
+                                }`}
+                              />
+                              <div className="truncate">
+                                <div className="text-xs font-semibold truncate flex items-center gap-1.5">
+                                  <span className={isActive ? 'text-emerald-300' : 'text-slate-200'}>
+                                    {label}
+                                  </span>
+                                  {learned && (
+                                    <span className="text-[10px] text-amber-300/90 font-mono bg-amber-950/60 px-1 rounded border border-amber-600/30">
+                                      💾 Gemerkt
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-mono">
+                                  {(sat.sample_rate / 1000).toFixed(1)} kHz
+                                </div>
+                              </div>
+                            </div>
+                            {isActive && (
+                              <span className="text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 shrink-0">
+                                Aktiv
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <div className="px-3 py-3 text-center text-xs text-slate-400">
+                        {isAudioConnected ? 'Plugin auf Einzelspur aktiv' : 'Kein Meter-Plugin verbunden'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Sektion 2: Akustischer Fokus & Genre */}
+                <div className="space-y-2 border-t border-slate-800/80 pt-2.5">
+                  <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Akustischer Fokus & Genre</span>
+                  </div>
+
+                  {/* Signal-Fokus Select */}
+                  <div className="flex items-center justify-between bg-slate-950/60 border border-slate-800 rounded-lg px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-slate-400">
+                      <Target className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Fokus:</span>
+                    </div>
+                    <select
+                      value={
+                        !isManualScopeOverride && activeMeterTrack && !learnedTrackScopes[activeMeterTrack.trim().toLowerCase()]
+                          ? '__auto__'
+                          : targetScope
+                      }
+                      onChange={(e) => {
+                        if (e.target.value === '__auto__' && activeMeterTrack) {
+                          unlearnTrackScope(activeMeterTrack);
+                          setIsManualScopeOverride(false);
+                          const autoScope = resolveScopeFromTrackName(activeMeterTrack);
+                          setTargetScope(autoScope);
+                          const updated = resolveTargetProfile(effectiveGenre, autoScope, customProfile);
+                          syncContextToPlugin(autoScope, genreProfile, customNotes, updated.targetIntegratedLufs, updated);
+                        } else {
+                          setIsManualScopeOverride(true);
+                          handleTargetScopeChange(e.target.value as TargetScope);
+                        }
+                      }}
+                      className="bg-slate-900 border border-slate-700 text-cyan-300 text-xs font-semibold rounded px-2 py-1 focus:outline-none cursor-pointer max-w-[170px]"
+                    >
+                      {activeMeterTrack && (
+                        <option value="__auto__" className="bg-[#1a1c23] text-cyan-400 font-bold">
+                          ⚡ Auto ({activeMeterTrack})
+                        </option>
+                      )}
+                      <option value="mix_bus" className="bg-[#1a1c23] text-white">Master / Mix Bus</option>
+                      <option value="lead_vocal" className="bg-[#1a1c23] text-white">Lead Vocal</option>
+                      <option value="drum_bus" className="bg-[#1a1c23] text-white">Drum Bus / Rhythm</option>
+                      <option value="sub_bass" className="bg-[#1a1c23] text-white">Bass / E-Bass</option>
+                      <option value="keys_synths" className="bg-[#1a1c23] text-white">Keys & Synths</option>
+                      <option value="acoustic" className="bg-[#1a1c23] text-white">Acoustic / Guitars</option>
+                    </select>
+                  </div>
+
+                  {/* Genre Select */}
+                  <div className="flex items-center justify-between bg-slate-950/60 border border-slate-800 rounded-lg px-2.5 py-2">
+                    <div className="flex items-center gap-1.5 text-slate-400">
+                      <span>🎵 Genre:</span>
+                    </div>
+                    <select
+                      value={genreProfile}
+                      onChange={(e) => handleGenreProfileChange(e.target.value as GenreProfileId)}
+                      className="bg-slate-900 border border-slate-700 text-amber-300 text-xs font-semibold rounded px-2 py-1 focus:outline-none cursor-pointer max-w-[170px]"
+                    >
+                      <option value="auto_detect" className="bg-[#1a1c23] text-white">
+                        ✨ Auto-Detect {detectedGenre ? `(${detectedGenre})` : '(KI)'}
+                      </option>
+                      <option value="pop_radio" className="bg-[#1a1c23] text-white">Pop / Radio</option>
+                      <option value="hiphop_trap" className="bg-[#1a1c23] text-white">Hip-Hop / Trap</option>
+                      <option value="rock_metal" className="bg-[#1a1c23] text-white">Rock / Metal</option>
+                      <option value="edm_club" className="bg-[#1a1c23] text-white">EDM / Club</option>
+                      <option value="acoustic_jazz" className="bg-[#1a1c23] text-white">Acoustic / Jazz</option>
+                      <option value="custom_crossover" className="bg-[#1a1c23] text-white">⚙️ Individuell / Crossover...</option>
+                    </select>
+                  </div>
+
+                  {/* Referenz-Track Wähler / Lader */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsReferenceModalOpen(true);
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="w-full flex items-center justify-between bg-slate-950/60 hover:bg-slate-800 border border-slate-800 hover:border-indigo-500/50 rounded-lg px-2.5 py-2 text-indigo-300 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <BarChart2 className="w-3.5 h-3.5 text-indigo-400" />
+                      <span className="font-medium">Referenz-Track</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                      <span className="truncate max-w-[120px]">{activeReferenceProfile ? activeReferenceProfile.name : 'Keine Referenz'}</span>
+                      <span className="text-indigo-400">➔</span>
+                    </div>
+                  </button>
+                </div>
+
+                {/* Sektion 3: Werkzeuge & Vault */}
+                <div className="space-y-1.5 border-t border-slate-800/80 pt-2.5">
+                  <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                    Werkzeuge & Vault
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleLearnActivePlugin();
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-500/30 text-emerald-300 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>✨ Plugin anlernen</span>
+                    </div>
+                    <span className="text-[10px] text-emerald-400/80 font-mono">DAW Scan</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleOpenVaultDrawer();
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-slate-950/60 hover:bg-slate-800 border border-slate-800 text-slate-200 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <Database className="w-3.5 h-3.5 text-blue-400" />
+                      <span>🗄️ Plugin Vault</span>
+                    </div>
+                    <span className="text-[11px] font-mono text-blue-400 bg-blue-950/60 px-2 py-0.5 rounded border border-blue-600/30">
+                      {vaultPlugins.length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSkillModalOpen(true);
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-amber-950/40 hover:bg-amber-900/50 border border-amber-500/30 text-amber-300 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400/30" />
+                      <span>⭐ Mixing Skills</span>
+                    </div>
+                    <span className="text-[11px] font-mono text-amber-400 bg-amber-950/60 px-2 py-0.5 rounded border border-amber-600/30">
+                      {skillsCount}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Fußzeile: Status & Version */}
+                <div className="border-t border-slate-800/80 pt-2 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                  <span>DAW: {activeDaw === 'none' ? 'Apple Logic Pro (Bereit)' : activeDaw}</span>
+                  <span className="text-blue-400 font-bold">v0.6.2</span>
                 </div>
               </div>
             )}

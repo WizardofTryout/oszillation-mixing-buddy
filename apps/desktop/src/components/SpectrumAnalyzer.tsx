@@ -664,9 +664,9 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
   return (
     <div className="bg-[#12151a] border border-[#1e242d] rounded-xl p-4 shadow-xl flex flex-col gap-3">
       {/* Header with Title, Reference Selector and View Controls */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#1e242d] pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1e242d] pb-2.5">
         {/* Title & Badge */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <Music className="w-4 h-4 text-cyan-400" />
           <span className="text-xs font-semibold tracking-wider text-slate-200 uppercase">
             {viewMode === 'highres' ? 'Real-Time Spectrum (FFT — 128 Needles)' : 'Real-Time Spectrum (RTA — 32 Bands)'}
@@ -677,13 +677,13 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
         </div>
 
         {/* Action Controls & Toggles */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
           {/* 3-Tab View Mode Toggle: 32 LED / High-Res / Spline */}
           <div className="flex items-center bg-[#0d1117] p-0.5 rounded-lg border border-[#21262d]">
             <button
               type="button"
               onClick={() => setViewMode('led')}
-              className={`px-2.5 py-1 text-xs font-mono font-medium rounded transition-all flex items-center gap-1.5 ${
+              className={`px-2 py-0.5 sm:px-2.5 sm:py-1 text-[11px] sm:text-xs font-mono font-medium rounded transition-all flex items-center gap-1 sm:gap-1.5 ${
                 viewMode === 'led'
                   ? 'bg-[#161b22] text-cyan-400 border border-cyan-500/30 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200'
@@ -695,7 +695,7 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
             <button
               type="button"
               onClick={() => setViewMode('highres')}
-              className={`px-2.5 py-1 text-xs font-mono font-medium rounded transition-all flex items-center gap-1.5 ${
+              className={`px-2 py-0.5 sm:px-2.5 sm:py-1 text-[11px] sm:text-xs font-mono font-medium rounded transition-all flex items-center gap-1 sm:gap-1.5 ${
                 viewMode === 'highres'
                   ? 'bg-[#161b22] text-emerald-400 border border-emerald-500/30 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200'
@@ -707,7 +707,7 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
             <button
               type="button"
               onClick={() => setViewMode('spline')}
-              className={`px-2.5 py-1 text-xs font-mono font-medium rounded transition-all flex items-center gap-1.5 ${
+              className={`px-2 py-0.5 sm:px-2.5 sm:py-1 text-[11px] sm:text-xs font-mono font-medium rounded transition-all flex items-center gap-1 sm:gap-1.5 ${
                 viewMode === 'spline'
                   ? 'bg-[#161b22] text-cyan-400 border border-cyan-500/30 shadow-sm'
                   : 'text-slate-400 hover:text-slate-200'
@@ -722,7 +722,7 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
           <button
             type="button"
             onClick={() => setShowTargetEnvelope(!showTargetEnvelope)}
-            className={`px-2.5 py-1 text-xs font-mono font-medium rounded-lg border transition-all flex items-center gap-1.5 ${
+            className={`px-2 py-0.5 sm:px-2.5 sm:py-1 text-[11px] sm:text-xs font-mono font-medium rounded-lg border transition-all flex items-center gap-1 sm:gap-1.5 ${
               showTargetEnvelope
                 ? 'bg-sky-950/40 text-sky-300 border-sky-500/50 shadow-[0_0_10px_rgba(56,189,248,0.2)]'
                 : 'bg-[#0d1117] text-slate-500 border-[#21262d] hover:text-slate-300'
@@ -737,7 +737,7 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
             type="button"
             disabled={!hasReference}
             onClick={() => setShowReference(!showReference)}
-            className={`px-2.5 py-1 text-xs font-mono font-medium rounded-lg border transition-all flex items-center gap-1.5 ${
+            className={`px-2 py-0.5 sm:px-2.5 sm:py-1 text-[11px] sm:text-xs font-mono font-medium rounded-lg border transition-all flex items-center gap-1 sm:gap-1.5 ${
               !hasReference
                 ? 'bg-[#0d1117] text-slate-600 border-[#21262d] opacity-50 cursor-not-allowed'
                 : showReference
@@ -754,7 +754,7 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
             <button
               type="button"
               onClick={() => setIsLegendOpen(!isLegendOpen)}
-              className={`px-2 py-1 text-xs rounded-lg border transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`px-2 py-0.5 sm:px-2.5 sm:py-1 text-[11px] sm:text-xs rounded-lg border transition-all flex items-center gap-1 sm:gap-1.5 cursor-pointer ${
                 isLegendOpen 
                   ? 'bg-slate-700 text-cyan-300 border-cyan-500/50 shadow-sm' 
                   : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700'
@@ -884,7 +884,7 @@ export const SpectrumAnalyzer: React.FC<SpectrumAnalyzerProps> = ({
             <button
               type="button"
               onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-              className="flex items-center gap-1.5 bg-[#161b22] hover:bg-[#1f242c] border border-[#2d333b] px-2.5 py-1 rounded-lg text-xs font-mono text-slate-300 transition-colors"
+              className="flex items-center gap-1 sm:gap-1.5 bg-[#161b22] hover:bg-[#1f242c] border border-[#2d333b] px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-lg text-[11px] sm:text-xs font-mono text-slate-300 transition-colors"
             >
               <span className="truncate max-w-[120px]">
                 {activeReference ? activeReference.name : 'Keine Referenz'}
