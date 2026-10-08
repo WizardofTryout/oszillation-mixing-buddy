@@ -19,6 +19,62 @@ Verbindliche System-Richtlinien, Architektur-Regeln und Qualitätsschranken für
 
 ---
 
+## 🌐 DUAL-REPOSITORY GOVERNANCE & PUBLIC RELEASE WORKFLOW (CRITICAL)
+
+Das Projekt wird strikt in einer **Dual-Repository-Architektur** geführt. Ein Vermischen der beiden Repositories ist strengstens untersagt.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ PRIVATES UPSTREAM (origin)                                                      │
+│ URL: https://github.com/WizardofTryout/Steinberg-Mixing-Buddy.git               │
+│ • Täglicher Entwicklungs-Workspace (Sprints, Experimente, unzensierter Code)   │
+│ • Interne Dokumentation, Research, Prompt-Architektur, Test-Logs               │
+│ • Regelmäßiges Committen: git push origin main                                  │
+└────────────────────────────────────────┬────────────────────────────────────────┘
+                                         │
+                        [ FILTER- & ORPHAN-EXPORT ]
+                        ./scripts/publish-public-release.sh <VERSION>
+                        • Strenges Zero-Leak Protokoll
+                        • Bereinigung interner Docs & Secrets
+                        • Orphan-Branch (Keine historische Git-Historie)
+                                         │
+                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ ÖFFENTLICHES SHOWCASE (public)                                                  │
+│ URL: https://github.com/WizardofTryout/oszillation-mixing-buddy.git             │
+│ • Repräsentatives Aushängeschild der Marke Oszillation Mixing Buddy             │
+│ • Vollständiger, kompilierbarer Produktiv-Quellcode (Rust, Swift, JUCE, React) │
+│ • High-End Showroom README mit Screenshots & PolyForm Noncommercial 1.0.0      │
+│ • STRIKT VERBOTEN: Manuelle Direkt-Pushes ohne Export-Skript!                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1. Wann wird auf das private Repo (`origin`) gepusht?
+- **Immer und fortlaufend:** Jede abgeschlossene Teilaufgabe, jeder Bugfix und jeder Sprint-Schritt wird wie gewohnt auf `origin/main` committet und gepusht (`git add -A && git commit ... && git push origin main`).
+
+### 2. Wann wird auf das öffentliche Repo (`public`) synchronisiert?
+- **Ausschließlich bei stabilen Meilensteinen:**
+  - Eine Synchronisation mit `public` erfolgt **nur dann**, wenn ein vollwertiger Versionssprung (z. B. `v0.7.0`, `v0.8.0`, `v0.9.0`, `v1.0.0`) erreicht ist.
+  - **Checkliste vor der Veröffentlichung:**
+    1. Monorepo Build (`pnpm -r run build`) und LOC-Prüfung (`./scripts/lint-loc.sh`) sind fehlerfrei grün.
+    2. Desktop App ist kompiliert, im macOS-Bundle getestet und stabil mit `MixingBuddyDev` signiert.
+    3. Alle Änderungen sind im privaten Zweig committet (`git status` ist sauber).
+    4. Der User hat die Veröffentlichung im Chat ausdrücklich beauftragt.
+
+### 3. Wie wird veröffentlicht? (Verbindlicher Export-Befehl)
+- Es ist **STRIKT VERBOTEN**, jemals einen direkten `git push public ...` aus einem Entwicklungs-Branch auszuführen!
+- Die Veröffentlichung erfolgt **ausschließlich** über das automatisierte Release-Skript:
+  ```bash
+  ./scripts/publish-public-release.sh <VERSION>
+  # Beispiel: ./scripts/publish-public-release.sh v0.8.0
+  ```
+- **Das Skript garantiert:**
+  - Erstellung eines sauberen Orphan-Branches ohne alte Commits oder gelöschte Dateien aus Sprint 1–4.
+  - Ausschluss aller vertraulichen Verzeichnisse (`docs/chat_history/`, `research-features/`, `.env*`, lokale Logs).
+  - Saubere Einbindung aller Produktiv-Assets (Code, `screenshots/`, `README.md`, `LICENSE`).
+
+---
+
 ## 🏛️ Die 4 System-Säulen & Architektur-Integrität (CRITICAL)
 
 Das Monorepo ruht strikt auf vier voneinander getrennten Schichten. Code und Logik dürfen niemals willkürlich vermischt werden:
@@ -134,7 +190,7 @@ In Tonstudios arbeiten Nutzer mit hohen Abhörlautstärken. Falsche Pegelsprüng
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Steinberg-Mixing-Buddy** (2735 symbols, 5623 relationships, 235 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Steinberg-Mixing-Buddy** (2803 symbols, 5694 relationships, 237 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
