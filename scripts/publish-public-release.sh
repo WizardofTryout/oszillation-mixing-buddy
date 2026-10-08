@@ -46,6 +46,7 @@ ITEMS_TO_ADD=(
   apps
   packages
   plugins
+  screenshots
   LICENSE
   README.md
   package.json
