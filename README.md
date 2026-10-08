@@ -71,4 +71,4 @@ To protect studio monitoring systems and human hearing, all automated volume and
 ## 📜 License
 
 This project is licensed under the **PolyForm Noncommercial License 1.0.0**.  
-See [LICENSE](LICENSE) for details. Noncommercial personal evaluation and open-source contributions are welcome. For commercial licensing, contact Oszillation Studio.
+See [LICENSE](LICENSE) for details. Noncommercial personal evaluation and open-source contributions are welcome. For commercial licensing, contact Oszillation Studio / Matthias Köhler M.Sc.
