@@ -50,7 +50,11 @@ Cargo.lock
 *.sublime-project
 *.sublime-workspace
 .env
-.env.local
+.env.*
+!.env.example
+credentials*.json
+*.pem
+*.key
 
 # External reference repos & compiled sidecar binaries
 Studio-Buddy-ai-demo/
