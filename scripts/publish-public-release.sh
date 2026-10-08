@@ -56,7 +56,9 @@ ITEMS_TO_ADD=(
   CMakeLists.txt
   AGENTS.md
   .gitignore
-  docs
+  docs/architecture
+  docs/guides
+  docs/konzept_target_scope_bus_und_genre_architektur.md
 )
 
 for item in "${ITEMS_TO_ADD[@]}"; do
