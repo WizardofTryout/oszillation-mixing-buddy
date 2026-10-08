@@ -41,7 +41,29 @@ git rm -rf --cached research-features 2>/dev/null || true
 git rm -rf --cached .github/workflows/internal* 2>/dev/null || true
 
 # 7. Alle relevanten Produktiv-Dateien dem Release hinzufügen
-git add apps packages plugins LICENSE README.md package.json pnpm-workspace.yaml pnpm-lock.yaml Cargo.toml Cargo.lock CMakeLists.txt AGENTS.md .gitignore docs/architecture docs/guides 2>/dev/null || true
+echo "📦 Sammle Produktiv-Dateien für das Public Release..."
+ITEMS_TO_ADD=(
+  apps
+  packages
+  plugins
+  LICENSE
+  README.md
+  package.json
+  pnpm-workspace.yaml
+  pnpm-lock.yaml
+  Cargo.toml
+  Cargo.lock
+  CMakeLists.txt
+  AGENTS.md
+  .gitignore
+  docs
+)
+
+for item in "${ITEMS_TO_ADD[@]}"; do
+  if [[ -e "$item" ]]; then
+    git add "$item"
+  fi
+done
 
 # Nochmals prüfen, ob versehentlich unerwünschte Verzeichnisse gestaged wurden
 git rm -rf --cached docs/chat_history docs/internal research-features .github/workflows/internal* 2>/dev/null || true
