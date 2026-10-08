@@ -1,5 +1,22 @@
-
 <div align="center">
+
+# Matthias Köhler M.Sc.
+
+### Principal AI Architect · Sovereign Agentic Systems · Game Audio Engineer
+
+### M.Sc. Project Studies (Project Studies) · PhD-eligible · Seeking Doctoral Program & Research Collaboration
+
+**Oszillation AI Ecosystems** — Munich, Germany · Global AI Initiatives
+
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-matthiaskoehler-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/in/matthiaskoehler)
+[![AI Consulting](https://img.shields.io/badge/AI%20Consulting-ai.oszillation.com-8B5CF6?style=for-the-badge&logo=google-chrome&logoColor=white)](https://ai.oszillation.com)
+[![Game Audio Studio](https://img.shields.io/badge/Game%20Audio-oszillation--studio.de-10B981?style=for-the-badge&logo=audacity&logoColor=white)](https://oszillation-studio.de)
+[![Research](https://img.shields.io/badge/Open%20to-PhD%20%26%20Research-F59E0B?style=for-the-badge&logo=academia&logoColor=white)](mailto:mk@oszillation-media.com)
+[![ORCID](https://img.shields.io/badge/ORCID-0009--0001--4159--0639-A6CE39?style=for-the-badge&logo=orcid&logoColor=white)](https://orcid.org/0009-0001-4159-0639)
+
+*Architecting Sovereign AI Ecosystems · Enterprise MCP Integration · AI-Enhanced Game Audio Production · Academic Research & PhD Collaboration Welcome*
+
+</div>
 
 ---
 
