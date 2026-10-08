@@ -61,12 +61,14 @@ ITEMS_TO_ADD=(
 
 for item in "${ITEMS_TO_ADD[@]}"; do
   if [[ -e "$item" ]]; then
-    git add "$item"
+    if ! git check-ignore -q "$item"; then
+      git add "$item"
+    fi
   fi
 done
 
 # Nochmals prüfen, ob versehentlich unerwünschte Verzeichnisse gestaged wurden
-git rm -rf --cached docs/chat_history docs/internal research-features .github/workflows/internal* 2>/dev/null || true
+git rm -rf --cached docs/chat_history docs/internal docs/studio_buddy* research-features .github/workflows/internal* 2>/dev/null || true
 
 # 8. Initialer Release-Commit
 COMMIT_MSG="Release ${VERSION}: Oszillation Mixing Buddy (Universal AI Co-Producer)"
