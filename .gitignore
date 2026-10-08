@@ -56,6 +56,9 @@ credentials*.json
 *.pem
 *.key
 
+# Local screenshots / artifacts
+screenshots/
+
 # External reference repos & compiled sidecar binaries
 Studio-Buddy-ai-demo/
 packages/daw-adapters/bin/
