@@ -1,0 +1,67 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# Node & pnpm
+node_modules/
+dist/
+.pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# CMake / JUCE build artifacts
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+*.ninja
+.ninja_*
+
+# Xcode & Apple builds
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+*.xcworkspace/*
+!*.xcworkspace/contents.xcworkspacedata
+DerivedData/
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+# Rust / Cargo
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Plugin bundles (output)
+*.vst3
+*.component
+*.app
+
+# Local environment / IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+.env
+.env.*
+!.env.example
+credentials*.json
+*.pem
+*.key
+
+# External reference repos & compiled sidecar binaries
+Studio-Buddy-ai-demo/
+packages/daw-adapters/bin/
+
+# Local Agent & Serena configurations (kept local, excluded from remote)
+.agent/
+.agents/
+.serena/
+EchoJay-Demo/

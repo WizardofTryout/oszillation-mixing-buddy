@@ -1,0 +1,237 @@
+{
+  "name": "Compressor",
+  "aliases": ["Compressor2", "Logic Compressor"],
+  "parameters": [
+    {
+      "id": "right_panel_view",
+      "label": "Right Panel",
+      "type": "selector",
+      "hidden": true,
+      "options": [
+        { "id": "output", "label": "Output", "editorAX": { "role": "AXButton", "title": "Output" } },
+        { "id": "side_chain", "label": "Side Chain", "editorAX": { "role": "AXButton", "title": "Side Chain" } }
+      ]
+    },
+    {
+      "id": "threshold",
+      "aliases": ["comp_threshold", "thresh"],
+      "label": "Threshold",
+      "type": "continuous",
+      "unit": "dB",
+      "displayMin": -50,
+      "displayMax": 0,
+      "rawMin": 0,
+      "rawMax": 100,
+      "curve": "linear",
+      "editorAX": {
+        "role": "AXSlider",
+        "identifier": "_NS:153",
+        "helpPrefix": "Threshold knob"
+      }
+    },
+    {
+      "id": "ratio",
+      "aliases": ["comp_ratio"],
+      "label": "Ratio",
+      "type": "continuous",
+      "unit": ":1",
+      "displayMin": 1.1,
+      "displayMax": 30,
+      "rawMin": 0,
+      "rawMax": 85,
+      "curve": "logarithmic",
+      "editorAX": {
+        "role": "AXSlider",
+        "identifier": "_NS:157",
+        "helpPrefix": "Ratio knob"
+      }
+    },
+    {
+      "id": "attack",
+      "aliases": ["comp_attack"],
+      "label": "Attack",
+      "type": "continuous",
+      "unit": "ms",
+      "displayMin": 0,
+      "displayMax": 200,
+      "rawMin": 0,
+      "rawMax": 100,
+      "curve": "piecewise_linear",
+      "curveTable": [
+        { "raw": 0, "display": 0 },
+        { "raw": 11, "display": 5 },
+        { "raw": 22, "display": 10 },
+        { "raw": 33, "display": 15 },
+        { "raw": 44, "display": 20 },
+        { "raw": 56, "display": 50 },
+        { "raw": 67, "display": 80 },
+        { "raw": 78, "display": 120 },
+        { "raw": 89, "display": 160 },
+        { "raw": 100, "display": 200 }
+      ],
+      "editorAX": {
+        "role": "AXSlider",
+        "identifier": "_NS:163",
+        "helpPrefix": "Attack knob"
+      }
+    },
+    {
+      "id": "release",
+      "aliases": ["comp_release"],
+      "label": "Release",
+      "type": "continuous",
+      "unit": "ms",
+      "displayMin": 5,
+      "displayMax": 1000,
+      "rawMin": 0,
+      "rawMax": 119,
+      "curve": "logarithmic",
+      "editorAX": {
+        "role": "AXSlider",
+        "identifier": "_NS:169",
+        "helpPrefix": "Release knob"
+      }
+    },
+    {
+      "id": "make_up",
+      "aliases": ["makeup", "makeup_gain", "comp_makeup"],
+      "label": "Make Up",
+      "type": "continuous",
+      "unit": "dB",
+      "displayMin": -20,
+      "displayMax": 20,
+      "rawMin": 0,
+      "rawMax": 140,
+      "curve": "linear",
+      "editorAX": {
+        "role": "AXSlider",
+        "identifier": "_NS:160",
+        "helpPrefix": "Make Up knob"
+      }
+    },
+    {
+      "id": "knee",
+      "aliases": ["comp_knee"],
+      "label": "Knee",
+      "type": "continuous",
+      "unit": "",
+      "displayMin": 0.0,
+      "displayMax": 1.0,
+      "rawMin": 0,
+      "rawMax": 10,
+      "curve": "linear",
+      "editorAX": {
+        "role": "AXSlider",
+        "identifier": "_NS:172",
+        "helpPrefix": "Knee knob"
+      },
+      "dependsOn": [
+        {
+          "parameterId": "circuit_type",
+          "values": ["platinum_digital", "vintage_vca", "vintage_fet", "vintage_opto"]
+        }
+      ]
+    },
+    {
+      "id": "input_gain",
+      "label": "Input Gain",
+      "type": "continuous",
+      "unit": "dB",
+      "displayMin": -30,
+      "displayMax": 30,
+      "rawMin": 0,
+      "rawMax": 120,
+      "curve": "linear",
+      "editorAX": {
+        "role": "AXSlider",
+        "identifier": "_NS:166",
+        "helpPrefix": "Input Gain knob"
+      }
+    },
+    {
+      "id": "output_gain",
+      "label": "Output Gain",
+      "type": "continuous",
+      "unit": "dB",
+      "displayMin": -30,
+      "displayMax": 30,
+      "rawMin": 0,
+      "rawMax": 120,
+      "curve": "linear",
+      "editorAX": {
+        "role": "AXSlider",
+        "identifier": "_NS:265",
+        "helpPrefix": "Output Gain knob"
+      },
+      "writePrereq": { "parameterId": "right_panel_view", "option": "output" }
+    },
+    {
+      "id": "mix",
+      "label": "Mix",
+      "type": "continuous",
+      "unit": "%",
+      "displayMin": 0,
+      "displayMax": 100,
+      "rawMin": 0,
+      "rawMax": 200,
+      "curve": "linear",
+      "editorAX": {
+        "role": "AXSlider",
+        "identifier": "_NS:216",
+        "helpPrefix": "Mix knob"
+      },
+      "writePrereq": { "parameterId": "right_panel_view", "option": "output" }
+    },
+    {
+      "id": "limiter_enabled",
+      "label": "Limiter",
+      "type": "toggle",
+      "controlsLabel": "Limiter On",
+      "editorAX": { "role": "AXButton", "title": "ON", "helpPrefix": "Limiter button" },
+      "writePrereq": { "parameterId": "right_panel_view", "option": "output" }
+    },
+    {
+      "id": "limiter_threshold",
+      "label": "Limiter Threshold",
+      "type": "continuous",
+      "unit": "dB",
+      "displayMin": -20,
+      "displayMax": 0,
+      "rawMin": 0,
+      "rawMax": 100,
+      "curve": "linear",
+      "editorAX": {
+        "role": "AXSlider",
+        "identifier": "_NS:222",
+        "helpPrefix": "Limiter Threshold knob"
+      },
+      "writePrereq": { "parameterId": "right_panel_view", "option": "output" }
+    },
+    {
+      "id": "auto_release",
+      "label": "Auto Release",
+      "type": "toggle",
+      "editorAX": { "role": "AXButton", "title": "AUTO", "helpPrefix": "Auto Release button" },
+      "dependsOn": [
+        {
+          "parameterId": "circuit_type",
+          "values": ["studio_vca", "vintage_vca", "vintage_fet", "vintage_opto"]
+        }
+      ]
+    },
+    {
+      "id": "circuit_type",
+      "label": "Circuit Type",
+      "type": "radio",
+      "options": [
+        { "id": "platinum_digital", "label": "Platinum Digital", "editorAX": { "role": "AXButton", "title": "Platinum\u2028Digital" } },
+        { "id": "studio_vca", "label": "Studio VCA", "editorAX": { "role": "AXButton", "title": "Studio\u2028VCA" } },
+        { "id": "studio_fet", "label": "Studio FET", "editorAX": { "role": "AXButton", "title": "Studio\u2028FET" } },
+        { "id": "classic_vca", "label": "Classic VCA", "editorAX": { "role": "AXButton", "title": "Classic\u2028VCA" } },
+        { "id": "vintage_vca", "label": "Vintage VCA", "editorAX": { "role": "AXButton", "title": "Vintage\u2028VCA" } },
+        { "id": "vintage_fet", "label": "Vintage FET", "editorAX": { "role": "AXButton", "title": "Vintage\u2028FET" } },
+        { "id": "vintage_opto", "label": "Vintage Opto", "editorAX": { "role": "AXButton", "title": "Vintage\u2028Opto" } }
+      ]
+    }
+  ]
+}
