@@ -49,6 +49,7 @@ ITEMS_TO_ADD=(
   screenshots
   LICENSE
   README.md
+  CHANGELOG.md
   package.json
   pnpm-workspace.yaml
   pnpm-lock.yaml
@@ -71,7 +72,7 @@ for item in "${ITEMS_TO_ADD[@]}"; do
 done
 
 # Nochmals prüfen, ob versehentlich unerwünschte Verzeichnisse gestaged wurden
-git rm -rf --cached docs/chat_history docs/internal docs/studio_buddy* research-features .github/workflows/internal* 2>/dev/null || true
+git rm -rf --cached docs/chat_history docs/internal docs/studio_buddy* Studio-Buddy* *REA* research-features .github/workflows/internal* 2>/dev/null || true
 
 # 8. Initialer Release-Commit
 COMMIT_MSG="Release ${VERSION}: Oszillation Mixing Buddy (Universal AI Co-Producer)"
