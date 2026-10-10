@@ -293,6 +293,7 @@ func findTargetInControlsTable(in window: AXUIElement, criteria: SearchCriteria)
     let query = (criteria.description ?? criteria.identifier ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     guard !query.isEmpty else { return nil }
 
+    let isLimiterQuery = query.contains("limiter")
     var syns = [query]
     if query.contains("threshold") { syns.append("schwellenwert") }
     if query.contains("schwellenwert") { syns.append("threshold") }
@@ -302,6 +303,8 @@ func findTargetInControlsTable(in window: AXUIElement, criteria: SearchCriteria)
     if query.contains("makeup") || query.contains("make_up") { syns.append("gain"); syns.append("pegel") }
 
     let rows = getAXChildren(table).filter { (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXRow" }
+    
+    // Pass 1: Exakter Match auf Label-Zelle
     for row in rows {
         var rowLabel = ""
         var targetControl: AXUIElement? = nil
@@ -328,8 +331,45 @@ func findTargetInControlsTable(in window: AXUIElement, criteria: SearchCriteria)
         }
 
         if !rowLabel.isEmpty && targetControl != nil {
+            if !isLimiterQuery && rowLabel.contains("limiter") { continue }
             for syn in syns {
-                if rowLabel == syn || rowLabel.contains(syn) || syn.contains(rowLabel) {
+                if rowLabel == syn {
+                    return targetControl
+                }
+            }
+        }
+    }
+
+    // Pass 2: Substring Match mit striktem Limiter-Ausschluss
+    for row in rows {
+        var rowLabel = ""
+        var targetControl: AXUIElement? = nil
+
+        func scanCell(_ cell: AXUIElement) {
+            for item in getAXChildren(cell) {
+                let r = getAXString(item, kAXRoleAttribute as String) ?? ""
+                if r == "AXStaticText" {
+                    let text = (getAXString(item, kAXValueAttribute as String) ?? getAXString(item, kAXTitleAttribute as String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !text.isEmpty && rowLabel.isEmpty {
+                        rowLabel = text.trimmingCharacters(in: CharacterSet(charactersIn: ": ")).lowercased()
+                    }
+                } else if r == "AXSlider" || r == "AXCheckBox" || r == "AXPopUpButton" || r == "AXButton" {
+                    if criteria.role == nil || r == criteria.role {
+                        targetControl = item
+                    }
+                }
+                scanCell(item)
+            }
+        }
+
+        for cell in getAXChildren(row) {
+            scanCell(cell)
+        }
+
+        if !rowLabel.isEmpty && targetControl != nil {
+            if !isLimiterQuery && rowLabel.contains("limiter") { continue }
+            for syn in syns {
+                if rowLabel.contains(syn) || syn.contains(rowLabel) {
                     return targetControl
                 }
             }
@@ -339,14 +379,16 @@ func findTargetInControlsTable(in window: AXUIElement, criteria: SearchCriteria)
 }
 
 func findTargetElement(in window: AXUIElement, criteria: SearchCriteria) -> AXUIElement? {
-    // 1. Controls Table fast path (if Controls/Regler view is active)
-    if let ctrl = findTargetInControlsTable(in: window, criteria: criteria) {
-        return ctrl
+    // 1. Controls Table fast path (nur falls Controls/Regler view bereits physisch aktiv ist)
+    if ControlsViewFallback.currentViewMode(in: window) == "Controls" {
+        if let ctrl = findTargetInControlsTable(in: window, criteria: criteria) {
+            return ctrl
+        }
     }
 
     // 2. Search by AXIdentifier (if provided)
     if let targetId = criteria.identifier, !targetId.isEmpty {
-        if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: { (getAXString($0, "AXIdentifier") ?? "") == targetId }) {
+        if let found = findElementDFS(root: window, roleFilter: criteria.role, maxDepth: 12, predicate: { (getAXString($0, "AXIdentifier") ?? "") == targetId }) {
             return found
         }
     }
@@ -354,6 +396,7 @@ func findTargetElement(in window: AXUIElement, criteria: SearchCriteria) -> AXUI
     // 3. Search by description or title in current GUI view
     if let targetDesc = criteria.description, !targetDesc.isEmpty {
         let lowerDesc = targetDesc.lowercased()
+        let isLimiterQuery = lowerDesc.contains("limiter")
         var syns = [lowerDesc]
         if lowerDesc.contains("threshold") { syns.append("schwellenwert") }
         if lowerDesc.contains("schwellenwert") { syns.append("threshold") }
@@ -362,12 +405,36 @@ func findTargetElement(in window: AXUIElement, criteria: SearchCriteria) -> AXUI
         if lowerDesc.contains("release") { syns.append("abfallzeit") }
         if lowerDesc.contains("makeup") || lowerDesc.contains("make_up") { syns.append("gain") }
 
-        if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: { el in
+        // PASS 3A: Exakter Namens-Match (verhindert dass Limiter Threshold den Compressor Threshold kapert!)
+        if let found = findElementDFS(root: window, roleFilter: criteria.role, maxDepth: 12, predicate: { el in
             let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
             let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
             let help = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
+
+            if !isLimiterQuery && (desc.contains("limiter") || title.contains("limiter") || help.contains("limiter")) {
+                return false
+            }
+
             for s in syns {
-                if desc == s || title == s || desc.contains(s) || title.contains(s) || help.contains(s) {
+                if desc == s || title == s { return true }
+            }
+            return false
+        }) {
+            return found
+        }
+
+        // PASS 3B: Substring Match mit striktem Limiter-Ausschluss
+        if let found = findElementDFS(root: window, roleFilter: criteria.role, maxDepth: 12, predicate: { el in
+            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            let help = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
+
+            if !isLimiterQuery && (desc.contains("limiter") || title.contains("limiter") || help.contains("limiter")) {
+                return false
+            }
+
+            for s in syns {
+                if desc.contains(s) || title.contains(s) || help.contains(s) {
                     return true
                 }
             }
@@ -380,7 +447,7 @@ func findTargetElement(in window: AXUIElement, criteria: SearchCriteria) -> AXUI
     // 4. Search by help prefix
     if let targetHelp = criteria.helpPrefix, !targetHelp.isEmpty {
         let lowerHelp = targetHelp.lowercased()
-        if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: {
+        if let found = findElementDFS(root: window, roleFilter: criteria.role, maxDepth: 12, predicate: {
             (getAXString($0, kAXHelpAttribute as String) ?? "").lowercased().hasPrefix(lowerHelp)
         }) {
             return found
@@ -394,6 +461,8 @@ func findTargetElement(in window: AXUIElement, criteria: SearchCriteria) -> AXUI
             if let ctrl = findTargetInControlsTable(in: window, criteria: criteria) {
                 return ctrl
             }
+            // Falls auch in Controls view nicht auffindbar: sofort wieder Editor-Ansicht herstellen!
+            ControlsViewFallback.switchView(in: window, to: "Editor")
         }
     }
 
@@ -1138,6 +1207,16 @@ case "set-param":
     guard let targetWin = findTargetWindow(appElement, query: winQuery) else {
         printJSON(["success": false, "error": buildWindowError(appElement, query: winQuery)])
         exit(0)
+    }
+
+    // Visuelle Benutzeroberfläche (Editor-Ansicht) immer sicherstellen und nach Beendigung garantieren
+    if ControlsViewFallback.currentViewMode(in: targetWin) == "Controls" {
+        ControlsViewFallback.switchView(in: targetWin, to: "Editor")
+    }
+    defer {
+        if ControlsViewFallback.currentViewMode(in: targetWin) == "Controls" {
+            ControlsViewFallback.switchView(in: targetWin, to: "Editor")
+        }
     }
 
     // Optional: Auto-enable EQ band checkbox if requested (e.g. "Peak 3", "Low Cut", "Low Shelf")
@@ -2441,19 +2520,30 @@ case "set-sidechain":
     if let pv = pVal { AXValueGetValue(pv as! AXValue, .cgPoint, &p) }
     if let sv = sVal { AXValueGetValue(sv as! AXValue, .cgSize, &s) }
 
-    if s.width > 0 && s.height > 0 {
+    var picked = (AXUIElementPerformAction(finalItem, "AXPick" as CFString) == .success)
+    if !picked {
+        picked = (AXUIElementPerformAction(finalItem, kAXPressAction as CFString) == .success)
+    }
+    if !picked && s.width > 0 && s.height > 0 {
         let center = CGPoint(x: p.x + s.width / 2.0, y: p.y + s.height / 2.0)
         let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left)
         let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left)
         down?.post(tap: .cghidEventTap)
         usleep(20_000)
         up?.post(tap: .cghidEventTap)
-    } else {
-        _ = AXUIElementPerformAction(finalItem, kAXPressAction as CFString)
     }
 
-    // Wait 300ms for UI update
-    usleep(300_000)
+    // Dismiss menu if still lingering by posting Escape key event
+    usleep(50_000)
+    closeMenu(rootMenu)
+    let escDown = CGEvent(keyboardEventSource: nil, virtualKey: 0x35, keyDown: true)
+    let escUp = CGEvent(keyboardEventSource: nil, virtualKey: 0x35, keyDown: false)
+    escDown?.post(tap: .cghidEventTap)
+    usleep(10_000)
+    escUp?.post(tap: .cghidEventTap)
+
+    // Wait 100ms for UI update
+    usleep(100_000)
 
     let newVal = getAXString(scBtn, kAXValueAttribute as String)
         ?? getAXString(scBtn, kAXValueDescriptionAttribute as String)
