@@ -1620,26 +1620,8 @@ async fn learn_active_plugin(
 }
 
 pub fn list_learned_plugins_sync() -> Result<Vec<PluginSummary>, String> {
-    let mut list = vec![
-        PluginSummary {
-            slug: "channel_eq".to_string(),
-            plugin_name: "Channel EQ".to_string(),
-            category: "eq".to_string(),
-            tags: vec!["EQ".to_string(), "STOCK".to_string()],
-            parameter_count: 32,
-            is_built_in: true,
-            file_path: None,
-        },
-        PluginSummary {
-            slug: "compressor".to_string(),
-            plugin_name: "Compressor".to_string(),
-            category: "dynamics".to_string(),
-            tags: vec!["DYNAMICS".to_string(), "COMPRESSOR".to_string(), "STOCK".to_string()],
-            parameter_count: 14,
-            is_built_in: true,
-            file_path: None,
-        },
-    ];
+    let mut list: Vec<PluginSummary> = Vec::new();
+    let mut custom_slugs = std::collections::HashSet::new();
 
     let vault_dir = get_plugin_vault_dir()?;
     if let Ok(entries) = std::fs::read_dir(&vault_dir) {
@@ -1677,6 +1659,8 @@ pub fn list_learned_plugins_sync() -> Result<Vec<PluginSummary>, String> {
                         .unwrap_or("custom_plugin")
                         .to_string();
 
+                    custom_slugs.insert(slug.clone());
+
                     list.push(PluginSummary {
                         slug,
                         plugin_name,
@@ -1689,6 +1673,32 @@ pub fn list_learned_plugins_sync() -> Result<Vec<PluginSummary>, String> {
                 }
             }
         }
+    }
+
+    // Factory stock presets - only injected if not overridden by a user profile in the vault
+    if !custom_slugs.contains("channel_eq") {
+        list.insert(0, PluginSummary {
+            slug: "channel_eq".to_string(),
+            plugin_name: "Channel EQ".to_string(),
+            category: "eq".to_string(),
+            tags: vec!["EQ".to_string(), "STOCK".to_string()],
+            parameter_count: 32,
+            is_built_in: true,
+            file_path: None,
+        });
+    }
+
+    if !custom_slugs.contains("compressor") {
+        let insert_idx = if !custom_slugs.contains("channel_eq") { 1 } else { 0 };
+        list.insert(insert_idx, PluginSummary {
+            slug: "compressor".to_string(),
+            plugin_name: "Compressor".to_string(),
+            category: "dynamics".to_string(),
+            tags: vec!["DYNAMICS".to_string(), "COMPRESSOR".to_string(), "STOCK".to_string()],
+            parameter_count: 14,
+            is_built_in: true,
+            file_path: None,
+        });
     }
 
     Ok(list)

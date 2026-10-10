@@ -17,11 +17,11 @@ public final class ControlsViewFallback {
                 return child
             }
         }
-        // Fallback: look for any AXMenuButton with title containing zoom or "Regler" / "Controls" / "Editor"
+        // Fallback: look for any AXMenuButton or AXPopUpButton with title containing zoom or "Regler" / "Controls" / "Editor"
         for child in getAXChildren(window) {
             let role = getAXString(child, kAXRoleAttribute as String) ?? ""
             let title = getAXString(child, kAXTitleAttribute as String) ?? ""
-            if role == "AXMenuButton" && (title.contains("%") || title == "Regler" || title == "Controls" || title == "Editor") {
+            if (role == "AXMenuButton" || role == "AXPopUpButton") && (title.contains("%") || title == "Regler" || title == "Controls" || title == "Editor") {
                 return child
             }
         }
@@ -66,8 +66,8 @@ public final class ControlsViewFallback {
         var menu = findAnsichtMenu()
         if menu == nil {
             _ = AXUIElementPerformAction(btn, kAXPressAction as CFString)
-            for _ in 0..<8 {
-                usleep(30_000)
+            for _ in 0..<15 {
+                usleep(40_000)
                 if let m = findAnsichtMenu() {
                     menu = m
                     break
@@ -91,7 +91,27 @@ public final class ControlsViewFallback {
                 }
                 if err == .success {
                     targetFound = true
-                    usleep(300_000) // Allow Logic UI to re-render controls
+                    break
+                }
+            }
+        }
+
+        if targetFound && normalizedTarget == "Controls" {
+            // Poll up to 1.5s for AXTable and AXRows to be rendered by Logic Pro
+            for _ in 0..<25 {
+                usleep(60_000)
+                if let tbl = findControlsTable(in: window) {
+                    let rows = getAXChildren(tbl).filter { (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXRow" }
+                    if !rows.isEmpty {
+                        break
+                    }
+                }
+            }
+        } else if targetFound && normalizedTarget == "Editor" {
+            // Poll up to 1.5s for AXTable to disappear (UI switched back to Editor)
+            for _ in 0..<25 {
+                usleep(60_000)
+                if findControlsTable(in: window) == nil {
                     break
                 }
             }

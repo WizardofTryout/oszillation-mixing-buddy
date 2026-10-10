@@ -302,7 +302,7 @@ export function getAllPluginSpecifications(): PluginSpecification[] {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { loadVaultPluginSpecs } = require('./PluginRegistry.js') as typeof import('./PluginRegistry.js');
     const customSpecs = loadVaultPluginSpecs().map((item) => item.runtime);
-    return [...LOGIC_PLUGIN_SPECS, ...customSpecs];
+    return [...customSpecs, ...LOGIC_PLUGIN_SPECS];
   } catch {
     return LOGIC_PLUGIN_SPECS;
   }

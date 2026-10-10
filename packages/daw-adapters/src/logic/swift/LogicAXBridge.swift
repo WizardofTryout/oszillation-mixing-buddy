@@ -1669,87 +1669,95 @@ case "profile-plugin":
         return ("", rawMin, rawMax > rawMin ? rawMax : 1.0)
     }
 
+    // 1. Primary Harvesting Strategy: Logic Pro Native Controls ("Regler") View
+    // The native Cocoa AXTable in Controls view contains 100% of the true audio DSP parameters
+    // with standardized ranges, exact parameter names and units (for both stock and 3rd-party plugins).
+    let initialMode = ControlsViewFallback.currentViewMode(in: pluginWindow)
     var parameters: [[String: Any]] = []
-    var seenIds: Set<String> = []
+
+    if initialMode == "Controls" {
+        parameters = ControlsViewFallback.harvestParameters(in: pluginWindow)
+    } else {
+        if ControlsViewFallback.switchView(in: pluginWindow, to: "Controls") {
+            parameters = ControlsViewFallback.harvestParameters(in: pluginWindow)
+            // Immediately restore the user's original Editor view
+            ControlsViewFallback.switchView(in: pluginWindow, to: "Editor")
+        }
+    }
+
     var eqScore = 0
     var compScore = 0
     var satScore = 0
 
-    for (idx, ctrl) in rawControls.enumerated() {
-        let role = ctrl["role"] as? String ?? "AXSlider"
-        guard role == "AXSlider" || role == "AXCheckBox" || role == "AXButton" || role == "AXPopUpButton" else {
-            continue
-        }
+    // 2. Fallback: If Controls view harvesting returned nothing (e.g. plugin lacks Ansicht menu),
+    // collect interactive controls directly from the current window view.
+    if parameters.isEmpty {
+        var rawControls: [[String: Any]] = []
+        collectInteractiveControls(root: pluginWindow, maxDepth: 10, into: &rawControls)
 
-        let identifier = ctrl["identifier"] as? String ?? ""
-        let desc = ctrl["description"] as? String ?? ""
-        let title = ctrl["title"] as? String ?? ""
-        let help = ctrl["help"] as? String ?? ""
-        let valDesc = ctrl["valueDescription"] as? String ?? ""
-
-        let displayName = !desc.isEmpty ? desc : (!title.isEmpty ? title : (!help.isEmpty ? help : (!identifier.isEmpty ? identifier : "Param \(idx + 1)")))
-
-        // Skip generic window chrome buttons (Compare, Undo, Redo, Copy, Paste, Bypass header)
-        let lowerName = displayName.lowercased()
-        if role == "AXButton" && (lowerName == "compare" || lowerName == "vergleichen" || lowerName == "copy" || lowerName == "kopieren" || lowerName == "paste" || lowerName == "einfügen" || lowerName == "undo" || lowerName == "widerrufen" || lowerName == "redo" || lowerName == "wiederholen") {
-            continue
-        }
-
-        if lowerName.contains("freq") || lowerName.contains("shelf") || lowerName.contains("peak") || lowerName.contains("cut") || lowerName.contains("hz") || lowerName.contains("q") {
-            eqScore += 1
-        }
-        if lowerName.contains("threshold") || lowerName.contains("ratio") || lowerName.contains("attack") || lowerName.contains("release") || lowerName.contains("knee") {
-            compScore += 1
-        }
-        if lowerName.contains("drive") || lowerName.contains("punish") || lowerName.contains("tone") || lowerName.contains("saturat") || lowerName.contains("mix") {
-            satScore += 1
-        }
-
-        var slug = makeSlug(!desc.isEmpty ? desc : (!title.isEmpty ? title : identifier))
-        if slug.isEmpty {
-            slug = "param_\(idx + 1)"
-        }
-        if seenIds.contains(slug) {
-            slug = "\(slug)_\(idx + 1)"
-        }
-        seenIds.insert(slug)
-
-        let rawMin = ctrl["minValue"] as? Double ?? 0.0
-        let rawMax = ctrl["maxValue"] as? Double ?? (role == "AXSlider" ? 100.0 : 1.0)
-        let currentVal = ctrl["value"] as? Double ?? 0.0
-        let (unit, dispMin, dispMax) = inferUnitAndRange(label: displayName, valueDesc: valDesc, rawMin: rawMin, rawMax: rawMax)
-
-        var paramObj: [String: Any] = [
-            "id": slug,
-            "name": displayName,
-            "role": role,
-            "identifier": identifier,
-            "description": !desc.isEmpty ? desc : displayName,
-            "rawMin": rawMin,
-            "rawMax": rawMax,
-            "displayMin": dispMin,
-            "displayMax": dispMax,
-            "currentRawValue": currentVal,
-            "valueDescription": valDesc,
-            "unit": unit
-        ]
-        if !help.isEmpty {
-            paramObj["help"] = help
-        }
-        parameters.append(paramObj)
-    }
-
-    // If no sliders were found in Editor view (e.g. ChromaVerb, custom Metal/OpenGL UI),
-    // fallback to Logic Pro's native Controls ("Regler") view where all DSP parameters
-    // are exposed as accessible standard sliders and tables.
-    let hasSliders = parameters.contains(where: { ($0["role"] as? String) == "AXSlider" })
-    if !hasSliders {
-        if ControlsViewFallback.switchView(in: pluginWindow, to: "Controls") {
-            let harvested = ControlsViewFallback.harvestParameters(in: pluginWindow)
-            if !harvested.isEmpty {
-                parameters = harvested
+        var seenIds: Set<String> = []
+        for (idx, ctrl) in rawControls.enumerated() {
+            let role = ctrl["role"] as? String ?? "AXSlider"
+            guard role == "AXSlider" || role == "AXCheckBox" || role == "AXButton" || role == "AXPopUpButton" else {
+                continue
             }
-            ControlsViewFallback.switchView(in: pluginWindow, to: "Editor")
+
+            let identifier = ctrl["identifier"] as? String ?? ""
+            let desc = ctrl["description"] as? String ?? ""
+            let title = ctrl["title"] as? String ?? ""
+            let help = ctrl["help"] as? String ?? ""
+            let valDesc = ctrl["valueDescription"] as? String ?? ""
+
+            let displayName = !desc.isEmpty ? desc : (!title.isEmpty ? title : (!help.isEmpty ? help : (!identifier.isEmpty ? identifier : "Param \(idx + 1)")))
+
+            // Skip generic window chrome buttons (Compare, Undo, Redo, Copy, Paste, Bypass header)
+            let lowerName = displayName.lowercased()
+            if role == "AXButton" && (lowerName == "compare" || lowerName == "vergleichen" || lowerName == "copy" || lowerName == "kopieren" || lowerName == "paste" || lowerName == "einfügen" || lowerName == "undo" || lowerName == "widerrufen" || lowerName == "redo" || lowerName == "wiederholen") {
+                continue
+            }
+
+            if lowerName.contains("freq") || lowerName.contains("shelf") || lowerName.contains("peak") || lowerName.contains("cut") || lowerName.contains("hz") || lowerName.contains("q") {
+                eqScore += 1
+            }
+            if lowerName.contains("threshold") || lowerName.contains("ratio") || lowerName.contains("attack") || lowerName.contains("release") || lowerName.contains("knee") {
+                compScore += 1
+            }
+            if lowerName.contains("drive") || lowerName.contains("punish") || lowerName.contains("tone") || lowerName.contains("saturat") || lowerName.contains("mix") {
+                satScore += 1
+            }
+
+            var slug = makeSlug(!desc.isEmpty ? desc : (!title.isEmpty ? title : identifier))
+            if slug.isEmpty {
+                slug = "param_\(idx + 1)"
+            }
+            if seenIds.contains(slug) {
+                slug = "\(slug)_\(idx + 1)"
+            }
+            seenIds.insert(slug)
+
+            let rawMin = ctrl["minValue"] as? Double ?? 0.0
+            let rawMax = ctrl["maxValue"] as? Double ?? (role == "AXSlider" ? 100.0 : 1.0)
+            let currentVal = ctrl["value"] as? Double ?? 0.0
+            let (unit, dispMin, dispMax) = inferUnitAndRange(label: displayName, valueDesc: valDesc, rawMin: rawMin, rawMax: rawMax)
+
+            var paramObj: [String: Any] = [
+                "id": slug,
+                "name": displayName,
+                "role": role,
+                "identifier": identifier,
+                "description": !desc.isEmpty ? desc : displayName,
+                "rawMin": rawMin,
+                "rawMax": rawMax,
+                "displayMin": dispMin,
+                "displayMax": dispMax,
+                "currentRawValue": currentVal,
+                "valueDescription": valDesc,
+                "unit": unit
+            ]
+            if !help.isEmpty {
+                paramObj["help"] = help
+            }
+            parameters.append(paramObj)
         }
     }
 

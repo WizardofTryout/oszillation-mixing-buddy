@@ -208,26 +208,34 @@ export function loadVaultPluginSpecs(): Array<{
  * Lists all plugins (both built-in stock presets and user-learned plugins from `~/.mixing-buddy/plugins/`)
  */
 export function listAllRegisteredPlugins(): PluginSummary[] {
-  const summaries: PluginSummary[] = [
-    {
+  const vaultItems = loadVaultPluginSpecs();
+  const vaultSlugs = new Set(vaultItems.map((item) => item.slug));
+
+  const summaries: PluginSummary[] = [];
+
+  // Factory stock presets - only injected if not overridden by a user profile in the vault
+  if (!vaultSlugs.has('channel_eq')) {
+    summaries.push({
       slug: 'channel_eq',
       pluginName: CHANNEL_EQ_SPEC.name,
       category: 'eq',
       tags: ['EQ', 'STOCK'],
       parameterCount: CHANNEL_EQ_SPEC.parameters.filter((p) => !p.hidden).length,
       isBuiltIn: true
-    },
-    {
+    });
+  }
+
+  if (!vaultSlugs.has('compressor')) {
+    summaries.push({
       slug: 'compressor',
       pluginName: COMPRESSOR_SPEC.name,
       category: 'dynamics',
       tags: ['DYNAMICS', 'COMPRESSOR', 'STOCK'],
       parameterCount: COMPRESSOR_SPEC.parameters.filter((p) => !p.hidden).length,
       isBuiltIn: true
-    }
-  ];
+    });
+  }
 
-  const vaultItems = loadVaultPluginSpecs();
   for (const item of vaultItems) {
     const rawTags = Array.isArray(item.profiled.tags) && item.profiled.tags.length > 0
       ? item.profiled.tags
