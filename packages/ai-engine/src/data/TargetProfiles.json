@@ -1,0 +1,119 @@
+{
+  "genres": [
+    {
+      "id": "pop_radio",
+      "name": "Pop / Modern Radio",
+      "genreProfile": "pop_radio",
+      "targetScope": "mix_bus",
+      "targetIntegratedLufs": -12.0,
+      "toleranceLufs": 1.5,
+      "crestFactorRange": { "min": 10.5, "max": 13.0 },
+      "maxTruePeakDb": -1.0,
+      "recommendedHeadroomDb": 1.0,
+      "spectralTargets": {
+        "subBassDb": 0.0,
+        "bassDb": 0.5,
+        "lowMidDb": -0.5,
+        "highMidDb": 1.5,
+        "airDb": 2.5
+      },
+      "typicalRemedies": [
+        "Vocal air presence boost at 12 kHz",
+        "Gentle dynamic control on master buss",
+        "Low-end mono-compatibility below 90 Hz"
+      ]
+    },
+    {
+      "id": "hiphop_trap",
+      "name": "Hip-Hop / Trap / Drill",
+      "genreProfile": "hiphop_trap",
+      "targetScope": "mix_bus",
+      "targetIntegratedLufs": -8.0,
+      "toleranceLufs": 1.5,
+      "crestFactorRange": { "min": 8.0, "max": 10.5 },
+      "maxTruePeakDb": -0.5,
+      "recommendedHeadroomDb": 0.5,
+      "spectralTargets": {
+        "subBassDb": 3.5,
+        "bassDb": 1.0,
+        "lowMidDb": -1.5,
+        "highMidDb": 1.0,
+        "airDb": 1.5
+      },
+      "typicalRemedies": [
+        "Dominant sub-bass (35-65 Hz)",
+        "Aggressive sidechain ducking on kick/808",
+        "Fast clipper for transient punch"
+      ]
+    },
+    {
+      "id": "rock_metal",
+      "name": "Rock / Alternative / Metal",
+      "genreProfile": "rock_metal",
+      "targetScope": "mix_bus",
+      "targetIntegratedLufs": -10.0,
+      "toleranceLufs": 1.5,
+      "crestFactorRange": { "min": 9.0, "max": 12.0 },
+      "maxTruePeakDb": -0.8,
+      "recommendedHeadroomDb": 0.8,
+      "spectralTargets": {
+        "subBassDb": -1.5,
+        "bassDb": 1.0,
+        "lowMidDb": 1.5,
+        "highMidDb": 2.0,
+        "airDb": 0.5
+      },
+      "typicalRemedies": [
+        "Low cut on sub-bass (< 40 Hz)",
+        "Dense mid-range articulation (800 - 3500 Hz)",
+        "Parallel drum saturation"
+      ]
+    },
+    {
+      "id": "edm_club",
+      "name": "EDM / Club / Dance",
+      "genreProfile": "edm_club",
+      "targetScope": "mix_bus",
+      "targetIntegratedLufs": -6.5,
+      "toleranceLufs": 1.0,
+      "crestFactorRange": { "min": 6.5, "max": 9.0 },
+      "maxTruePeakDb": -0.3,
+      "recommendedHeadroomDb": 0.3,
+      "spectralTargets": {
+        "subBassDb": 4.0,
+        "bassDb": 2.0,
+        "lowMidDb": -2.0,
+        "highMidDb": 1.5,
+        "airDb": 2.0
+      },
+      "typicalRemedies": [
+        "Wide stereo imaging on synths",
+        "Brickwall limiting with multi-stage compression",
+        "Mono sub (< 100 Hz)"
+      ]
+    },
+    {
+      "id": "acoustic_jazz",
+      "name": "Acoustic / Jazz / Classical",
+      "genreProfile": "acoustic_jazz",
+      "targetScope": "mix_bus",
+      "targetIntegratedLufs": -16.0,
+      "toleranceLufs": 2.0,
+      "crestFactorRange": { "min": 14.0, "max": 20.0 },
+      "maxTruePeakDb": -1.5,
+      "recommendedHeadroomDb": 2.0,
+      "spectralTargets": {
+        "subBassDb": -3.0,
+        "bassDb": 0.0,
+        "lowMidDb": 0.5,
+        "highMidDb": 0.0,
+        "airDb": 1.0
+      },
+      "typicalRemedies": [
+        "Preserve full natural transient dynamics",
+        "Gentle optical leveling only",
+        "No harsh digital peak limiting"
+      ]
+    }
+  ]
+}
