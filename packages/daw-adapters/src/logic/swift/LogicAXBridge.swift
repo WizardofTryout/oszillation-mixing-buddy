@@ -84,6 +84,8 @@ func postKeyToLogic(pid: pid_t, keyCode: CGKeyCode, delayUs: useconds_t = 30_000
     let src = CGEventSource(stateID: .hidSystemState)
     let keyDown = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true)
     let keyUp = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false)
+    InputShield.tagEvent(keyDown)
+    InputShield.tagEvent(keyUp)
     keyDown?.postToPid(pid)
     usleep(10_000)
     keyUp?.postToPid(pid)
@@ -103,6 +105,8 @@ func clickAtPoint(point: CGPoint) {
     let src = CGEventSource(stateID: .hidSystemState)
     let mouseDown = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
     let mouseUp = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
+    InputShield.tagEvent(mouseDown)
+    InputShield.tagEvent(mouseUp)
     mouseDown?.postToPid(pid)
     mouseUp?.postToPid(pid)
 }
@@ -280,97 +284,8 @@ func getPlayheadX(appElement: AXUIElement) -> CGFloat? {
     }
     return nil
 }
+// Transport helper functions (getCycleElement, ensureCycleOff, performTransportLocate) are in LogicAXTransport.swift
 
-func getCycleElement(appElement: AXUIElement) -> (AXUIElement, CGPoint, CGSize)? {
-    for w in getLogicWindows(appElement) {
-        if let el = findElementDFS(root: w, roleFilter: nil, maxDepth: 10, predicate: { (getAXString($0, kAXDescriptionAttribute as String) ?? "") == "Cycle-Bereich" }) {
-            var pVal: AnyObject?; var sVal: AnyObject?
-            AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &pVal)
-            AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sVal)
-            if let pv = pVal, let sv = sVal {
-                var pt = CGPoint.zero; var sz = CGSize.zero
-                AXValueGetValue(pv as! AXValue, .cgPoint, &pt); AXValueGetValue(sv as! AXValue, .cgSize, &sz)
-                return (el, pt, sz)
-            }
-        }
-    }
-    return nil
-}
-
-func ensureCycleOff(appElement: AXUIElement) -> Bool {
-    var menuBarVal: AnyObject?
-    AXUIElementCopyAttributeValue(appElement, kAXMenuBarAttribute as CFString, &menuBarVal)
-    if let mb = menuBarVal as! AXUIElement? {
-        if let miPlay = findElementDFS(root: mb, roleFilter: "AXMenuItem", maxDepth: 6, predicate: {
-            let t = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased()
-            return t.contains("vom cycle-start wiedergeben") || t.contains("play from cycle start")
-        }) {
-            var mark: AnyObject?
-            AXUIElementCopyAttributeValue(miPlay, "AXMenuItemMarkChar" as CFString, &mark)
-            if let m = mark as? String, !m.isEmpty { _ = AXUIElementPerformAction(miPlay, kAXPressAction as CFString) }
-        }
-        if let mi = findElementDFS(root: mb, roleFilter: "AXMenuItem", maxDepth: 6, predicate: {
-            let t = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased()
-            return t == "cycle" || t.starts(with: "cycle") || t.contains("cycle-modus") || t.contains("cycle mode")
-        }) {
-            var markVal: AnyObject?; var val: AnyObject?
-            AXUIElementCopyAttributeValue(mi, "AXMenuItemMarkChar" as CFString, &markVal)
-            AXUIElementCopyAttributeValue(mi, kAXValueAttribute as CFString, &val)
-            let isChecked = (markVal != nil && !((markVal as? String) ?? "").isEmpty) || (val as? Int == 1) || (val as? Bool == true)
-            if isChecked {
-                let err = AXUIElementPerformAction(mi, kAXPressAction as CFString)
-                return err == .success || err == .cannotComplete
-            } else { return true }
-        }
-    }
-    for w in getLogicWindows(appElement) {
-        if let el = findElementDFS(root: w, roleFilter: nil, maxDepth: 12, predicate: { e in
-            let r = getAXString(e, kAXRoleAttribute as String) ?? ""
-            let d = (getAXString(e, kAXDescriptionAttribute as String) ?? "").lowercased()
-            let t = (getAXString(e, kAXTitleAttribute as String) ?? "").lowercased()
-            return (r == "AXLayoutItem" && d == "cycle-bereich") ||
-                   ((r == "AXCheckBox" || r == "AXButton" || r == "AXRadioButton") && (d.contains("cycle") || t.contains("cycle")))
-        }) {
-            var val: AnyObject?
-            AXUIElementCopyAttributeValue(el, kAXValueAttribute as CFString, &val)
-            if (val as? Int == 1) || (val as? Bool == true) || ((val as? String) == "1") {
-                let err = AXUIElementPerformAction(el, kAXPressAction as CFString)
-                return err == .success || err == .cannotComplete
-            } else if val != nil { return true }
-        }
-    }
-    return true
-}
-
-func performTransportLocate(appElement: AXUIElement, barNum: Int) -> (dialogOpened: Bool, windowFound: Bool, pid: pid_t) {
-    if let app = getLogicRunningApp() { app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps]) }
-    AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-    usleep(50_000)
-    var dialogOpened = false
-    var menuBarVal: AnyObject?
-    AXUIElementCopyAttributeValue(appElement, kAXMenuBarAttribute as CFString, &menuBarVal)
-    if let mb = menuBarVal as! AXUIElement?, let mi = findElementDFS(root: mb, roleFilter: "AXMenuItem", maxDepth: 6, predicate: {
-        let t = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased()
-        return t == "position …" || t == "position..." || (t.contains("position") && (t.contains("…") || t.contains("...")))
-    }) {
-        let err = AXUIElementPerformAction(mi, kAXPressAction as CFString)
-        dialogOpened = (err == .success || err == .cannotComplete)
-    }
-    let logicPid = getLogicPID() ?? 0
-    if !dialogOpened && logicPid > 0 { postKeyToLogic(pid: logicPid, keyCode: 75, delayUs: 40_000) }
-    var foundWindow = false
-    for _ in 0..<12 {
-        usleep(30_000)
-        if getLogicWindows(appElement).contains(where: { (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased().contains("position") }) {
-            foundWindow = true; break
-        }
-    }
-    if logicPid > 0 {
-        sendDigitsToLogic(pid: logicPid, text: "\(barNum)"); usleep(30_000)
-        postKeyToLogic(pid: logicPid, keyCode: 36, delayUs: 60_000)
-    }
-    return (dialogOpened, foundWindow, logicPid)
-}
 
 
 func findTargetElement(in window: AXUIElement, criteria: SearchCriteria) -> AXUIElement? {
@@ -1456,27 +1371,30 @@ func ensurePluginWindowOpen(appElement: AXUIElement, trackName: String, slotNum:
 
 // MARK: - CLI Argument Parser
 
-let args = Array(CommandLine.arguments.dropFirst())
-guard let command = args.first else {
-    printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks | list-channel-strips | set-fader | set-pan | open-insert | close-plugin-window | set-folder-expanded | select-track | load-plugin | list-insert-menu | set-send-bus | set-send-level | get-sidechain | set-sidechain"])
-    exit(1)
-}
+var args: [String] = []
 
 func getArg(_ flag: String) -> String? {
     guard let idx = args.firstIndex(of: flag), idx + 1 < args.count else { return nil }
     return args[idx + 1]
 }
 
-guard let appElement = findLogicApplicationElement() else {
-    if command == "scan-windows" || command == "scan-tracks" {
-        printJSON([])
+func runLogicAXBridge() {
+    args = Array(CommandLine.arguments.dropFirst())
+    guard let command = args.first else {
+        printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks | list-channel-strips | set-fader | set-pan | open-insert | close-plugin-window | set-folder-expanded | select-track | load-plugin | list-insert-menu | set-send-bus | set-send-level | get-sidechain | set-sidechain"])
+        exit(1)
+    }
+
+    guard let appElement = findLogicApplicationElement() else {
+        if command == "scan-windows" || command == "scan-tracks" {
+            printJSON([])
+            exit(0)
+        }
+        printJSON(["success": false, "error": "Logic Pro is not running"])
         exit(0)
     }
-    printJSON(["success": false, "error": "Logic Pro is not running"])
-    exit(0)
-}
 
-switch command {
+    switch command {
 case "scan-windows":
     let windows = getLogicWindows(appElement)
     var out: [[String: Any]] = []
@@ -1821,6 +1739,20 @@ case "profile-plugin":
         parameters.append(paramObj)
     }
 
+    // If no sliders were found in Editor view (e.g. ChromaVerb, custom Metal/OpenGL UI),
+    // fallback to Logic Pro's native Controls ("Regler") view where all DSP parameters
+    // are exposed as accessible standard sliders and tables.
+    let hasSliders = parameters.contains(where: { ($0["role"] as? String) == "AXSlider" })
+    if !hasSliders {
+        if ControlsViewFallback.switchView(in: pluginWindow, to: "Controls") {
+            let harvested = ControlsViewFallback.harvestParameters(in: pluginWindow)
+            if !harvested.isEmpty {
+                parameters = harvested
+            }
+            ControlsViewFallback.switchView(in: pluginWindow, to: "Editor")
+        }
+    }
+
     // --- Extended category + tag inference ---
     // Collect all param label text for keyword matching
     let allParamText = parameters
@@ -1836,47 +1768,54 @@ case "profile-plugin":
     var modScore    = 0
     var limiterScore = 0
 
-    for (_, ctrl) in rawControls.enumerated() {
-        let desc  = (ctrl["description"] as? String ?? "").lowercased()
-        let title = (ctrl["title"]       as? String ?? "").lowercased()
-        let label = desc.isEmpty ? title : desc
+    for param in parameters {
+        let label = (param["name"] as? String ?? "").lowercased()
+        let desc = (param["description"] as? String ?? "").lowercased()
+        let full = label + " " + desc
 
-        if label.contains("delay") || label.contains("echo") || label.contains("feedback") ||
-           label.contains("ping pong") || label.contains("bpm") || label.contains("time sync") { delayScore += 1 }
+        if full.contains("delay") || full.contains("echo") || full.contains("feedback") ||
+           full.contains("ping pong") || full.contains("bpm") || full.contains("time sync") { delayScore += 1 }
 
-        if label.contains("reverb") || label.contains("decay") || label.contains("predelay") ||
-           label.contains("room") || label.contains("hall") || label.contains("plate") ||
-           label.contains("damping") || label.contains("early reflections") { reverbScore += 1 }
+        if full.contains("reverb") || full.contains("decay") || full.contains("predelay") ||
+           full.contains("room") || full.contains("hall") || full.contains("plate") ||
+           full.contains("damping") || full.contains("early reflections") || full.contains("density") { reverbScore += 1 }
 
-        if label.contains("chorus") || label.contains("flanger") || label.contains("phaser") ||
-           label.contains("tremolo") || label.contains("vibrato") || label.contains("lfo") { modScore += 1 }
+        if full.contains("chorus") || full.contains("flanger") || full.contains("phaser") ||
+           full.contains("tremolo") || full.contains("vibrato") || full.contains("lfo") { modScore += 1 }
 
-        if label.contains("limit") || label.contains("ceiling") || label.contains("lookahead") ||
-           label.contains("out ceiling") || label.contains("true peak") { limiterScore += 1 }
+        if full.contains("limit") || full.contains("ceiling") || full.contains("lookahead") ||
+           full.contains("out ceiling") || full.contains("true peak") { limiterScore += 1 }
     }
 
     // Primary category
     var category = "utility"
     var tags: [String] = []
 
+    // Reverb (prioritize before saturation so ChromaVerb isn't trapped by 'chroma')
+    if lowerPlugin.contains("reverb") || lowerPlugin.contains("chromaverb") ||
+       lowerPlugin.contains("room") || lowerPlugin.contains("hall") ||
+       lowerPlugin.contains("verb") || reverbScore >= 2 ||
+       allParamText.contains("decay") || allParamText.contains("predelay") {
+        category = "reverb"
+        tags.append("REVERB")
+    }
     // EQ
-    if lowerPlugin.contains("eq") || lowerPlugin.contains("pro-q") || eqScore >= 3 {
+    else if lowerPlugin.contains("eq") || lowerPlugin.contains("pro-q") || eqScore >= 3 {
         category = "eq"
         tags.append("EQ")
     }
-    // Saturation / Color (before dynamics to catch e.g. "ChromaGlow" correctly)
-    else if lowerPlugin.contains("glow") || lowerPlugin.contains("chroma") ||
-            lowerPlugin.contains("sat") || lowerPlugin.contains("tube") ||
-            lowerPlugin.contains("tape") || lowerPlugin.contains("distort") ||
-            lowerPlugin.contains("warmth") || lowerPlugin.contains("overdrive") ||
-            lowerPlugin.contains("preamp") || lowerPlugin.contains("decapitator") ||
-            lowerPlugin.contains("color") || lowerPlugin.contains("harmonics") ||
-            satScore >= 2 ||
+    // Saturation / Color
+    else if lowerPlugin.contains("glow") || lowerPlugin.contains("sat") ||
+            lowerPlugin.contains("tube") || lowerPlugin.contains("tape") ||
+            lowerPlugin.contains("distort") || lowerPlugin.contains("warmth") ||
+            lowerPlugin.contains("overdrive") || lowerPlugin.contains("preamp") ||
+            lowerPlugin.contains("decapitator") || lowerPlugin.contains("color") ||
+            lowerPlugin.contains("harmonics") || satScore >= 2 ||
             allParamText.contains("drive") || allParamText.contains("glow") ||
             allParamText.contains("saturat") || allParamText.contains("warmth") {
         category = "saturation"
         tags.append("SATURATION")
-        if lowerPlugin.contains("glow") || lowerPlugin.contains("chroma") || allParamText.contains("glow") {
+        if lowerPlugin.contains("glow") || allParamText.contains("glow") {
             tags.append("COLOR")
         }
     }
@@ -1893,12 +1832,6 @@ case "profile-plugin":
         category = "dynamics"
         tags.append("DYNAMICS")
         tags.append("COMPRESSOR")
-    }
-    // Reverb
-    else if lowerPlugin.contains("reverb") || lowerPlugin.contains("room") ||
-            lowerPlugin.contains("hall") || lowerPlugin.contains("verb") || reverbScore >= 2 {
-        category = "reverb"
-        tags.append("REVERB")
     }
     // Delay / Echo
     else if lowerPlugin.contains("delay") || lowerPlugin.contains("echo") || delayScore >= 2 {
@@ -2485,167 +2418,10 @@ case "list-insert-menu":
 
 // MARK: - SPRINT 6: Transport Control Commands
 
-case "transport-play":
-    var played = false
-
-    // 1. Try native AXUIElement in Steuerungsleiste (AXCheckBox/AXButton desc="Wiedergabe" / "Play")
-    let allWindows = getLogicWindows(appElement)
-    for w in allWindows {
-        if let playBtn = findElementDFS(root: w, roleFilter: nil, maxDepth: 12, predicate: { el in
-            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-            let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
-            let role = getAXString(el, kAXRoleAttribute as String) ?? ""
-            return (role == "AXCheckBox" || role == "AXButton") &&
-                   (desc == "wiedergabe" || desc == "play" || t == "wiedergabe" || t == "play" ||
-                    desc.contains("wiedergabe") || desc.contains("play"))
-        }) {
-            var val: AnyObject?
-            AXUIElementCopyAttributeValue(playBtn, kAXValueAttribute as CFString, &val)
-            let isAlreadyPlaying = (val as? Int) == 1
-            if !isAlreadyPlaying {
-                let err = AXUIElementPerformAction(playBtn, kAXPressAction as CFString)
-                played = (err == .success || err == .cannotComplete)
-            } else {
-                played = true
-            }
-            if played { break }
-        }
-    }
-
-    // 2. Fallback / Verification: Check if Logic is playing; if not, send Spacebar with 150ms delay
-    usleep(150_000)
-    var isConfirmedPlaying = false
-    for w in allWindows {
-        if let playBtn = findElementDFS(root: w, roleFilter: nil, maxDepth: 12, predicate: { el in
-            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-            let role = getAXString(el, kAXRoleAttribute as String) ?? ""
-            return (role == "AXCheckBox" || role == "AXButton") &&
-                   (desc == "wiedergabe" || desc == "play" || desc.contains("wiedergabe") || desc.contains("play"))
-        }) {
-            var val: AnyObject?
-            AXUIElementCopyAttributeValue(playBtn, kAXValueAttribute as CFString, &val)
-            if (val as? Int) == 1 {
-                isConfirmedPlaying = true
-            }
-            break
-        }
-    }
-
-    if !isConfirmedPlaying {
-        let _ = sendSpacebarToLogic()
-        played = true
-    }
-
-    printJSON(["success": true, "action": "play"])
-
-case "transport-stop":
-    var stopped = false
-
-    let allWindows = getLogicWindows(appElement)
-    for w in allWindows {
-        // Try Stoppen button in Steuerungsleiste
-        if let stopBtn = findElementDFS(root: w, roleFilter: nil, maxDepth: 12, predicate: { el in
-            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-            let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
-            return desc.contains("stopp") || desc.contains("stop") || t.contains("stopp") || t.contains("stop")
-        }) {
-            let err = AXUIElementPerformAction(stopBtn, kAXPressAction as CFString)
-            stopped = (err == .success || err == .cannotComplete)
-            if stopped { break }
-        }
-
-        // Check if Wiedergabe checkbox is active (value == 1) and toggle it
-        if !stopped {
-            if let playBtn = findElementDFS(root: w, roleFilter: nil, maxDepth: 12, predicate: { el in
-                let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
-                let t = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
-                let role = getAXString(el, kAXRoleAttribute as String) ?? ""
-                return (role == "AXCheckBox" || role == "AXButton") &&
-                       (desc == "wiedergabe" || desc == "play" || t == "wiedergabe" || t == "play")
-            }) {
-                var val: AnyObject?
-                AXUIElementCopyAttributeValue(playBtn, kAXValueAttribute as CFString, &val)
-                if (val as? Int) == 1 {
-                    let err = AXUIElementPerformAction(playBtn, kAXPressAction as CFString)
-                    stopped = (err == .success || err == .cannotComplete)
-                } else {
-                    stopped = true
-                }
-                if stopped { break }
-            }
-        }
-    }
-
-    if !stopped {
-        stopped = sendSpacebarToLogic()
-    }
-
-    printJSON(["success": true, "action": "stop"])
-
-case "cycle-off", "ensure-cycle-off":
-    let success = ensureCycleOff(appElement: appElement)
-    printJSON(["success": success, "action": "cycle-off"])
-
-case "set-cycle-region":
-    guard let startStr = getArg("--start"), let startNum = Int(startStr), startNum >= 1 else {
-        printJSON(["success": false, "error": "Missing or invalid --start argument"])
+case "transport-play", "transport-stop", "cycle-off", "ensure-cycle-off", "set-cycle-region", "transport-locate":
+    if handleTransportCommands(command: command, appElement: appElement) {
         exit(0)
     }
-    let endNum = Int(getArg("--end") ?? "") ?? (startNum + 4)
-    if let app = getLogicRunningApp() { app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps]) }
-    AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-    usleep(50_000)
-
-    var endX: CGFloat? = nil
-    if endNum > startNum {
-        _ = performTransportLocate(appElement: appElement, barNum: endNum)
-        usleep(50_000)
-        endX = getPlayheadX(appElement: appElement)
-    }
-    _ = performTransportLocate(appElement: appElement, barNum: startNum)
-    usleep(50_000)
-    let startX = getPlayheadX(appElement: appElement)
-
-    var cycleMoved = false
-    if let (cycleEl, cyclePt, cycleSz) = getCycleElement(appElement: appElement), let sX = startX {
-        var newPt = CGPoint(x: sX, y: cyclePt.y)
-        if let axVal = AXValueCreate(.cgPoint, &newPt) {
-            _ = AXUIElementSetAttributeValue(cycleEl, kAXPositionAttribute as CFString, axVal)
-            cycleMoved = true
-        }
-        usleep(40_000)
-        if let eX = endX, eX > sX {
-            if let (_, curPt, curSz) = getCycleElement(appElement: appElement) {
-                let curRight = curPt.x + curSz.width
-                if abs(curRight - eX) > 4 {
-                    let startDrag = CGPoint(x: curRight - 2, y: curPt.y + curSz.height / 2)
-                    let endDrag = CGPoint(x: eX, y: curPt.y + curSz.height / 2)
-                    let src = CGEventSource(stateID: .hidSystemState)
-                    let md = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: startDrag, mouseButton: .left)
-                    let mDrag = CGEvent(mouseEventSource: src, mouseType: .leftMouseDragged, mouseCursorPosition: endDrag, mouseButton: .left)
-                    let mu = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: endDrag, mouseButton: .left)
-                    md?.post(tap: .cghidEventTap); usleep(30_000)
-                    mDrag?.post(tap: .cghidEventTap); usleep(30_000)
-                    mu?.post(tap: .cghidEventTap); usleep(50_000)
-                    var resetPt = CGPoint(x: sX, y: cyclePt.y)
-                    if let finalAx = AXValueCreate(.cgPoint, &resetPt) {
-                        _ = AXUIElementSetAttributeValue(cycleEl, kAXPositionAttribute as CFString, finalAx)
-                    }
-                }
-            }
-        }
-    }
-    printJSON(["success": true, "action": "set-cycle-region", "start": startNum, "end": endNum, "cycleMoved": cycleMoved])
-
-case "transport-locate":
-    guard let barStr = getArg("--bar"), let barNum = Int(barStr), barNum >= 1 else {
-        printJSON(["success": false, "error": "Missing or invalid --bar argument (must be >= 1)"])
-        exit(0)
-    }
-    let keepCycle = (getArg("--keep-cycle") ?? "false") == "true"
-    if !keepCycle { _ = ensureCycleOff(appElement: appElement) }
-    let res = performTransportLocate(appElement: appElement, barNum: barNum)
-    printJSON(["success": true, "action": "locate", "bar": barNum, "dialogOpened": res.dialogOpened, "windowFound": res.windowFound, "pid": res.pid, "isTrusted": AXIsProcessTrusted()])
 
 // MARK: - SPRINT 9: Bus Sends, Routing & Send Level Control
 
@@ -2996,4 +2772,5 @@ case "set-sidechain":
 
 default:
     printJSON(["success": false, "error": "Unknown command: \(command)"])
+    }
 }
