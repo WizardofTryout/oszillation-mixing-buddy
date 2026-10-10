@@ -17,7 +17,8 @@ import {
 import {
   isAmbiguousTrackName,
   classifySignalAcoustically,
-  type AcousticTelemetrySnapshot
+  type AcousticTelemetrySnapshot,
+  actionJournal
 } from '@mixing-buddy/ai-engine';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -1118,6 +1119,34 @@ export const App: React.FC = () => {
           prev.map((p) => (p.id === id ? { ...p, status: 'applied' } : p))
         );
 
+        // Sprint 1: ActionJournal Protokollierung für Langzeit-Gedächtnis
+        for (const snap of appliedSnapshots) {
+          actionJournal.recordAppliedDelta({
+            cardId: id,
+            cardTitle: proposal.title,
+            track: snap.track,
+            pluginName: snap.pluginName,
+            slotIndex: snap.slotIndex,
+            parameter: snap.parameter,
+            previousValue: snap.previousValue,
+            appliedValue: snap.appliedValue,
+            unit: snap.unit,
+            monitoringContext: {
+              activeMeterTrack: activeMeterTrack || (isLogic ? 'Stereo Out' : 'Master'),
+              targetScope
+            },
+            rationaleSnippet: proposal.rationale?.slice(0, 80)
+          });
+        }
+        if (proposal.sidechainRoute) {
+          actionJournal.recordSidechain({
+            targetTrack: proposal.sidechainRoute.trackName,
+            targetSlot: proposal.sidechainRoute.slotIndex,
+            sourceTrack: proposal.sidechainRoute.sourcePath,
+            status: 'active'
+          });
+        }
+
         if (applyErrors.length === 0) {
           setChatLog(`✅ Anpassung angewendet: "${proposal.title}" (${appliedCount} Parameter) erfolgreich an ${dawLabel} gesendet.`);
         } else {
@@ -1155,6 +1184,7 @@ export const App: React.FC = () => {
       });
 
       setChatLog(`✅ Rollback erfolgreich: ${delta.parameterName} auf ${delta.currentValue} ${delta.unit ?? 'dB'} zurückgesetzt.`);
+      actionJournal.recordDeltaStatus(proposalId, delta.trackName, delta.parameterName, 'restored');
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Rollback: ${String(err)}`);
     }
@@ -1196,6 +1226,7 @@ export const App: React.FC = () => {
       });
 
       setChatLog(`✅ Wiederhergestellt: ${delta.parameterName} erneut auf ${delta.proposedValue} ${delta.unit ?? 'dB'} gesetzt.`);
+      actionJournal.recordDeltaStatus(proposalId, delta.trackName, delta.parameterName, 'applied');
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Wiederherstellen: ${String(err)}`);
     }
@@ -1253,6 +1284,9 @@ export const App: React.FC = () => {
         })
       );
       setChatLog(`✅ Rückgängig erfolgreich: "${actionToUndo.description}" auf Ausgangswerte zurückgesetzt.`);
+      if (actionToUndo.proposalId) {
+        actionJournal.recordStatusChange(actionToUndo.proposalId, 'restored');
+      }
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Rückgängig-Machen: ${String(err)}`);
     }
@@ -1336,6 +1370,7 @@ export const App: React.FC = () => {
         prev.map((p) => (p.id === proposalId ? { ...p, status: 'pending' } : p))
       );
       setChatLog(`✅ Rückgängig erfolgreich: "${title}" auf Ausgangswerte zurückgesetzt.`);
+      actionJournal.recordStatusChange(proposalId, 'restored');
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Rückgängig-Machen: ${String(err)}`);
     }

@@ -137,6 +137,22 @@ Das Projekt ist durch GitNexus indiziert (Container `gitnexus-server` auf Docker
 
 ---
 
+## 🔍 Code Review Graph & Architecture Governance (CRITICAL)
+
+Das Projekt verfügt über einen persistenten **Code Review Graph** (`.code-review-graph/graph.db`), der Multi-Language ASTs (Rust, Swift, C++, TSX, TypeScript) analysiert und Architektur-Communities abbildet.
+
+1. **Token-effizienter Review-Kontext:**
+   - Vor der Bearbeitung komplexer Teilbereiche nutzen Agenten bevorzugt `get_review_context_tool` oder `get_minimal_context_tool`, um minimalen, hochpräzisen Kontext zu erhalten (bis zu 98 % Token-Ersparnis).
+2. **Impact-Radius & Community-Cohesion:**
+   - Vor Architekturänderungen oder Refactorings mit `get_impact_radius_tool` und `get_architecture_overview_tool` prüfen, ob Cross-Community Kopplungen verletzt oder High-Coupling Warnings erzeugt werden.
+3. **Change-Detection vor Commits:**
+   - Vor Commits mit `detect_changes_tool` gegen den AST-Graphen validieren, welche Funktionen und Flows tatsächlich berührt wurden.
+4. **Graph-Aktualisierung bei Meilensteinen:**
+   - Nach signifikanten Code-Änderungen den Graph inkrementell via `build_or_update_graph_tool` (oder `code-review-graph update` via Docker) aktualisieren.
+   - Siehe Leitfaden: `code-review-graph-how-to.md`.
+
+---
+
 ## 🛡️ Acoustic Shock Shield & Gehörschutz-Regeln (CRITICAL)
 
 In Tonstudios arbeiten Nutzer mit hohen Abhörlautstärken. Falsche Pegelsprünge können Gehörschäden verursachen oder Monitore zerstören.
