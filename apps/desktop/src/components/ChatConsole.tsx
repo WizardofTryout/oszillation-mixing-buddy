@@ -297,6 +297,11 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
             getTelemetry: () => telemetryRef.current
           });
 
+          const recentMessages = messages.slice(-6).map((m) => ({
+            sender: m.sender as 'user' | 'assistant',
+            text: m.text
+          }));
+
           const res = await runner.run(
             query,
             telemetry,
@@ -307,7 +312,8 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
               targetScope,
               activeMeterTrack,
               targetProfile,
-              activeSkill: activeSkill || undefined
+              activeSkill: activeSkill || undefined,
+              recentMessages
             },
             controller.signal
           );

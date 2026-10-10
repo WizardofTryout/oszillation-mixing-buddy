@@ -173,6 +173,16 @@ const TOOL_PROPOSE: FunctionDeclaration = {
           },
           required: ['trackId', 'trackName', 'parameterName', 'currentValue', 'proposedValue', 'unit']
         }
+      },
+      sidechainRoute: {
+        type: SchemaType.OBJECT,
+        description: 'Optional sidechain routing (e.g. Kick trigger for Bass compressor ducking)',
+        properties: {
+          trackName: { type: SchemaType.STRING, description: 'Target track name to receive the sidechain signal (e.g. "Simple Foundation")' },
+          slotIndex: { type: SchemaType.INTEGER, description: 'Insert slot index of the receiver plugin (e.g. 2 for Compressor)' },
+          sourcePath: { type: SchemaType.STRING, description: 'Source path of the trigger track or bus (e.g. "Audio > Motown Revisited Kit" or "Bus > Bus 1")' }
+        },
+        required: ['trackName', 'sourcePath']
       }
     },
     required: ['category', 'title', 'rationale', 'confidenceScore', 'deltas']
@@ -183,17 +193,11 @@ const TOOL_PROPOSE: FunctionDeclaration = {
 // Audition Intent Parsing (Single-Pass Deterministisch)
 // --------------------------------------------------------------------------
 
-export function parseAuditionIntent(prompt: string): { startBar: number; endBar: number; durationSeconds: number } | null {
+export function parseAuditionIntent(
+  prompt: string,
+  isSilentSignal?: boolean
+): { startBar: number; endBar: number; durationSeconds: number } | null {
   const lower = prompt.toLowerCase();
-  const wantsAudition =
-    lower.includes('höre') ||
-    lower.includes('hoer') ||
-    lower.includes('listen') ||
-    lower.includes('audition') ||
-    lower.includes('takt') ||
-    lower.includes('bar');
-
-  if (!wantsAudition) return null;
 
   // 1. Bereichssuche: "Takt 9 bis 13", "Takt 9 - 13", "Bar 9 to 13"
   const rangeMatch = prompt.match(/(?:takt|bar|bars|takte)\s*(\d+)\s*(?:bis|to|-|\.\.)\s*(?:takt|bar)?\s*(\d+)/i);
@@ -217,8 +221,32 @@ export function parseAuditionIntent(prompt: string): { startBar: number; endBar:
     return { startBar, endBar, durationSeconds };
   }
 
-  // 3. Allgemeine Höranweisung ohne Taktangabe ("Höre dir den Mix an"): Standard Takt 1 bis 5 (9.6s)
-  return { startBar: 1, endBar: 5, durationSeconds: 9.6 };
+  // 3. Hör-, Analyse-, Optimierungs- oder Abspielanweisung:
+  const wantsAuditionOrAnalysis =
+    lower.includes('höre') ||
+    lower.includes('hoer') ||
+    lower.includes('listen') ||
+    lower.includes('audition') ||
+    lower.includes('analys') ||
+    lower.includes('optimier') ||
+    lower.includes('abmisch') ||
+    lower.includes('mix') ||
+    lower.includes('kanäle') ||
+    lower.includes('kanaele') ||
+    lower.includes('sound') ||
+    lower.includes('klang') ||
+    lower.includes('einstellung') ||
+    lower.includes('loop') ||
+    lower.includes('play') ||
+    lower.includes('wiedergabe') ||
+    Boolean(isSilentSignal);
+
+  if (wantsAuditionOrAnalysis) {
+    // 0 = Wiedergabe direkt ab aktueller Playhead-Cursor-Position in Logic Pro!
+    return { startBar: 0, endBar: 0, durationSeconds: 8.0 };
+  }
+
+  return null;
 }
 
 // --------------------------------------------------------------------------
@@ -539,20 +567,23 @@ export class AgentRunner {
     }
     dur = Math.max(2, Math.min(30, dur));
 
-    const stepLabel = eBar && eBar > sBar
-      ? `Wiedergabe Takt ${sBar} bis ${eBar} · ${dur.toFixed(1)}s`
-      : `Wiedergabe Takt ${sBar} · ${dur.toFixed(1)}s`;
+    const stepLabel = sBar >= 1
+      ? (eBar && eBar > sBar
+          ? `Wiedergabe Takt ${sBar} bis ${eBar} · ${dur.toFixed(1)}s`
+          : `Wiedergabe Takt ${sBar} · ${dur.toFixed(1)}s`)
+      : `Wiedergabe ab aktueller Playhead-Position · ${dur.toFixed(1)}s`;
 
     const step = this.addStep('👂', stepLabel);
     try {
       this.checkAborted(signal);
 
-      // Zwingend daw_locate_bar aufrufen und 300 ms asynchron warten,
-      // damit Logic Pro den Playhead im Dialog "Zu Position" physisch platziert,
-      // BEVOR daw_play getriggert wird!
-      await this.cfg.invokeTauri('daw_locate_bar', { bar: sBar });
-      await agentDelay(300, signal);
-      this.checkAborted(signal);
+      // Nur wenn sBar >= 1, Playhead an diese Bar-Position setzen.
+      // Bei sBar == 0 bleibt der Cursor des Nutzers exakt an der aktuellen Position!
+      if (sBar >= 1) {
+        await this.cfg.invokeTauri('daw_locate_bar', { bar: sBar });
+        await agentDelay(300, signal);
+        this.checkAborted(signal);
+      }
 
       await this.cfg.invokeTauri('daw_play', {});
       try {
@@ -561,7 +592,10 @@ export class AgentRunner {
         await this.cfg.invokeTauri('daw_stop', {});
       }
 
-      this.resolveStep(step, eBar && eBar > sBar ? `Takt ${sBar} bis ${eBar} abgespielt` : `Takt ${sBar} abgespielt`);
+      const resText = sBar >= 1
+        ? (eBar && eBar > sBar ? `Takt ${sBar} bis ${eBar} abgespielt` : `Takt ${sBar} abgespielt`)
+        : `Wiedergabe ab Cursor-Position abgeschlossen`;
+      this.resolveStep(step, resText);
       return JSON.stringify({ success: true, startBar: sBar, endBar: eBar, durationSeconds: dur });
     } catch (err) {
       if (signal?.aborted) {
@@ -736,9 +770,41 @@ export class AgentRunner {
         plugin?.toLowerCase() === 'mixer';
 
       if (isChannelStripParam(paramNameStr, pluginNameStr)) {
-        // Überspringe die Suche nach einem Insert-Plugin vollständig!
         delta.pluginName = undefined;
         delta.slotIndex = undefined;
+
+        const isMasterTrack = ['stereo out', 'master', 'output 1-2', 'main'].some((m) =>
+          String(delta.trackName ?? '').toLowerCase().includes(m)
+        );
+
+        if (paramNameStr === 'fader_db' || paramNameStr === 'fader' || paramNameStr === 'volume') {
+          let propVal = Number(delta.proposedValue ?? 0);
+          const curVal = Number(delta.currentValue ?? 0);
+
+          // 1. Master ceiling: MUST NOT exceed 0.0 dB
+          if (isMasterTrack && propVal > 0.0) {
+            warnings.push(
+              `🛡️ Acoustic Shield: Master-Fader auf max. 0.0 dB gedeckelt (vorgeschlagen: ${propVal.toFixed(1)} dB).`
+            );
+            propVal = 0.0;
+          }
+
+          // 2. Track ceiling: MUST NOT exceed +6.0 dB
+          if (propVal > 6.0) {
+            propVal = 6.0;
+          }
+
+          // 3. Step jump: max +3.0 dB increase per adjustment
+          if (propVal - curVal > 3.0) {
+            warnings.push(
+              `🛡️ Acoustic Shield: Pegelsprung auf Spur „${delta.trackName}" auf +3.0 dB begrenzt.`
+            );
+            propVal = curVal + 3.0;
+          }
+
+          delta.proposedValue = Math.round(propVal * 10) / 10;
+        }
+
         return delta;
       }
 
@@ -1010,18 +1076,25 @@ export class AgentRunner {
     this.resolveStep(prefetchStep, `${compactStrips.length} Spuren ultra-kompakt bereitgestellt`);
 
     // ── Punkt 2: Deterministische Lokale Audition VOR dem ersten API-Call ─────
-    const auditionIntent = parseAuditionIntent(userPrompt);
+    const curTelemetry = this.cfg.getTelemetry?.() ?? telemetry;
+    const isCurrentlySilent = !curTelemetry || (curTelemetry.loudness?.momentaryLufs ?? -70.0) < -50;
+    const auditionIntent = parseAuditionIntent(userPrompt, isCurrentlySilent);
     let auditionExecuted = false;
     let detectedStartBar: number | undefined = auditionIntent?.startBar;
     let detectedEndBar: number | undefined = auditionIntent?.endBar;
 
     if (auditionIntent) {
       const { startBar, endBar, durationSeconds } = auditionIntent;
-      const auditionStep = this.addStep('👂', `Wiedergabe Takt ${startBar} bis ${endBar} · ${durationSeconds}s`);
+      const stepLabel = startBar >= 1
+        ? (endBar && endBar > startBar
+            ? `Wiedergabe Takt ${startBar} bis ${endBar} · ${durationSeconds}s`
+            : `Wiedergabe Takt ${startBar} · ${durationSeconds}s`)
+        : `Wiedergabe ab aktueller Position · ${durationSeconds}s`;
+      const auditionStep = this.addStep('👂', stepLabel);
       try {
         await this.cfg.invokeTauri('audition_region', {
           startBar,
-          endBar,
+          endBar: endBar && endBar > startBar ? endBar : undefined,
           durationSeconds
         });
         this.resolveStep(auditionStep, `Audition abgeschlossen (${durationSeconds}s) · Telemetrie erfasst`);
@@ -1060,7 +1133,24 @@ export class AgentRunner {
 
     const isSilentSignal = !compactTelemetry || compactTelemetry.lufs < -60;
 
+    let historyContext = '';
+    if (context?.recentMessages && context.recentMessages.length > 0) {
+      historyContext =
+        `PREVIOUS CONVERSATION HISTORY:\n` +
+        context.recentMessages
+          .map((m) => `${m.sender === 'user' ? 'Engineer' : 'Assistant'}: "${m.text.slice(0, 300)}"`)
+          .join('\n') +
+        `\n\n`;
+    }
+
+    const mixDirective =
+      `CRITICAL MIXING DIRECTIVE (MANDATORY):\n` +
+      `- You MUST generate a comprehensive, professional ActionCard via \`propose_mix_adjustment\` with multiple discrete deltas (3 to 6 targeted deltas) distributed across the actual tracks and insert plugins in the session (Channel EQ, Compressor, Fader, Pan, Sidechain).\n` +
+      `- NEVER propose only a master fader boost! The master fader ('Stereo Out') MUST stay <= 0.0 dB.\n` +
+      `- To achieve the target loudness and frequency envelope, balance the stems (drums, bass, keys), carve clashing frequencies via Channel EQ, control dynamics via Compressor, and configure 'sidechainRoute' between Kick and Bass where appropriate!\n`;
+
     const initialUserText =
+      historyContext +
       `Engineer request: "${userPrompt}"\n\n` +
       `ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${effectiveScope})\n\n` +
       `SESSION CONTEXT (PREFETCHED):\n` +
@@ -1069,13 +1159,10 @@ export class AgentRunner {
       `- Tracks & Inserts: ${JSON.stringify(compactStrips)}\n` +
       `- Measured Metrology: ${compactTelemetry ? JSON.stringify(compactTelemetry) : 'Standby / Low Signal'}\n\n` +
       `STRICT DIRECTIVE:\n` +
-      (auditionExecuted
-        ? `Audition has ALREADY been completed locally (playback of bars ${auditionIntent?.startBar} to ${auditionIntent?.endBar} for ${auditionIntent?.durationSeconds}s). Telemetry is attached above. You MUST respond with \`propose_mix_adjustment\` directly in this single response!`
-        : isSilentSignal
-        ? `Note: Measured audio telemetry indicates silence or standby (< -60 LUFS). ` +
-          `Do NOT generate speculative or pro-forma \`propose_mix_adjustment\` ActionCards without real audio signal! ` +
-          `Instead, answer the user constructively, acknowledge the track role, and politely prompt the engineer to start playback in the DAW (or ask "Höre Takt X bis Y") so you can measure actual acoustic dynamics before proposing mixing decisions.`
-        : `Audition has ALREADY been completed locally. Telemetry is attached above. You MUST respond with \`propose_mix_adjustment\` in this single response!`);
+      mixDirective +
+      (auditionExecuted || !isSilentSignal
+        ? `Audition has been completed. Telemetry is attached above. You MUST respond with \`propose_mix_adjustment\` directly in this response!`
+        : `Note: Measured audio telemetry indicates silence (< -60 LUFS). Ensure playback or audio regions are present in the DAW.`);
 
     // Turn 1 (User): initial user request with measured telemetry
     const contents: GeminiContent[] = [
@@ -1386,11 +1473,20 @@ function buildAgentSystemPrompt(context?: MixAnalysisContext): string {
   const isMaster = activeScope === 'mix_bus';
 
   const scopeSafeguards = isMaster
-    ? `## ACTIVE MONITORING POINT & SCOPE SAFEGUARDS:\n` +
+    ? `## ACTIVE MONITORING POINT & HOLISTIC SESSION MIXING RULES:\n` +
       `ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${activeScope})\n` +
-      `- Das Signal ist der Summenmix (Master / Stereo Out).\n` +
-      `- Bewerte spektrale Balance von Sub-Bass bis Air, Gesamtkompression und Ziel-LUFS (-12 bis -14 LUFS je nach Genre).\n` +
-      `- Bewerte Wechselwirkungen zwischen Instrumenten (z. B. Maskierung zwischen Kick und Bass).\n`
+      `- Du bewertest hier die Akustik des gesamten Summenmixes (Master / Stereo Out).\n` +
+      `- KRITISCHES TONINGENIEUR-VERBOT: Schlage NIEMALS isoliert nur eine Fader-Änderung auf dem Master ('Stereo Out') vor!\n` +
+      `  * Der Master-Fader dient dem Headroom und darf NIEMALS über 0.0 dB angehoben werden (Acoustic Shock Shield).\n` +
+      `- Um den Ziel-Sound (LUFS, Frequenzbalance, Dichte, Punch) zu formen, MUSST DU DIE EINZELSPUREN (Stems) und deren Insert-Plugins aufeinander abstimmen!\n` +
+      `- Erstelle EINE UMFANGREICHE, GANZHEITLICHE ACTIONCARD mit 3 bis 6 aufeinander abgestimmten Anpassungen über die echten Spuren und Plugins im Projekt:\n` +
+      `  1. Einzelspur-Balance & Panning: Lautstärke (fader_db) und Panorama (pan) der konkurrierenden Spuren (z. B. Drums, Bass, Keys) abstimmen.\n` +
+      `  2. Frequenzbereinigung (Channel EQ):\n` +
+      `     * High-Pass Filter (low_cut_frequency: 80-120 Hz) auf Keys/Klavier ('Studio Grand'), Gitarren und Vocals, um den Sub-Bass für Kick und Bass freizuschaufeln.\n` +
+      `     * Schlamm-Absenkung (peak_1_gain oder peak_2_gain bei 250-400 Hz) auf basslastigen Spuren um -1.5 bis -3.0 dB.\n` +
+      `     * Präsenz/Air dezent anheben (peak_3_gain oder high_shelf_gain bei 3-10 kHz).\n` +
+      `  3. Dynamik & Verdichtung (Compressor): Threshold (-12 bis -20 dB), Ratio (2:1 bis 4:1) und Attack/Release auf Drums und Bass anpassen.\n` +
+      `  4. Sidechain-Ducking & Maskenreduktion: Wenn Kick/Drums ('Motown Revisited Kit') und Bass ('Simple Foundation') existieren, schlage Sidechain-Ducking vor via 'sidechainRoute' (Receiver: Bass-Kompressor, Trigger: Kick/Drums)!\n`
     : `## ACTIVE MONITORING POINT & SCOPE SAFEGUARDS:\n` +
       `ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${activeScope})\n` +
       `- KRITISCHE REGEL: Du hörst aktuell NUR DIESES EINZELSIGNAL / DIESE SUBGRUPPE ('${activeTrack}')!\n` +

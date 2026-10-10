@@ -2143,13 +2143,10 @@ async fn audition_region(
     end_bar: Option<u32>,
     duration_seconds: Option<f64>,
 ) -> Result<serde_json::Value, String> {
-    if start_bar < 1 {
-        let err = "start_bar must be >= 1".to_string();
-        log_mb_desktop(&format!("❌ [audition_region] Error: {}", err));
-        return Err(err);
-    }
+    // If start_bar >= 1, audition relocates to that bar.
+    // If start_bar == 0, audition plays directly from the user's current playhead cursor!
     let effective_duration = match (end_bar, duration_seconds) {
-        (Some(e), _) if e > start_bar => {
+        (Some(e), _) if start_bar >= 1 && e > start_bar => {
             // Dynamische Abspieldauer: 2.4s pro Takt bei 100 BPM (z. B. 4 Takte = 9.6s)
             let bar_count = (e - start_bar) as f64;
             (bar_count * 2.4).max(2.0).min(30.0)
@@ -2173,50 +2170,54 @@ async fn audition_region(
             return Err(err_msg);
         }
 
-        // 1. Swift: Setze Cycle-Bereich auf start..end bzw. stelle sicher, dass Cycle aus ist
-        if let Some(end) = end_bar {
-            log_mb_desktop(&format!("🔄 [audition_region] set-cycle-region {}..{}", start_bar, end));
-            let cycle_args = vec![
-                "set-cycle-region".to_string(),
-                "--start".to_string(),
-                start_bar.to_string(),
-                "--end".to_string(),
-                end.to_string(),
-            ];
-            let cycle_res = execute_logic_ax_bridge(&bridge_path, &cycle_args)?;
-            if cycle_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
-                let err_msg = format!("set-cycle-region fehlgeschlagen: {:?}", cycle_res.get("error"));
+        // If start_bar >= 1: Set cycle and locate playhead.
+        // If start_bar == 0: Keep user's cycle & playhead untouched and play right from cursor!
+        if start_bar >= 1 {
+            // 1. Swift: Setze Cycle-Bereich auf start..end bzw. stelle sicher, dass Cycle aus ist
+            if let Some(end) = end_bar {
+                log_mb_desktop(&format!("🔄 [audition_region] set-cycle-region {}..{}", start_bar, end));
+                let cycle_args = vec![
+                    "set-cycle-region".to_string(),
+                    "--start".to_string(),
+                    start_bar.to_string(),
+                    "--end".to_string(),
+                    end.to_string(),
+                ];
+                let cycle_res = execute_logic_ax_bridge(&bridge_path, &cycle_args)?;
+                if cycle_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
+                    let err_msg = format!("set-cycle-region fehlgeschlagen: {:?}", cycle_res.get("error"));
+                    log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
+                    return Err(err_msg);
+                }
+            } else {
+                log_mb_desktop("🔄 [audition_region] ensure-cycle-off");
+                let cycle_args = vec!["ensure-cycle-off".to_string()];
+                let cycle_res = execute_logic_ax_bridge(&bridge_path, &cycle_args)?;
+                if cycle_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
+                    let err_msg = format!("ensure-cycle-off fehlgeschlagen: {:?}", cycle_res.get("error"));
+                    log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
+                    return Err(err_msg);
+                }
+            }
+
+            // 2. Exaktes Bar-Locate via native Swift Bridge
+            log_mb_desktop(&format!("🎯 [audition_region] transport-locate bar {}", start_bar));
+            let locate_args = vec!["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()];
+            let locate_res = execute_logic_ax_bridge(&bridge_path, &locate_args)
+                .map_err(|e| {
+                    let err_msg = format!("transport-locate fehlgeschlagen: {}", e);
+                    log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
+                    err_msg
+                })?;
+            if locate_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
+                let err_msg = format!("transport-locate fehlgeschlagen: {:?}", locate_res.get("error"));
                 log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
                 return Err(err_msg);
             }
-        } else {
-            log_mb_desktop("🔄 [audition_region] ensure-cycle-off");
-            let cycle_args = vec!["ensure-cycle-off".to_string()];
-            let cycle_res = execute_logic_ax_bridge(&bridge_path, &cycle_args)?;
-            if cycle_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
-                let err_msg = format!("ensure-cycle-off fehlgeschlagen: {:?}", cycle_res.get("error"));
-                log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
-                return Err(err_msg);
-            }
-        }
 
-        // 2. Exaktes Bar-Locate via native Swift Bridge
-        log_mb_desktop(&format!("🎯 [audition_region] transport-locate bar {}", start_bar));
-        let locate_args = vec!["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()];
-        let locate_res = execute_logic_ax_bridge(&bridge_path, &locate_args)
-            .map_err(|e| {
-                let err_msg = format!("transport-locate fehlgeschlagen: {}", e);
-                log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
-                err_msg
-            })?;
-        if locate_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
-            let err_msg = format!("transport-locate fehlgeschlagen: {:?}", locate_res.get("error"));
-            log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
-            return Err(err_msg);
+            // 3. Warte 200 ms Einschwingzeit
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
-
-        // 3. Warte 200 ms Einschwingzeit
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // 4. Starte Playback via Swift Bridge ('transport-play')
         log_mb_desktop("▶️ [audition_region] transport-play");
