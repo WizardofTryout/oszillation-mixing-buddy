@@ -1410,11 +1410,10 @@ function buildAgentSystemPrompt(context?: MixAnalysisContext): string {
     `   - Turn 3: Generate final 'propose_mix_adjustment'\n` +
     `3. IMMEDIATELY TERMINATE: Once 'propose_mix_adjustment' is submitted, execution stops immediately.\n` +
     `4. Always use exact track names directly from the DAW UI (e.g. 'Studio Grand', 'Motown Revisited'). NEVER invent or abbreviate names.\n` +
-    `5. FORMATTING REQUIREMENT (TYPOGRAPHY & RATIONALE):\n` +
-    `   In 'rationale' and 'description', format explanations using concise bullet points instead of long blocks of text. Highlight key values clearly:\n` +
-    `   - Spurnamen hervorheben (z.B. **Studio Grand**)\n` +
-    `   - Frequenzen & Pegel präzise benennen (z.B. **+1.5 dB** bei **2.5 kHz**, Pan **-25%** L)\n` +
-    `   - Keine endlosen Textblöcke ohne Zeilenumbrüche.\n`
+    `5. STRICT AUDIO ENGINEER NOTATION & ZERO-FLUFF DIRECTIVE:\n` +
+    `   In 'rationale' and 'description', start immediately with the surgical diagnosis and acoustic rationale (NO pleasantries, NO generic greetings).\n` +
+    `   Format parameter changes strictly in before/after arrow notation: **<Parameter>**: <Vorher> → <Nachher> (e.g. **High Shelf Gain**: +10.0 dB → +4.0 dB).\n` +
+    `   Highlight track names (e.g. **Studio Grand**) and frequency values in bold.\n`
   );
 }
 

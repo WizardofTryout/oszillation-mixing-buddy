@@ -179,6 +179,29 @@ export class LogicProDriver implements DAWDriver {
     this.notifyTrackListChanged();
   }
 
+  /**
+   * REA Sprint 7 (Aufgabe 7.2): Executes batch fader and pan adjustments in a single native bridge call.
+   */
+  public async batchMixerAdjustments(
+    items: Array<{ track: string; type: 'fader' | 'pan'; value: number }>
+  ): Promise<{
+    success: boolean;
+    results?: Array<{ track: string; type: string; value: number; success: boolean }>;
+    error?: string;
+  }> {
+    for (const item of items) {
+      const track = this.findOrCreateTrack(item.track);
+      if (item.type === 'fader') {
+        track.volumeDb = Math.max(-96.0, Math.min(6.0, item.value));
+      } else if (item.type === 'pan') {
+        track.pan = Math.max(-1.0, Math.min(1.0, item.value));
+      }
+    }
+    const res = await this.axClient.batchMixerAdjustments(items);
+    this.notifyTrackListChanged();
+    return res;
+  }
+
   public async setTrackMute(trackId: string, muted: boolean): Promise<void> {
     const track = this.findOrCreateTrack(trackId);
 

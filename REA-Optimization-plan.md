@@ -119,12 +119,12 @@ Wie der Screenshot des aktuellen Auto-Profilers beim Scannen von **ChromaVerb** 
 
 *Ziel: Latenzfreie Kompressor-Sidechain-Verdrahtung und schlankere, prägnantere KI-Antworten.*
 
-* **Aufgabe 7.1:** Direkter Sidechain-Attribut-Schreibvorgang.
+* [X] **Aufgabe 7.1:** Direkter Sidechain-Attribut-Schreibvorgang.
   - In `LogicAXPlugins.swift` zuerst `AXUIElementSetAttributeValue(pluginElement, "Side Chain Source", targetBusAX)` testen.
   - Erst wenn dieser Aufruf fehlschlägt, auf den bestehenden Menü-Traversierungs-Code zurückfallen.
-* **Aufgabe 7.2:** Bulk-Mixer-Befehle in `logic-ax-bridge`.
+* [X] **Aufgabe 7.2:** Bulk-Mixer-Befehle in `logic-ax-bridge`.
   - Zusammenfassung mehrerer Fader/Pan-Befehle in einen einzigen Bridge-Aufruf zur Eliminierung von IPC-Overhead.
-* **Aufgabe 7.3:** System-Prompt-Optimierung im MCP-Server.
+* [X] **Aufgabe 7.3:** System-Prompt-Optimierung im MCP-Server.
   - Übernahme der strikten Toningenieur-Regeln: Verbot geschwätziger Einleitungen, Notation im kompakten Format:
     ```text
     High Shelf Gain: +10 dB → +4 dB

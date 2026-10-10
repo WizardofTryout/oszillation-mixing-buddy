@@ -713,6 +713,31 @@ export class MacOSAccessibilityClient {
   }
 
   /**
+   * REA Sprint 7 (Aufgabe 7.2): Executes batch fader and pan adjustments in a single native bridge call.
+   */
+  public async batchMixerAdjustments(
+    items: Array<{ track: string; type: 'fader' | 'pan'; value: number }>
+  ): Promise<{
+    success: boolean;
+    results?: Array<{ track: string; type: string; value: number; success: boolean }>;
+    error?: string;
+  }> {
+    const res = await this.runBridge<{
+      success: boolean;
+      results?: Array<{ track: string; type: string; value: number; success: boolean }>;
+      error?: string;
+    }>([
+      'batch-mixer',
+      '--json',
+      JSON.stringify(items)
+    ]);
+    if (!res) {
+      return { success: false, error: 'Failed to communicate with logic-ax-bridge sidecar' };
+    }
+    return res;
+  }
+
+  /**
    * Open an Audio FX insert slot (1-based) on a track's channel strip.
    */
   public async openInsertSlot(
