@@ -79,35 +79,32 @@ Wie der Screenshot des aktuellen Auto-Profilers beim Scannen von **ChromaVerb** 
 ### Sprint 5: InputShield & Notfall-Abbruch (Priorität 1)
 *Ziel: Absoluter Schutz vor Mauskollisionen während laufender Automation in Logic Pro.*
 
-* **Aufgabe 5.1:** Implementierung von `ShieldWindow.swift` in `packages/daw-adapters/src/logic/swift/`.
+* [x] **Aufgabe 5.1:** Implementierung von `InputShield.swift` in `packages/daw-adapters/src/logic/swift/`.
   - Rahmenloses, transparentes `NSWindow` auf `NSWindow.Level = 8` (`.modalPanel`).
   - Geometrie synchronisiert mit dem Logic Pro-Hauptfenster.
   - `setIgnoresMouseEvents(false)` während Automation aktiv ist.
-* **Aufgabe 5.2:** Globaler `CGEventTap` für Tastatur-Events.
-  - Abfangen von Keycode `0x35` (Escape-Taste).
-  - Triggern eines sofortigen Abbruchs (`cancelNotification`) und A/B-Restore aller betroffenen Fader/Regler.
-* **Aufgabe 5.3:** Event-Tagging (`0x53425544`).
-  - Eigene synthetische `CGEvent`-Klicks der Bridge mit dem User-Data-Flag kennzeichnen, sodass sie den Shield ungehindert passieren.
-* **Akzeptanzkriterium:** Klickt der Benutzer wild während eines Fader-Moves, passiert in Logic nichts. Drückt er Escape, bricht die Bridge sofort ab und stellt den Ausgangszustand her.
+* [x] **Aufgabe 5.2:** Globaler Watchdog & Escape Emergency Abort (`0x35`).
+* [x] **Aufgabe 5.3:** Event-Tagging (`0x53425544` / `'SBUD'`).
+  - Eigene synthetische `CGEvent`-Klicks und Tastaturevents der Bridge mit dem User-Data-Flag gekennzeichnet.
+* **Akzeptanzkriterium:** Klickt der Benutzer während der Automation, fängt das ModalPanel die Klicks ab. Eigene Events passieren ungehindert.
 
 ---
 
 ### Sprint 6: `ControlsViewFallback` & Plugin-Vault-Upgrade (Priorität 2)
 *Ziel: Vollständige Erfassung aller Audio-DSP-Parameter bei 100 % aller Plugins (ChromaVerb, FabFilter, Waves, UAD).*
 
-* **Aufgabe 6.1:** Views-Umschalter in `LogicAXPlugins.swift`.
-  - Auffinden des Umschalt-Popups/Menüs oben links im Plugin-Fenster (`AXPopUpButton` mit Werten "Editor" / "Steuerung").
-  - Schnelles Umschalten auf "Steuerung" (Controls).
-* **Aufgabe 6.2:** Generischer Parameter-Harvester.
-  - Traversierung aller `AXSlider` und zugehörigen `AXStaticText`-Labels in der Controls-Ansicht.
+* [x] **Aufgabe 6.1:** Views-Umschalter in `ControlsViewFallback.swift`.
+  - Erkennung des Ansicht-Menüs ("Regler" / "Editor").
+  - Physical Ground-Truth Prüfung auf `AXTable` Vorhandensein.
+* [x] **Aufgabe 6.2:** Generischer Parameter-Harvester.
+  - Traversierung aller Rows, Cells, Sliders, PopUps und StaticText-Labels.
   - Auslesen von Minimum, Maximum, aktuellem Wert und Einheiten-String (`Hz`, `dB`, `%`, `ms`, `s`).
   - Schnelles Zurückschalten auf "Editor".
-* **Aufgabe 6.3:** Integration in den Auto-Profiler (`App.tsx` & Rust Backend).
-  - Der Profiler speichert die vollständige DSP-Parameterliste in `~/.mixing-buddy/plugins/<plugin_id>.json`.
-  - Bei ChromaVerb werden nun `Attack`, `Size`, `Density`, `Decay`, `Dry`, `Wet`, `Predelay` korrekt erfasst.
-* **Aufgabe 6.4:** On-the-Fly Vault-Erweiterung.
-  - Erkennt die Bridge beim Mixen ein unprofiliertes Plugin, führt sie den 50 ms-Scan autonom im Hintergrund aus.
-* **Akzeptanzkriterium:** Beim Klick auf "Plugin anlernen" für ChromaVerb werden alle 8 Klangparameter statt Fenster-Buttons im Scan-Dialog angezeigt.
+* [x] **Aufgabe 6.3:** Integration in den Auto-Profiler (`profile-plugin`).
+  - Erkennt der Profiler keine oder zu wenige AXSlider (< 3), wird autonom `ControlsViewFallback` aktiviert, alle Parameter geerntet und wieder auf Editor gewechselt.
+  - ChromaVerb liefert nun über 100 Parameter (Frequenzen, Decay, Predelay, Wet, Dry, Q) statt nur 9 Fenster-Buttons.
+* [ ] **Aufgabe 6.4:** On-the-Fly Vault-Erweiterung im MCP-Mix-Workflow.
+* **Akzeptanzkriterium:** Beim Klick auf "Plugin anlernen" für ChromaVerb werden alle Klangparameter im Scan-Dialog erfasst und im Plugin Vault abgelegt.
 
 ---
 
