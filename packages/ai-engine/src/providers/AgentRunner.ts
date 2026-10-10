@@ -1151,12 +1151,18 @@ export class AgentRunner {
       ? `- Dynamic Low-End Relationship: Trigger '${detectedDrums}' -> Ducking Target '${detectedBass}' via 'sidechainRoute'.\n`
       : '';
 
-    const mixDirective =
-      `CRITICAL MIXING DIRECTIVE (MANDATORY):\n` +
-      `- You MUST generate a comprehensive, professional ActionCard via \`propose_mix_adjustment\` with multiple discrete deltas (3 to 6 targeted deltas) distributed across the actual tracks and insert plugins in the session (Channel EQ, Compressor, Fader, Pan, Sidechain).\n` +
-      `- NEVER propose only a master fader boost! The master fader ('Stereo Out') MUST stay <= 0.0 dB.\n` +
-      `- To achieve the target loudness and frequency envelope, balance the stems across the session, carve clashing frequencies via Channel EQ, control dynamics via Compressor, and configure 'sidechainRoute' where appropriate!\n` +
-      dynamicStemHint;
+    const isSingleElementRequest = effectiveScope !== 'mix_bus' || /snare|kick|vocal|bass|piano|guitar|hi[- ]?hat|spitz|scharf|zu laut|zu leise/i.test(userPrompt);
+
+    const mixDirective = isSingleElementRequest
+      ? `CRITICAL MIXING DIRECTIVE (MANDATORY):\n` +
+        `- Targeted Single-Element Surgery (Minimum Viable Intervention): Propose 1 to 3 surgical, high-impact deltas addressing the specific issue without unnecessarily altering unaffected tracks or bands.\n` +
+        `- NEVER edit a summing bus (like 'Drums' or 'VOX') if the issue belongs to an individual instrument (like 'Snare' or 'Lead Vocal')! Operate directly on the child track.\n` +
+        `- Time/Spatial Effects: If adjusting reverb/delay, adjust 'set_send_level' on the track rather than the bus return fader.\n`
+      : `CRITICAL MIXING DIRECTIVE (MANDATORY):\n` +
+        `- You MUST generate a comprehensive, professional ActionCard via \`propose_mix_adjustment\` with multiple discrete deltas (3 to 6 targeted deltas) distributed across the actual tracks and insert plugins in the session (Channel EQ, Compressor, Fader, Pan, Sidechain).\n` +
+        `- NEVER propose only a master fader boost! The master fader ('Stereo Out') MUST stay <= 0.0 dB.\n` +
+        `- To achieve the target loudness and frequency envelope, balance the stems across the session, carve clashing frequencies via Channel EQ, control dynamics via Compressor, and configure 'sidechainRoute' where appropriate!\n` +
+        dynamicStemHint;
 
     const initialUserText =
       historyContext +
