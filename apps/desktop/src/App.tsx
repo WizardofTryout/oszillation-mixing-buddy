@@ -1786,7 +1786,7 @@ export const App: React.FC = () => {
           <span className="font-bold text-xs sm:text-sm tracking-wide text-slate-100 hidden sm:inline">
             OSZILLATION MIXING BUDDY
           </span>
-          <span className="text-xs text-blue-400 font-mono ml-1 sm:ml-2">v0.6.3</span>
+          <span className="text-xs text-blue-400 font-mono ml-1 sm:ml-2">v0.7.0</span>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -2437,7 +2437,7 @@ export const App: React.FC = () => {
                 {/* Fußzeile: Status & Version */}
                 <div className="border-t border-slate-800/80 pt-2 flex items-center justify-between text-[10px] text-slate-400 font-mono">
                   <span>DAW: {activeDaw === 'none' ? 'Apple Logic Pro (Bereit)' : activeDaw}</span>
-                  <span className="text-blue-400 font-bold">v0.6.3</span>
+                  <span className="text-blue-400 font-bold">v0.7.0</span>
                 </div>
               </div>
             )}
