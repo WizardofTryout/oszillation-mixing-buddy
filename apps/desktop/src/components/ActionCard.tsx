@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { MixActionProposal } from '@mixing-buddy/shared-types';
-import { Check, X, Volume2, Sparkles, Pin, RotateCcw, RotateCw } from 'lucide-react';
+import { Check, X, Volume2, VolumeX, Sparkles, Pin, RotateCcw, RotateCw } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface ActionCardProps {
@@ -8,6 +8,7 @@ interface ActionCardProps {
   onApply: (id: string, selectedIndices?: number[]) => void;
   onReject: (id: string) => void;
   onAudition: (id: string) => void;
+  onUndoCard?: (id: string) => Promise<void> | void;
   onTogglePin?: (id: string) => void;
   onRollbackDelta?: (proposalId: string, deltaIndex: number) => Promise<void> | void;
   onRedoDelta?: (proposalId: string, deltaIndex: number) => Promise<void> | void;
@@ -18,6 +19,7 @@ export const ActionCard: React.FC<ActionCardProps> = ({
   onApply,
   onReject,
   onAudition,
+  onUndoCard,
   onTogglePin,
   onRollbackDelta,
   onRedoDelta
@@ -28,6 +30,7 @@ export const ActionCard: React.FC<ActionCardProps> = ({
   const [rolledBackIndices, setRolledBackIndices] = useState<Set<number>>(new Set());
 
   const isApplied = proposal.status === 'applied';
+  const isAuditioning = proposal.status === 'auditioning';
 
   const toggleIndex = (idx: number) => {
     setSelectedIndices((prev) => {
@@ -240,36 +243,70 @@ export const ActionCard: React.FC<ActionCardProps> = ({
       {/* Actions */}
       <div className="flex items-center justify-end gap-2 pt-2 border-t border-darkBorder/60">
         <button
+          type="button"
           onClick={() => onAudition(proposal.id)}
-          className="px-3 py-1.5 rounded text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center gap-1.5 transition-colors"
-          title="Loop and A/B compare"
-        >
-          <Volume2 className="w-3.5 h-3.5 text-amber-400" />
-          A/B Listen
-        </button>
-
-        <button
-          onClick={() => onReject(proposal.id)}
-          className="px-3 py-1.5 rounded text-xs font-semibold bg-red-950/40 hover:bg-red-900/50 text-red-300 flex items-center gap-1.5 transition-colors border border-red-800/40"
-        >
-          <X className="w-3.5 h-3.5" />
-          Verwerfen
-        </button>
-
-        <button
-          onClick={() => onApply(proposal.id, Array.from(selectedIndices))}
-          disabled={isApplied || selectedIndices.size === 0}
-          className={`px-3.5 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-md ${
-            isApplied
-              ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/40 cursor-default'
-              : selectedIndices.size === 0
-              ? 'opacity-40 cursor-not-allowed bg-slate-800 text-slate-400'
-              : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30'
+          className={`px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+            isAuditioning
+              ? 'bg-amber-500/25 text-amber-300 border border-amber-500/60 shadow-lg shadow-amber-950/40 animate-pulse'
+              : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
           }`}
+          title={isAuditioning ? 'A/B-Vorhören beenden und auf Originalzustand zurücksetzen' : 'A/B Vergleich mit DAW-Playback starten'}
         >
-          <Check className="w-3.5 h-3.5" />
-          {isApplied ? 'Angewendet' : 'Anwenden'}
+          {isAuditioning ? (
+            <>
+              <VolumeX className="w-3.5 h-3.5 text-amber-300" />
+              <span>A/B Beenden</span>
+            </>
+          ) : (
+            <>
+              <Volume2 className="w-3.5 h-3.5 text-amber-400" />
+              <span>A/B Listen</span>
+            </>
+          )}
         </button>
+
+        {!isApplied && (
+          <button
+            type="button"
+            onClick={() => onReject(proposal.id)}
+            className="px-3 py-1.5 rounded text-xs font-semibold bg-red-950/40 hover:bg-red-900/50 text-red-300 flex items-center gap-1.5 transition-colors border border-red-800/40"
+          >
+            <X className="w-3.5 h-3.5" />
+            <span>Verwerfen</span>
+          </button>
+        )}
+
+        {isApplied ? (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onUndoCard && onUndoCard(proposal.id)}
+              className="px-3.5 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 bg-amber-950/50 hover:bg-amber-900/70 text-amber-300 border border-amber-500/50 transition-colors shadow-md"
+              title="Alle angewendeten Änderungen dieser Karte in der DAW rückgängig machen (Undo)"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Rückgängig (Undo)</span>
+            </button>
+            <span className="px-3 py-1.5 rounded text-xs font-semibold bg-emerald-950/60 text-emerald-400 border border-emerald-500/40 flex items-center gap-1.5">
+              <Check className="w-3.5 h-3.5" />
+              Angewendet
+            </span>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onApply(proposal.id, Array.from(selectedIndices))}
+            disabled={selectedIndices.size === 0}
+            className={`px-3.5 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-md ${
+              selectedIndices.size === 0
+                ? 'opacity-40 cursor-not-allowed bg-slate-800 text-slate-400'
+                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/30'
+            }`}
+          >
+            <Check className="w-3.5 h-3.5" />
+            <span>Anwenden</span>
+          </button>
+        )}
       </div>
     </div>
   );

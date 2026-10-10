@@ -288,22 +288,96 @@ func getPlayheadX(appElement: AXUIElement) -> CGFloat? {
 
 
 
+func findTargetInControlsTable(in window: AXUIElement, criteria: SearchCriteria) -> AXUIElement? {
+    guard let table = ControlsViewFallback.findControlsTable(in: window) else { return nil }
+    let query = (criteria.description ?? criteria.identifier ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard !query.isEmpty else { return nil }
+
+    var syns = [query]
+    if query.contains("threshold") { syns.append("schwellenwert") }
+    if query.contains("schwellenwert") { syns.append("threshold") }
+    if query.contains("ratio") { syns.append("verhältnis") }
+    if query.contains("attack") { syns.append("ansprechzeit") }
+    if query.contains("release") { syns.append("abfallzeit") }
+    if query.contains("makeup") || query.contains("make_up") { syns.append("gain"); syns.append("pegel") }
+
+    let rows = getAXChildren(table).filter { (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXRow" }
+    for row in rows {
+        var rowLabel = ""
+        var targetControl: AXUIElement? = nil
+
+        func scanCell(_ cell: AXUIElement) {
+            for item in getAXChildren(cell) {
+                let r = getAXString(item, kAXRoleAttribute as String) ?? ""
+                if r == "AXStaticText" {
+                    let text = (getAXString(item, kAXValueAttribute as String) ?? getAXString(item, kAXTitleAttribute as String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !text.isEmpty && rowLabel.isEmpty {
+                        rowLabel = text.trimmingCharacters(in: CharacterSet(charactersIn: ": ")).lowercased()
+                    }
+                } else if r == "AXSlider" || r == "AXCheckBox" || r == "AXPopUpButton" || r == "AXButton" {
+                    if criteria.role == nil || r == criteria.role {
+                        targetControl = item
+                    }
+                }
+                scanCell(item)
+            }
+        }
+
+        for cell in getAXChildren(row) {
+            scanCell(cell)
+        }
+
+        if !rowLabel.isEmpty && targetControl != nil {
+            for syn in syns {
+                if rowLabel == syn || rowLabel.contains(syn) || syn.contains(rowLabel) {
+                    return targetControl
+                }
+            }
+        }
+    }
+    return nil
+}
+
 func findTargetElement(in window: AXUIElement, criteria: SearchCriteria) -> AXUIElement? {
+    // 1. Controls Table fast path (if Controls/Regler view is active)
+    if let ctrl = findTargetInControlsTable(in: window, criteria: criteria) {
+        return ctrl
+    }
+
+    // 2. Search by AXIdentifier (if provided)
     if let targetId = criteria.identifier, !targetId.isEmpty {
         if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: { (getAXString($0, "AXIdentifier") ?? "") == targetId }) {
             return found
         }
     }
+
+    // 3. Search by description or title in current GUI view
     if let targetDesc = criteria.description, !targetDesc.isEmpty {
         let lowerDesc = targetDesc.lowercased()
-        if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: {
-            let desc = (getAXString($0, kAXDescriptionAttribute as String) ?? "").lowercased()
-            let title = (getAXString($0, kAXTitleAttribute as String) ?? "").lowercased()
-            return desc == lowerDesc || title == lowerDesc
+        var syns = [lowerDesc]
+        if lowerDesc.contains("threshold") { syns.append("schwellenwert") }
+        if lowerDesc.contains("schwellenwert") { syns.append("threshold") }
+        if lowerDesc.contains("ratio") { syns.append("verhältnis") }
+        if lowerDesc.contains("attack") { syns.append("ansprechzeit") }
+        if lowerDesc.contains("release") { syns.append("abfallzeit") }
+        if lowerDesc.contains("makeup") || lowerDesc.contains("make_up") { syns.append("gain") }
+
+        if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: { el in
+            let desc = (getAXString(el, kAXDescriptionAttribute as String) ?? "").lowercased()
+            let title = (getAXString(el, kAXTitleAttribute as String) ?? "").lowercased()
+            let help = (getAXString(el, kAXHelpAttribute as String) ?? "").lowercased()
+            for s in syns {
+                if desc == s || title == s || desc.contains(s) || title.contains(s) || help.contains(s) {
+                    return true
+                }
+            }
+            return false
         }) {
             return found
         }
     }
+
+    // 4. Search by help prefix
     if let targetHelp = criteria.helpPrefix, !targetHelp.isEmpty {
         let lowerHelp = targetHelp.lowercased()
         if let found = findElementDFS(root: window, roleFilter: criteria.role, predicate: {
@@ -312,6 +386,17 @@ func findTargetElement(in window: AXUIElement, criteria: SearchCriteria) -> AXUI
             return found
         }
     }
+
+    // 5. Automatic View-Switch Fallback: If not found in Editor view, try switching to Controls view
+    let curMode = ControlsViewFallback.currentViewMode(in: window)
+    if curMode != "Controls" {
+        if ControlsViewFallback.switchView(in: window, to: "Controls") {
+            if let ctrl = findTargetInControlsTable(in: window, criteria: criteria) {
+                return ctrl
+            }
+        }
+    }
+
     return nil
 }
 

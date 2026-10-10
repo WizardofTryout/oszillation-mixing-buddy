@@ -501,6 +501,8 @@ export const App: React.FC = () => {
   const [skillsCount, setSkillsCount] = useState<number>(1);
   const [activeSkill, setActiveSkill] = useState<MixingSkill | null>(null);
   const [availableSkills, setAvailableSkills] = useState<MixingSkillSummary[]>([]);
+  const auditionTimersRef = useRef<{ [id: string]: ReturnType<typeof setTimeout> }>({});
+  const auditionSnapshotsRef = useRef<{ [id: string]: any }>({});
 
   const handleApiKeyChange = (key: string) => {
     setApiKey(key);
@@ -1042,67 +1044,88 @@ export const App: React.FC = () => {
       ensureProposalTrackExists(delta.trackId, delta.trackName);
     }
 
-    // Snapshot for Undo-Stack
-    const snapshot = deltasToApply.map((delta) => ({
-      track: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
-      parameter: delta.parameterName || 'EQ',
-      previousValue: delta.currentValue ?? 0.0,
-      appliedValue: delta.proposedValue ?? 0.0,
-      unit: delta.unit ?? 'dB',
-      isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo'),
-      pluginName: delta.pluginName || null,
-      slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
-    }));
-
     try {
       // 1. Physisches Sidechain-Routing (vor den Parameteränderungen verdrahten)
       if (proposal.sidechainRoute) {
-        await invoke('set_sidechain', {
-          track: proposal.sidechainRoute.trackName,
-          slot: proposal.sidechainRoute.slotIndex,
-          source: proposal.sidechainRoute.sourcePath
-        });
-        setChatLog(`🔗 Sidechain verdrahtet: ${proposal.sidechainRoute.sourcePath} → ${proposal.sidechainRoute.trackName} Slot ${proposal.sidechainRoute.slotIndex}`);
+        try {
+          await invoke('set_sidechain', {
+            track: proposal.sidechainRoute.trackName,
+            slot: proposal.sidechainRoute.slotIndex,
+            source: proposal.sidechainRoute.sourcePath
+          });
+          setChatLog(`🔗 Sidechain verdrahtet: ${proposal.sidechainRoute.sourcePath} → ${proposal.sidechainRoute.trackName} Slot ${proposal.sidechainRoute.slotIndex}`);
+        } catch (scErr) {
+          console.warn('[Apply] Sidechain-Routing fehlgeschlagen:', scErr);
+        }
       }
 
-      // 2. Parameter-Änderungen an die DAW senden
+      // 2. Parameter-Änderungen an die DAW senden mit resilientem Einzelfehler-Handling
+      let appliedCount = 0;
+      const appliedSnapshots: any[] = [];
+      const applyErrors: string[] = [];
+
       for (const delta of deltasToApply) {
-        await invoke('apply_daw_action', {
-          trackName: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
-          parameter: delta.parameterName || 'EQ',
-          value: delta.proposedValue ?? 0.0,
-          currentValue: delta.currentValue ?? 0.0,
-          isRestore: false,
-          unit: delta.unit ?? 'dB',
-          isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo'),
-          pluginName: delta.pluginName || null,
-          slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
-        });
+        try {
+          await invoke('apply_daw_action', {
+            trackName: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
+            parameter: delta.parameterName || 'EQ',
+            value: delta.proposedValue ?? 0.0,
+            currentValue: delta.currentValue ?? 0.0,
+            isRestore: false,
+            unit: delta.unit ?? 'dB',
+            isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo'),
+            pluginName: delta.pluginName || null,
+            slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
+          });
+          appliedCount++;
+          appliedSnapshots.push({
+            track: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
+            parameter: delta.parameterName || 'EQ',
+            previousValue: delta.currentValue ?? 0.0,
+            appliedValue: delta.proposedValue ?? 0.0,
+            unit: delta.unit ?? 'dB',
+            isMaster: delta.trackName.toLowerCase().includes('master') || delta.trackName.toLowerCase().includes('stereo'),
+            pluginName: delta.pluginName || null,
+            slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
+          });
+        } catch (itemErr: unknown) {
+          console.warn(`[Apply] Fehler bei ${delta.trackName} -> ${delta.parameterName}:`, itemErr);
+          applyErrors.push(`${delta.trackName} (${delta.parameterName}): ${String(itemErr)}`);
+        }
       }
 
-      // 3. Undo-Stack-Eintrag (inkl. optionalem Sidechain-Undo)
-      const historyItem = {
-        id: `hist_${Date.now()}`,
-        proposalId: id,
-        timestamp: Date.now(),
-        description: proposal.title,
-        snapshot,
-        // Sidechain-Undo: source wird auf 'None' gesetzt, um Routing aufzuheben
-        ...(proposal.sidechainRoute
-          ? {
-              sidechainUndo: {
-                track: proposal.sidechainRoute.trackName,
-                slot: proposal.sidechainRoute.slotIndex
+      // 3. Undo-Stack-Eintrag (inkl. optionalem Sidechain-Undo) falls mindestens 1 Parameter angewendet wurde
+      if (appliedCount > 0) {
+        const historyItem = {
+          id: `hist_${Date.now()}`,
+          proposalId: id,
+          timestamp: Date.now(),
+          description: proposal.title,
+          snapshot: appliedSnapshots,
+          // Sidechain-Undo: source wird auf 'None' gesetzt, um Routing aufzuheben
+          ...(proposal.sidechainRoute
+            ? {
+                sidechainUndo: {
+                  track: proposal.sidechainRoute.trackName,
+                  slot: proposal.sidechainRoute.slotIndex
+                }
               }
-            }
-          : {})
-      };
-      setHistoryStack((prev) => [historyItem, ...prev]);
+            : {})
+        };
+        setHistoryStack((prev) => [historyItem, ...prev]);
 
-      setProposals((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, status: 'applied' } : p))
-      );
-      setChatLog(`✅ Anpassung angewendet: "${proposal.title}" (${deltasToApply.length} Parameter) erfolgreich an ${dawLabel} gesendet.`);
+        setProposals((prev) =>
+          prev.map((p) => (p.id === id ? { ...p, status: 'applied' } : p))
+        );
+
+        if (applyErrors.length === 0) {
+          setChatLog(`✅ Anpassung angewendet: "${proposal.title}" (${appliedCount} Parameter) erfolgreich an ${dawLabel} gesendet.`);
+        } else {
+          setChatLog(`⚠️ ${appliedCount} von ${deltasToApply.length} Parametern angewendet (${applyErrors.length} Fehler: ${applyErrors[0]}). Du kannst die Änderungen jederzeit über 'Rückgängig (Undo)' zurücksetzen.`);
+        }
+      } else {
+        setChatLog(`❌ Fehler beim Anwenden: ${applyErrors.join('; ')}`);
+      }
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Anwenden: ${String(err)}`);
     }
@@ -1235,6 +1258,88 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleUndoCard = async (proposalId: string) => {
+    const isLogic = activeDaw.toLowerCase().includes('logic');
+    const dawLabel = isLogic ? 'Logic Pro' : activeDaw === 'none' ? 'Standalone' : 'Nuendo';
+
+    const histIndex = historyStack.findIndex((h) => h.proposalId === proposalId);
+    const histItem = histIndex !== -1 ? historyStack[histIndex] : null;
+    const proposal = proposals.find((p) => p.id === proposalId);
+    const title = histItem?.description || proposal?.title || 'Anpassung';
+
+    try {
+      setChatLog(`↩ Rückgängig: "${title}" wird in ${dawLabel} zurückgesetzt...`);
+
+      if (histItem && histItem.snapshot && histItem.snapshot.length > 0) {
+        for (const item of histItem.snapshot) {
+          try {
+            await invoke('apply_daw_action', {
+              trackName: item.track,
+              parameter: item.parameter,
+              value: item.previousValue,
+              currentValue: item.appliedValue,
+              isRestore: true,
+              unit: item.unit ?? 'dB',
+              isMaster: !!item.isMaster,
+              pluginName: item.pluginName ?? null,
+              slotIndex: item.slotIndex ?? null
+            });
+          } catch (paramErr) {
+            console.warn(`[Undo] Fehler beim Zurücksetzen von ${item.track} -> ${item.parameter}:`, paramErr);
+          }
+        }
+      } else if (proposal && proposal.deltas) {
+        for (const delta of proposal.deltas) {
+          try {
+            await invoke('apply_daw_action', {
+              trackName: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
+              parameter: delta.parameterName || 'EQ',
+              value: delta.currentValue ?? 0.0,
+              currentValue: delta.proposedValue ?? 0.0,
+              isRestore: true,
+              unit: delta.unit ?? 'dB',
+              isMaster: (delta.trackName || '').toLowerCase().includes('master') || (delta.trackName || '').toLowerCase().includes('stereo'),
+              pluginName: delta.pluginName || null,
+              slotIndex: typeof delta.slotIndex === 'number' && delta.slotIndex > 0 ? delta.slotIndex : null
+            });
+          } catch (paramErr) {
+            console.warn(`[Undo] Fehler beim Zurücksetzen von ${delta.trackName} -> ${delta.parameterName}:`, paramErr);
+          }
+        }
+      }
+
+      if (histItem?.sidechainUndo) {
+        try {
+          await invoke('set_sidechain', {
+            track: histItem.sidechainUndo.track,
+            slot: histItem.sidechainUndo.slot,
+            source: 'None'
+          });
+          setChatLog(`🔗 Sidechain-Routing aufgehoben: ${histItem.sidechainUndo.track} Slot ${histItem.sidechainUndo.slot} → None`);
+        } catch (scErr) {
+          console.warn('Sidechain-Undo fehlgeschlagen:', scErr);
+        }
+      } else if (proposal?.sidechainRoute) {
+        try {
+          await invoke('set_sidechain', {
+            track: proposal.sidechainRoute.trackName,
+            slot: proposal.sidechainRoute.slotIndex,
+            source: 'None'
+          });
+        } catch (_) {}
+      }
+
+      if (histIndex !== -1) {
+        setHistoryStack((prev) => prev.filter((_, idx) => idx !== histIndex));
+      }
+      setProposals((prev) =>
+        prev.map((p) => (p.id === proposalId ? { ...p, status: 'pending' } : p))
+      );
+      setChatLog(`✅ Rückgängig erfolgreich: "${title}" auf Ausgangswerte zurückgesetzt.`);
+    } catch (err: unknown) {
+      setChatLog(`❌ Fehler beim Rückgängig-Machen: ${String(err)}`);
+    }
+  };
 
   const handleRejectAction = (id: string) => {
     const prop = proposals.find((p) => p.id === id);
@@ -1272,12 +1377,81 @@ export const App: React.FC = () => {
 
     const isLogic = activeDaw.toLowerCase().includes('logic');
     const dawLabel = isLogic ? 'Logic Pro' : 'Nuendo';
+
+    // ── FALL 1: A/B Beenden (Audition ist bereits aktiv) ──────────────
+    if (prop.status === 'auditioning') {
+      if (auditionTimersRef.current[id]) {
+        clearTimeout(auditionTimersRef.current[id]);
+        delete auditionTimersRef.current[id];
+      }
+
+      const savedState = auditionSnapshotsRef.current[id];
+      const previousStatus = savedState?.previousStatus || 'pending';
+      const auditionSnapshot = savedState?.snapshot || [];
+
+      try {
+        await invoke('daw_stop').catch(() => {});
+
+        if (savedState?.wasApplied) {
+          for (const delta of prop.deltas) {
+            try {
+              const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
+              await invoke('toggle_plugin_bypass', {
+                trackName: targetTrack,
+                slotIndex: delta.slotIndex ?? 0
+              });
+            } catch (bErr) {
+              console.error(`[Restore] Fehler beim Bypass-Rücksetzen für ${delta.trackName}:`, bErr);
+            }
+          }
+        } else {
+          for (const mod of auditionSnapshot) {
+            try {
+              await invoke('apply_daw_action', {
+                trackName: mod.track,
+                parameter: mod.parameter,
+                value: mod.previousValue,
+                currentValue: mod.proposedValue,
+                isRestore: true,
+                unit: mod.unit,
+                isMaster: mod.isMaster,
+                pluginName: mod.pluginName,
+                slotIndex: mod.slotIndex
+              });
+            } catch (err) {
+              console.error(`[Restore] Fehler beim Zurücksetzen von ${mod.track} -> ${mod.parameter}:`, err);
+            }
+          }
+
+          if (prop.sidechainRoute) {
+            try {
+              await invoke('set_sidechain', {
+                track: prop.sidechainRoute.trackName,
+                slot: prop.sidechainRoute.slotIndex,
+                source: 'None'
+              });
+            } catch (scErr) {
+              console.warn('[A/B] Sidechain-Restore fehlgeschlagen:', scErr);
+            }
+          }
+        }
+
+        delete auditionSnapshotsRef.current[id];
+        setProposals((prev) =>
+          prev.map((p) => (p.id === id ? { ...p, status: previousStatus } : p))
+        );
+        setChatLog(`🎧 A/B Audition beendet. Ausgangszustand in ${dawLabel} wiederhergestellt.`);
+      } catch (err: unknown) {
+        setChatLog(`❌ Fehler beim Beenden von A/B Audition: ${String(err)}`);
+      }
+      return;
+    }
+
+    // ── FALL 2: A/B Starten (Audition aktivieren) ─────────────────────
     const previousStatus = prop.status;
+    const wasApplied = previousStatus === 'applied';
 
-    // Dynamischer Bar-Resolver für A/B Listen (kein hardcoded Takt!)
     let explicitStartBar: number | undefined = (prop as any).startBar;
-
-    // Fallback A: Suche im Kartentitel oder der Beschreibung nach expliziten Taktangaben ("ab Takt 17", "Takt 25")
     if (!explicitStartBar) {
       const match = prop.title?.match(/(?:ab\s+Takt|Takt)\s+(\d+)/i) || 
                     (prop as any).description?.match(/(?:ab\s+Takt|Takt)\s+(\d+)/i) ||
@@ -1291,7 +1465,6 @@ export const App: React.FC = () => {
     const effectiveStartBar: number = hasExplicitBar ? (explicitStartBar as number) : 0;
     const endBar: number | undefined = (prop as any).endBar ?? (hasExplicitBar ? (explicitStartBar as number) + 4 : undefined);
 
-    // Snapshot aller Parameter vor dem Umschalten zur deterministischen Wiederherstellung
     const auditionSnapshot = prop.deltas.map((delta) => ({
       track: delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1'),
       parameter: delta.parameterName || 'EQ',
@@ -1303,6 +1476,13 @@ export const App: React.FC = () => {
       isMaster: (delta.trackName || '').toLowerCase().includes('master') || (delta.trackName || '').toLowerCase().includes('stereo'),
     }));
 
+    auditionSnapshotsRef.current[id] = {
+      snapshot: auditionSnapshot,
+      previousStatus,
+      wasApplied,
+      sidechainRoute: prop.sidechainRoute
+    };
+
     setProposals((prev) =>
       prev.map((p) => (p.id === id ? { ...p, status: 'auditioning' } : p))
     );
@@ -1310,11 +1490,9 @@ export const App: React.FC = () => {
     const locationLabel = hasExplicitBar ? ` (Takt ${effectiveStartBar}-${endBar})` : ' (an aktueller Abhörposition)';
 
     try {
-      if (previousStatus === 'applied') {
-        // ── A/B via Plugin-Bypass (bereits angewendete Karte) ──────────────
-        setChatLog(`🎧 A/B Audition: "${prop.title}" – Plugin-Bypass in ${dawLabel} umgeschaltet${locationLabel}...`);
+      if (wasApplied) {
+        setChatLog(`🎧 A/B Audition aktiv: "${prop.title}" – Plugin-Bypass in ${dawLabel} umgeschaltet${locationLabel}. Klicke auf 'A/B Beenden', um zurückzuschalten.`);
 
-        // Nur wenn explizit ein Takt angefragt wurde, Cycle/Playhead anpassen (ansonsten bestehenden Loop erhalten!)
         if (hasExplicitBar && endBar) {
           try {
             await invoke('daw_set_cycle_region', { start: effectiveStartBar, end: endBar });
@@ -1341,10 +1519,8 @@ export const App: React.FC = () => {
           }
         }
       } else {
-        // ── A/B via Parameter-Preview (noch nicht angewendete Karte) ───────
-        setChatLog(`🎧 A/B Audition: "${prop.title}" (${prop.deltas.length} Änderungen) – 6s Vorschau in ${dawLabel}${locationLabel}...`);
+        setChatLog(`🎧 A/B Audition aktiv: "${prop.title}" (${prop.deltas.length} Änderungen) in ${dawLabel}${locationLabel}. Klicke auf 'A/B Beenden', um zur Ausgangsmischung zurückzukehren.`);
 
-        // Nur wenn explizit ein Takt angefragt wurde, Cycle/Playhead anpassen (ansonsten bestehenden Loop erhalten!)
         if (hasExplicitBar && endBar) {
           try {
             await invoke('daw_set_cycle_region', { start: effectiveStartBar, end: endBar });
@@ -1359,7 +1535,6 @@ export const App: React.FC = () => {
           console.warn('[A/B] Playback-Start fehlgeschlagen:', playErr);
         }
 
-        // 2. Temporäres Sidechain-Routing (falls vorhanden)
         if (prop.sidechainRoute) {
           try {
             await invoke('set_sidechain', {
@@ -1372,22 +1547,9 @@ export const App: React.FC = () => {
           }
         }
 
-        // 3. Testwerte in die DAW schreiben
         for (const mod of auditionSnapshot) {
           try {
             await invoke('apply_daw_action', {
-              action: {
-                track: mod.track,
-                trackName: mod.track,
-                parameter: mod.parameter,
-                value: mod.proposedValue,
-                currentValue: mod.previousValue,
-                pluginName: mod.pluginName,
-                slotIndex: mod.slotIndex,
-                isRestore: false,
-                unit: mod.unit,
-                isMaster: mod.isMaster
-              },
               trackName: mod.track,
               parameter: mod.parameter,
               value: mod.proposedValue,
@@ -1403,25 +1565,19 @@ export const App: React.FC = () => {
           }
         }
       }
+
+      // Großzügiger Gehörschutz-Sicherheits-Watchdog (60s), falls der Toningenieur den Raum verlässt
+      auditionTimersRef.current[id] = setTimeout(async () => {
+        if (auditionSnapshotsRef.current[id]) {
+          await handleAuditionAction(id);
+        }
+      }, 60000);
+
     } catch (err: unknown) {
-      // Playback sicherheitshalber stoppen bei Fehler
       await invoke('daw_stop').catch(() => {});
-      // Falls bereits Regler verstellt wurden, Snapshot zurückrollen
       for (const mod of auditionSnapshot) {
         try {
           await invoke('apply_daw_action', {
-            action: {
-              track: mod.track,
-              trackName: mod.track,
-              parameter: mod.parameter,
-              value: mod.previousValue,
-              currentValue: mod.proposedValue,
-              pluginName: mod.pluginName,
-              slotIndex: mod.slotIndex,
-              isRestore: true,
-              unit: mod.unit,
-              isMaster: mod.isMaster
-            },
             trackName: mod.track,
             parameter: mod.parameter,
             value: mod.previousValue,
@@ -1434,90 +1590,12 @@ export const App: React.FC = () => {
           });
         } catch (_) {}
       }
+      delete auditionSnapshotsRef.current[id];
       setProposals((prev) =>
         prev.map((p) => (p.id === id ? { ...p, status: previousStatus } : p))
       );
       setChatLog(`❌ Fehler bei A/B Audition: ${String(err)}`);
-      return;
     }
-
-    // Auto-Restore nach 6 Sekunden
-    setTimeout(async () => {
-      try {
-        // 1. Playback stoppen (A/B Restore Garantie: isRestore=true, darf NIEMALS blockiert werden)
-        await invoke('daw_stop').catch((stopErr) => {
-          console.warn('[A/B] daw_stop fehlgeschlagen:', stopErr);
-        });
-
-        if (previousStatus === 'applied') {
-          // Bypass wieder zurückschalten
-          for (const delta of prop.deltas) {
-            try {
-              const targetTrack = delta.trackName || (isLogic ? 'Stereo Out' : 'Channel 1');
-              await invoke('toggle_plugin_bypass', {
-                trackName: targetTrack,
-                slotIndex: delta.slotIndex ?? 0
-              });
-            } catch (bErr) {
-              console.error(`[Restore] Fehler beim Bypass-Rücksetzen für ${delta.trackName}:`, bErr);
-            }
-          }
-        } else {
-          // 2. Testwerte isoliert pro Parameter zurücksetzen (isRestore: true)
-          // Verhindert, dass ein Einzelfehler das Zurücksetzen anderer Regler/Fader blockiert!
-          for (const mod of auditionSnapshot) {
-            try {
-              await invoke('apply_daw_action', {
-                action: {
-                  track: mod.track,
-                  trackName: mod.track,
-                  parameter: mod.parameter,
-                  value: mod.previousValue,
-                  currentValue: mod.proposedValue,
-                  pluginName: mod.pluginName,
-                  slotIndex: mod.slotIndex,
-                  isRestore: true,
-                  unit: mod.unit,
-                  isMaster: mod.isMaster
-                },
-                trackName: mod.track,
-                parameter: mod.parameter,
-                value: mod.previousValue,
-                currentValue: mod.proposedValue,
-                isRestore: true,
-                unit: mod.unit,
-                isMaster: mod.isMaster,
-                pluginName: mod.pluginName,
-                slotIndex: mod.slotIndex
-              });
-            } catch (err) {
-              console.error(`[Restore] Fehler beim Zurücksetzen von ${mod.track} -> ${mod.parameter}:`, err);
-            }
-          }
-
-          // 3. Temporäres Sidechain-Routing wieder aufheben
-          if (prop.sidechainRoute) {
-            try {
-              await invoke('set_sidechain', {
-                track: prop.sidechainRoute.trackName,
-                slot: prop.sidechainRoute.slotIndex,
-                source: 'None'
-              });
-            } catch (scErr) {
-              console.warn('[A/B] Sidechain-Restore fehlgeschlagen:', scErr);
-            }
-          }
-        }
-
-        setChatLog(`🎧 A/B Audition beendet. Vorheriger Zustand in ${dawLabel} wiederhergestellt.`);
-      } catch (err: unknown) {
-        setChatLog(`❌ Fehler beim Wiederherstellen nach A/B Audition: ${String(err)}`);
-      }
-
-      setProposals((prev) =>
-        prev.map((p) => (p.id === id && p.status === 'auditioning' ? { ...p, status: previousStatus } : p))
-      );
-    }, 6000);
   };
 
   const handleProposalFromChat = (newProposal: MixActionProposal) => {
@@ -2643,6 +2721,7 @@ export const App: React.FC = () => {
                     onApply={handleApplyAction}
                     onReject={handleRejectAction}
                     onAudition={handleAuditionAction}
+                    onUndoCard={handleUndoCard}
                     onTogglePin={handleTogglePin}
                     onRollbackDelta={handleRollbackSingleDelta}
                     onRedoDelta={handleRedoSingleDelta}
