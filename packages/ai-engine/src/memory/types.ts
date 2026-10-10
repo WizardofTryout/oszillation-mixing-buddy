@@ -40,3 +40,18 @@ export interface JournalEntry {
   sidechainState?: SidechainRoutingEntry;
   rationaleSnippet?: string;
 }
+
+export interface DialogueTurn {
+  turnIndex: number;
+  timestamp: number;
+  userPrompt: string;
+  aiSummary: string;
+  appliedActionIds?: string[];
+  monitoringTrack?: string;
+}
+
+export interface RollingDialogueState {
+  recentTurns: DialogueTurn[];
+  condensedHistorySummary: string;
+}
+

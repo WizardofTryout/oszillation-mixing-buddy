@@ -26,6 +26,7 @@ import {
 } from '@mixing-buddy/shared-types';
 import { MIXING_BUDDY_SYSTEM_PROMPT, type MixAnalysisContext } from '../prompts.js';
 import { normalizeProposal } from './GeminiProvider.js';
+import { dialogueMemory } from '../memory/DialogueMemory.js';
 
 // --------------------------------------------------------------------------
 // Types
@@ -1135,14 +1136,10 @@ export class AgentRunner {
 
     let historyContext = '';
     if (context?.recentMessages && context.recentMessages.length > 0) {
-      // Rolling Compact Memory: nur die letzten 2-3 relevanten Nachrichten kompakt einbinden
-      const trimmedRecent = context.recentMessages.slice(-3);
-      historyContext =
-        `COMPACT WORKING MEMORY (Recent Dialog Context):\n` +
-        trimmedRecent
-          .map((m) => `${m.sender === 'user' ? 'Engineer' : 'Assistant'}: "${m.text.slice(0, 160)}"`)
-          .join('\n') +
-        `\n\n`;
+      dialogueMemory.syncFromMessages(context.recentMessages, activeTrack);
+      historyContext = dialogueMemory.toPromptContext();
+    } else {
+      historyContext = dialogueMemory.toPromptContext();
     }
 
     const detectedDrums = compactStrips?.find((t) => /drum|kick|beat|moreki|motown/i.test(t.t))?.t;
@@ -1444,6 +1441,16 @@ export class AgentRunner {
     if (finalProposal && finalProposal.startBar === undefined && detectedStartBar !== undefined) {
       finalProposal.startBar = detectedStartBar;
       finalProposal.endBar = detectedEndBar ?? (detectedStartBar + 4);
+    }
+
+    // Sprint 2: Dialog-Runde deterministisch in dialogueMemory protokollieren
+    try {
+      dialogueMemory.addTurn(userPrompt, assistantText, {
+        monitoringTrack: activeTrack,
+        appliedActionIds: finalProposal?.id ? [finalProposal.id] : undefined
+      });
+    } catch (dmErr) {
+      console.warn('[AgentRunner] Fehler beim Aktualisieren von dialogueMemory:', dmErr);
     }
 
     return {

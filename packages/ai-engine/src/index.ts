@@ -20,6 +20,7 @@ export * from './skillSynthesis.js';
 export * from './targetScopeResolver.js';
 export * from './memory/types.js';
 export * from './memory/ActionJournal.js';
+export * from './memory/DialogueMemory.js';
 
 export type ProviderType = 'managed' | 'anthropic' | 'gemini' | 'openai' | 'ollama' | 'mock';
 
