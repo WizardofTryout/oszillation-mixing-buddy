@@ -40,6 +40,9 @@ Cargo.lock
 *.vst3
 *.component
 *.app
+*.dmg
+*.zip
+dist-release/
 
 # Local environment / IDE
 .vscode/*

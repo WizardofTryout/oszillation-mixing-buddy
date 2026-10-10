@@ -149,12 +149,35 @@ Oszillation Mixing Buddy operates alongside your DAW as an intelligent, responsi
 
 ## 🚀 Quick Start & Installation
 
-### Prerequisites
+### Option 1: 1-Click Tester Setup (Recommended for Producers & Beta Testers)
+*No compilation required. Download pre-built bundles from [GitHub Releases](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases).*
+
+1. **Download Packages:**
+   * **Desktop App:** [`Oszillation-Mixing-Buddy-v0.7.0.dmg`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (Tauri v2 Desktop HUD + native Swift accessibility sidecar).
+   * **Meter Satellites:** [`MixingBuddyMeter-Plugins-v0.7.0.zip`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (AudioUnit for Logic Pro & VST3 for Steinberg Nuendo / Cubase).
+2. **Install Desktop App:**
+   * Open the `.dmg` and drag **Oszillation Mixing Buddy.app** into your `/Applications` folder.
+3. **Install Plugins (1-Click):**
+   * Unzip `MixingBuddyMeter-Plugins-v0.7.0.zip` and double-click **`install-plugins.command`**.
+   * *Alternatively copy manually:*
+     * AU: `MixingBuddyMeter.component` $\rightarrow$ `~/Library/Audio/Plug-Ins/Components/`
+     * VST3: `MixingBuddyMeter.vst3` $\rightarrow$ `~/Library/Audio/Plug-Ins/VST3/`
+4. **Grant macOS Permissions:**
+   * **Accessibility (Bedienungshilfen):** Open **macOS System Settings** $\rightarrow$ **Privacy & Security** $\rightarrow$ **Accessibility** and enable **Oszillation Mixing Buddy**.
+   * **Microphone (Speech Assistant):** Required when using the Push-to-Talk voice assistant.
+5. **Launch & Mix:**
+   * Launch **Oszillation Mixing Buddy** from `/Applications/`.
+   * Insert `MixingBuddyMeter` on your DAW master bus or group stems. Telemetry locks in within 33 milliseconds.
+
+---
+
+### Option 2: Build from Source (For Developers & Contributors)
+
+#### Prerequisites
 * macOS 13.0+ (Ventura, Sonoma, Sequoia on Apple Silicon or Intel)
 * Apple Logic Pro (v10.8+ / v11.x) or Steinberg Nuendo 13 / Cubase 13
-* Node.js $\ge 20$, `pnpm` $\ge 9$, Rust toolchain (`cargo`, `rustc`), CMake $\ge 3.25$
+* Node.js $\ge 20$, `pnpm` $\ge 9$, Rust toolchain (`cargo`, `rustc`), CMake $\ge 3.25$, Xcode Command Line Tools
 
-### 1. Build and Install Components
 ```bash
 # Clone the repository
 git clone https://github.com/WizardofTryout/oszillation-mixing-buddy.git
@@ -163,6 +186,9 @@ cd oszillation-mixing-buddy
 # Install dependencies and build shared packages
 pnpm install
 pnpm -r run build
+
+# Build native Swift accessibility bridge ("The Hands")
+pnpm --filter @mixing-buddy/daw-adapters run build:swift
 
 # Build and deploy the JUCE Satellite plugin ("The Ear")
 cmake -B build/plugins -S plugins/meter-audio -DCMAKE_BUILD_TYPE=Release
@@ -173,17 +199,12 @@ cp -R build/plugins/MixingBuddyMeter_artefacts/Release/VST3/MixingBuddyMeter.vst
 # Compile Desktop HUD application
 pnpm --filter desktop tauri build --bundles app --no-sign
 cp -R target/release/bundle/macos/Oszillation\ Mixing\ Buddy.app /Applications/
+mkdir -p "/Applications/Oszillation Mixing Buddy.app/Contents/Resources"
+cp packages/daw-adapters/bin/logic-ax-bridge "/Applications/Oszillation Mixing Buddy.app/Contents/Resources/"
 ```
 
-### 2. Grant macOS Accessibility Permissions
-To allow Oszillation Mixing Buddy to inspect faders and control DAW plugins without artificial delays:
-1. Open **macOS System Settings** $\rightarrow$ **Privacy & Security** $\rightarrow$ **Accessibility**.
-2. Add and enable `/Applications/Oszillation Mixing Buddy.app`.
-
-### 3. Launching
-Start **Oszillation Mixing Buddy** from `/Applications/`. Insert `MixingBuddyMeter` into any channel strip or master bus in your DAW—telemetry connects automatically within 33 milliseconds.
-
 ---
+
 
 ## 🛡️ License & Commercial Rights
 
