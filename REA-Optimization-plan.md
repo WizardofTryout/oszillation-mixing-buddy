@@ -1,9 +1,10 @@
 # 📋 REA-Optimization-Plan & Sprint-Roadmap
+
 ## Oszillation Mixing Buddy — Übernahme der Studio Buddy REA-Erkenntnisse
 
-**Dokument-Version:** 1.0.0  
-**Datum:** 10. Oktober 2026  
-**Status:** Genehmigt zur schrittweisen Implementierung  
+**Dokument-Version:** 1.0.0
+**Datum:** 10. Oktober 2026
+**Status:** Genehmigt zur schrittweisen Implementierung
 **Referenz-Dokumentation:** `/Volumes/Spacestation/MCP/Antigravity-MCP-tools/Steinberg-Mixing-Buddy/Studio-Buddy-ai-demo/`
 
 ---
@@ -24,18 +25,20 @@ In **Säule 3 (The Hands / DAW Bridge)** liefert die REA jedoch vier essenzielle
 ## 2. Deep-Dive: Plugin Vault vs. ControlsViewFallback (Ergänzung statt Ersatz)
 
 ### Das identifizierte Problem im aktuellen Auto-Profiler
+
 Wie der Screenshot des aktuellen Auto-Profilers beim Scannen von **ChromaVerb** beweist, liefert der reine Scan der Standard-Oberfläche (`Editor`):
+
 - `Schließen`, `Symbolleiste`, `Link`, `Bypass`, `Vergleichen`, `Zurück`, `Weiter`
 - ❌ **Keine echten Audio-Parameter** (wie `Attack`, `Size`, `Decay`, `Dry/Wet`), da Custom-UI-Engines (Metal/OpenGL) ihre Regler im `Editor`-Modus vor dem Accessibility-Baum verbergen.
 
 ### Die Lösung: Perfekte Symbiose beider Welten
 
-| Komponente | Rolle im Gesamtsystem | Aufgabe |
-|---|---|---|
-| **Plugin Vault** (`~/.mixing-buddy/plugins/*.json`) | **Persistentes Gedächtnis** | Speichert gecachte Regler-Mappings, kalibrierte Log-Kurven (`rawMin`, `rawMax`, Einheiten) und individuelle Musiker-Präferenzen dauerhaft auf der SSD. Kein wiederholter Scan nötig! |
-| **`ControlsViewFallback`** | **Scan- & Erkennungs-Engine** | Schaltet das Plugin-Fenster während des Profilens für 50 ms auf die native Logic-Ansicht **„Steuerung“ (Controls)** um. Apple rendert dort jeden echten DSP-Parameter als linearen Standard-`AXSlider` mit Label. |
-| **Auto-Profiler Button** | **Manuelles Einlernen** | Der Musiker kann Plugins gezielt mit optischem Feedback anlernen; die Parameterliste ist nun zu 100 % vollständig. |
-| **On-the-Fly Profiler** | **Autonomes Einlernen** | Stößt die KI im Mix auf ein noch unbekanntes Plugin, scannt sie es via Controls-Fallback in < 100 ms im Hintergrund und legt das JSON automatisch im Vault ab (**Zero-Setup-Experience**). |
+| Komponente                                                  | Rolle im Gesamtsystem               | Aufgabe                                                                                                                                                                                                                      |
+| ----------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Plugin Vault** (`~/.mixing-buddy/plugins/*.json`) | **Persistentes Gedächtnis**  | Speichert gecachte Regler-Mappings, kalibrierte Log-Kurven (`rawMin`, `rawMax`, Einheiten) und individuelle Musiker-Präferenzen dauerhaft auf der SSD. Kein wiederholter Scan nötig!                                   |
+| **`ControlsViewFallback`**                          | **Scan- & Erkennungs-Engine** | Schaltet das Plugin-Fenster während des Profilens für 50 ms auf die native Logic-Ansicht**„Steuerung“ (Controls)** um. Apple rendert dort jeden echten DSP-Parameter als linearen Standard-`AXSlider` mit Label. |
+| **Auto-Profiler Button**                              | **Manuelles Einlernen**       | Der Musiker kann Plugins gezielt mit optischem Feedback anlernen; die Parameterliste ist nun zu 100 % vollständig.                                                                                                          |
+| **On-the-Fly Profiler**                               | **Autonomes Einlernen**       | Stößt die KI im Mix auf ein noch unbekanntes Plugin, scannt sie es via Controls-Fallback in < 100 ms im Hintergrund und legt das JSON automatisch im Vault ab (**Zero-Setup-Experience**).                           |
 
 ---
 
@@ -77,38 +80,43 @@ Wie der Screenshot des aktuellen Auto-Profilers beim Scannen von **ChromaVerb** 
 ---
 
 ### Sprint 5: InputShield & Notfall-Abbruch (Priorität 1)
+
 *Ziel: Absoluter Schutz vor Mauskollisionen während laufender Automation in Logic Pro.*
 
-* [x] **Aufgabe 5.1:** Implementierung von `InputShield.swift` in `packages/daw-adapters/src/logic/swift/`.
+* [X] **Aufgabe 5.1:** Implementierung von `InputShield.swift` in `packages/daw-adapters/src/logic/swift/`.
   - Rahmenloses, transparentes `NSWindow` auf `NSWindow.Level = 8` (`.modalPanel`).
   - Geometrie synchronisiert mit dem Logic Pro-Hauptfenster.
   - `setIgnoresMouseEvents(false)` während Automation aktiv ist.
-* [x] **Aufgabe 5.2:** Globaler Watchdog & Escape Emergency Abort (`0x35`).
-* [x] **Aufgabe 5.3:** Event-Tagging (`0x53425544` / `'SBUD'`).
+* [X] **Aufgabe 5.2:** Globaler Watchdog & Escape Emergency Abort (`0x35`).
+* [X] **Aufgabe 5.3:** Event-Tagging (`0x53425544` / `'SBUD'`).
   - Eigene synthetische `CGEvent`-Klicks und Tastaturevents der Bridge mit dem User-Data-Flag gekennzeichnet.
+
 * **Akzeptanzkriterium:** Klickt der Benutzer während der Automation, fängt das ModalPanel die Klicks ab. Eigene Events passieren ungehindert.
 
 ---
 
 ### Sprint 6: `ControlsViewFallback` & Plugin-Vault-Upgrade (Priorität 2)
+
 *Ziel: Vollständige Erfassung aller Audio-DSP-Parameter bei 100 % aller Plugins (ChromaVerb, FabFilter, Waves, UAD).*
 
-* [x] **Aufgabe 6.1:** Views-Umschalter in `ControlsViewFallback.swift`.
+* [X] **Aufgabe 6.1:** Views-Umschalter in `ControlsViewFallback.swift`.
   - Erkennung des Ansicht-Menüs ("Regler" / "Editor").
   - Physical Ground-Truth Prüfung auf `AXTable` Vorhandensein.
-* [x] **Aufgabe 6.2:** Generischer Parameter-Harvester.
+* [X] **Aufgabe 6.2:** Generischer Parameter-Harvester.
   - Traversierung aller Rows, Cells, Sliders, PopUps und StaticText-Labels.
   - Auslesen von Minimum, Maximum, aktuellem Wert und Einheiten-String (`Hz`, `dB`, `%`, `ms`, `s`).
   - Schnelles Zurückschalten auf "Editor".
-* [x] **Aufgabe 6.3:** Integration in den Auto-Profiler (`profile-plugin`).
+* [X] **Aufgabe 6.3:** Integration in den Auto-Profiler (`profile-plugin`).
   - Erkennt der Profiler keine oder zu wenige AXSlider (< 3), wird autonom `ControlsViewFallback` aktiviert, alle Parameter geerntet und wieder auf Editor gewechselt.
   - ChromaVerb liefert nun über 100 Parameter (Frequenzen, Decay, Predelay, Wet, Dry, Q) statt nur 9 Fenster-Buttons.
-* [ ] **Aufgabe 6.4:** On-the-Fly Vault-Erweiterung im MCP-Mix-Workflow.
+* [X] **Aufgabe 6.4:** On-the-Fly Vault-Erweiterung im MCP-Mix-Workflow.
+
 * **Akzeptanzkriterium:** Beim Klick auf "Plugin anlernen" für ChromaVerb werden alle Klangparameter im Scan-Dialog erfasst und im Plugin Vault abgelegt.
 
 ---
 
 ### Sprint 7: Express-Sidechain & System-Prompt-Veredelung (Priorität 3)
+
 *Ziel: Latenzfreie Kompressor-Sidechain-Verdrahtung und schlankere, prägnantere KI-Antworten.*
 
 * **Aufgabe 7.1:** Direkter Sidechain-Attribut-Schreibvorgang.
@@ -127,6 +135,7 @@ Wie der Screenshot des aktuellen Auto-Profilers beim Scannen von **ChromaVerb** 
 ---
 
 ### Sprint 8: On-Device Spracherkennung & Studio-Vokabular (Priorität 4)
+
 *Ziel: Freihändiges Diktieren im Studio ohne Cloud-Latenz und mit 100 % Trefferquote bei Spurnamen.*
 
 * **Aufgabe 8.1:** Native `Speech.framework`-Anbindung in Swift/Rust.

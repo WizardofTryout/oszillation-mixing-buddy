@@ -240,6 +240,46 @@ export class LogicProDriver implements DAWDriver {
   }
 
   /**
+   * Automatically profiles and caches an unknown plugin on-the-fly via ControlsViewFallback
+   * into ~/.mixing-buddy/plugins/<slug>.json (Zero-Setup Experience).
+   */
+  public async ensurePluginSpecification(
+    trackName: string,
+    slotIndex: number,
+    pluginNameHint?: string
+  ): Promise<ReturnType<typeof findPluginSpecification>> {
+    if (pluginNameHint) {
+      const existing = findPluginSpecification(pluginNameHint);
+      if (existing) return existing;
+    }
+
+    try {
+      // 1. Check if the plugin window is already open
+      let profiled = await this.axClient.profileActivePlugin(pluginNameHint || trackName);
+
+      // 2. If not open, open the insert slot briefly to profile it
+      if (!profiled || !profiled.parameters || profiled.parameters.length === 0) {
+        const openRes = await this.axClient.openInsertSlot(trackName, Math.max(1, slotIndex + 1));
+        if (openRes.success) {
+          const openedWindowName = openRes.openedWindow || trackName;
+          profiled = await this.axClient.profileActivePlugin(openedWindowName);
+        }
+      }
+
+      // 3. Save to Vault if parameters were harvested
+      if (profiled && Array.isArray(profiled.parameters) && profiled.parameters.length > 0) {
+        const { saveLearnedPluginToVault } = await import('./PluginRegistry.js');
+        saveLearnedPluginToVault(profiled);
+        return findPluginSpecification(profiled.pluginName);
+      }
+    } catch {
+      // Ignore profiling failures and proceed to fallback
+    }
+
+    return null;
+  }
+
+  /**
    * Sets a plugin parameter on a Logic Pro track using the Plugin Specification Database
    * and bidirectional mathematical curve transformers (Logarithmic, Linear, Piecewise CurveTable).
    */
@@ -255,6 +295,12 @@ export class LogicProDriver implements DAWDriver {
     // Resolve plugin and parameter specification from database (ChannelEQ.json / Compressor.json)
     const existingPluginName = track.insertSlots[slotIndex]?.pluginName;
     let pluginSpec = existingPluginName ? findPluginSpecification(existingPluginName) : null;
+
+    // --- Aufgabe 6.4: On-the-Fly Vault Auto-Profiling (Zero-Setup Experience) ---
+    if (!pluginSpec) {
+      pluginSpec = await this.ensurePluginSpecification(track.name, slotIndex, existingPluginName);
+    }
+
     const paramSpec = findParameterSpecification(paramName, pluginSpec) ?? findParameterSpecification(paramName);
 
     if (!pluginSpec && paramSpec) {
