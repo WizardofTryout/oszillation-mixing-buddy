@@ -244,7 +244,7 @@ struct SearchCriteria {
 func findElementDFS(
     root: AXUIElement,
     roleFilter: String?,
-    maxDepth: Int = 8,
+    maxDepth: Int = 12,
     currentDepth: Int = 0,
     predicate: (AXUIElement) -> Bool
 ) -> AXUIElement? {
@@ -1212,9 +1212,23 @@ case "set-param":
         }
     }
 
+    // Visuelle Benutzeroberfläche (Editor-Ansicht) immer garantieren und wiederherstellen
+    if ControlsViewFallback.currentViewMode(in: targetWin) == "Controls" {
+        ControlsViewFallback.switchView(in: targetWin, to: "Editor")
+    }
+
     let updatedVal = getAXDouble(element, kAXValueAttribute as String) ?? targetValue
     let valDesc = getAXString(element, kAXValueDescriptionAttribute as String) ?? ""
     printJSON(["success": setOk, "newValue": updatedVal, "valueDescription": valDesc])
+
+case "ensure-editor-view":
+    let winQuery = getArg("--window") ?? ""
+    guard let targetWin = findTargetWindow(appElement, query: winQuery) else {
+        printJSON(["success": false, "error": buildWindowError(appElement, query: winQuery)])
+        exit(0)
+    }
+    let switched = ControlsViewFallback.switchView(in: targetWin, to: "Editor")
+    printJSON(["success": true, "switched": switched])
 
 case "toggle-bypass":
     let winQuery = getArg("--window") ?? ""

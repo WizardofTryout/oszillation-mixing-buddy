@@ -524,12 +524,12 @@ fn resolve_ax_param_target(parameter: &str, value: f32) -> AXParamTarget {
             }
         }
 
-        // Compressor Controls (Studio Buddy _NS: identifiers)
+        // Compressor Controls
         "threshold" | "compressor_threshold" | "_ns:153" => {
-            let (clamped, raw) = display_to_raw_linear(value, -50.0, 0.0, 0.0, 200.0);
+            let (clamped, raw) = display_to_raw_linear(value, -50.0, 0.0, 0.0, 100.0);
             AXParamTarget {
                 description: "Threshold",
-                identifier: Some("_NS:153"),
+                identifier: None,
                 role: "AXSlider",
                 enable_band: None,
                 clamped_display: clamped,
@@ -537,10 +537,21 @@ fn resolve_ax_param_target(parameter: &str, value: f32) -> AXParamTarget {
             }
         }
         "ratio" | "compressor_ratio" | "_ns:157" => {
-            let (clamped, raw) = display_to_raw_log(value, 1.0, 30.0, 0.0, 290.0);
+            let (clamped, raw) = display_to_raw_log(value, 1.0, 30.0, 0.0, 85.0);
             AXParamTarget {
                 description: "Ratio",
-                identifier: Some("_NS:157"),
+                identifier: None,
+                role: "AXSlider",
+                enable_band: None,
+                clamped_display: clamped,
+                raw_value: raw,
+            }
+        }
+        "attack" | "compressor_attack" => {
+            let (clamped, raw) = display_to_raw_log(value, 0.0, 200.0, 0.0, 100.0);
+            AXParamTarget {
+                description: "Attack",
+                identifier: None,
                 role: "AXSlider",
                 enable_band: None,
                 clamped_display: clamped,
@@ -548,10 +559,10 @@ fn resolve_ax_param_target(parameter: &str, value: f32) -> AXParamTarget {
             }
         }
         "make_up" | "makeup" | "makeup_gain" | "_ns:160" => {
-            let (clamped, raw) = display_to_raw_linear(value, -20.0, 20.0, 0.0, 200.0);
+            let (clamped, raw) = display_to_raw_linear(value, -20.0, 20.0, 0.0, 110.0);
             AXParamTarget {
                 description: "Make Up",
-                identifier: Some("_NS:160"),
+                identifier: None,
                 role: "AXSlider",
                 enable_band: None,
                 clamped_display: clamped,
@@ -562,7 +573,7 @@ fn resolve_ax_param_target(parameter: &str, value: f32) -> AXParamTarget {
             let (clamped, raw) = display_to_raw_linear(value, 0.0, 1.0, 0.0, 10.0);
             AXParamTarget {
                 description: "Knee",
-                identifier: Some("_NS:172"),
+                identifier: None,
                 role: "AXSlider",
                 enable_band: None,
                 clamped_display: clamped,
@@ -570,10 +581,10 @@ fn resolve_ax_param_target(parameter: &str, value: f32) -> AXParamTarget {
             }
         }
         "release" | "compressor_release" | "_ns:169" => {
-            let (clamped, raw) = display_to_raw_log(value, 5.0, 5000.0, 0.0, 180.0);
+            let (clamped, raw) = display_to_raw_log(value, 5.0, 5000.0, 0.0, 119.0);
             AXParamTarget {
                 description: "Release",
-                identifier: Some("_NS:169"),
+                identifier: None,
                 role: "AXSlider",
                 enable_band: None,
                 clamped_display: clamped,

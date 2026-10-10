@@ -96,25 +96,9 @@ public final class ControlsViewFallback {
             }
         }
 
-        if targetFound && normalizedTarget == "Controls" {
-            // Poll up to 1.5s for AXTable and AXRows to be rendered by Logic Pro
-            for _ in 0..<25 {
-                usleep(60_000)
-                if let tbl = findControlsTable(in: window) {
-                    let rows = getAXChildren(tbl).filter { (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXRow" }
-                    if !rows.isEmpty {
-                        break
-                    }
-                }
-            }
-        } else if targetFound && normalizedTarget == "Editor" {
-            // Poll up to 1.5s for AXTable to disappear (UI switched back to Editor)
-            for _ in 0..<25 {
-                usleep(60_000)
-                if findControlsTable(in: window) == nil {
-                    break
-                }
-            }
+        if targetFound {
+            // Schnelle 50ms Pause für macOS UI-Redraw ohne 1.5s Hänger
+            usleep(50_000)
         }
 
         return targetFound
