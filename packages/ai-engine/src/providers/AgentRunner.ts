@@ -1145,8 +1145,8 @@ export class AgentRunner {
         `\n\n`;
     }
 
-    const detectedDrums = compactStrips?.find((t) => /drum|kick|beat|moreki|motown/i.test(t.name))?.name;
-    const detectedBass = compactStrips?.find((t) => /bass|sub|foundation/i.test(t.name))?.name;
+    const detectedDrums = compactStrips?.find((t) => /drum|kick|beat|moreki|motown/i.test(t.t))?.t;
+    const detectedBass = compactStrips?.find((t) => /bass|sub|foundation/i.test(t.t))?.t;
     const dynamicStemHint = (detectedDrums && detectedBass)
       ? `- Dynamic Low-End Relationship: Trigger '${detectedDrums}' -> Ducking Target '${detectedBass}' via 'sidechainRoute'.\n`
       : '';

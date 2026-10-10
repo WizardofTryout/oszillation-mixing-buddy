@@ -138,13 +138,13 @@ Wie der Screenshot des aktuellen Auto-Profilers beim Scannen von **ChromaVerb** 
 
 *Ziel: Freihändiges Diktieren im Studio ohne Cloud-Latenz und mit 100 % Trefferquote bei Spurnamen.*
 
-* **Aufgabe 8.1:** Native `Speech.framework`-Anbindung in Swift/Rust.
-  - Nutzung des modernen `SpeechAnalyzer` (macOS 14+) auf der Apple Silicon Neural Engine.
-  - Audio-Konverter für Studio-Interfaces: Resampling von 44.1 / 48 / 96 kHz Live-Audio auf 16 kHz Mono.
-* **Aufgabe 8.2:** `SpeechVocabularyProvider`.
-  - Beim Öffnen des Projekts und bei Spuränderungen werden alle Spurnamen (`Lead Vocals`, `Kick In`, `Snare Top`) und aktiven Plugin-Namen aus Logic ausgelesen und als `contextualStrings` an den Spracherkenner übergeben.
-* **Aufgabe 8.3:** Push-to-Talk HUD-Integration.
-  - Mikrofon-Icon in der Prompt Console; Diktat streamt in Echtzeit direkt in das Eingabefeld.
+* [X] **Aufgabe 8.1:** Native `Speech.framework`-Anbindung in Swift/Rust.
+  - On-Device Neural Engine (`Speech.framework`) mit lokaler Apple Silicon Ausführung.
+  - Audio-Konverter für Studio-Interfaces: Resampling von 44.1 / 48 / 96 / 192 kHz Live-Audio auf 16 kHz Float32 Mono via `AVAudioConverter`.
+* [X] **Aufgabe 8.2:** `SpeechVocabularyProvider`.
+  - Auslesen aller Session-Spuren (`Lead Vocals`, `Kick In`, `Snare Top`) und aktiver Plugins sowie Studio-Mixing-Fachbegriffe und dynamische Übergabe als `contextualStrings` an das neuronale Sprachmodell.
+* [X] **Aufgabe 8.3:** Push-to-Talk HUD-Integration.
+  - Mikrofon-Icon und Push/Toggle-to-Talk Button in `ChatConsole.tsx`; Live-Streaming der transkribierten Tokens direkt in das Prompt-Eingabefeld ohne Tastaturberührung.
 * **Akzeptanzkriterium:** Der Musiker sagt *"Senke auf Spur Snare Top die Mitten um zwei dB"* und der Text steht in < 200 ms ohne Tastaturberührung im Chatfeld.
 
 ---

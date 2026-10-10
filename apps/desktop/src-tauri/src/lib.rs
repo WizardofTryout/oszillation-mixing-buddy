@@ -5,6 +5,7 @@ pub mod mcu_bridge;
 pub mod reference_vault;
 pub mod safety_guard;
 pub mod skill_vault;
+pub mod speech_service;
 
 use daw_detector::{DAWDetector, DetectedDAW};
 use ipc_server::IPCServer;
@@ -2892,7 +2893,10 @@ pub fn run() {
             set_track_state,
             record_fader_ride,
             set_active_meter_instance,
-            get_meter_satellites
+            get_meter_satellites,
+            speech_service::start_speech_recognition,
+            speech_service::stop_speech_recognition,
+            speech_service::is_speech_recognition_active
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

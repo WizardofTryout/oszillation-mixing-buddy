@@ -1111,8 +1111,31 @@ func getArg(_ flag: String) -> String? {
 func runLogicAXBridge() {
     args = Array(CommandLine.arguments.dropFirst())
     guard let command = args.first else {
-        printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks | list-channel-strips | set-fader | set-pan | open-insert | close-plugin-window | set-folder-expanded | select-track | load-plugin | list-insert-menu | set-send-bus | set-send-level | get-sidechain | set-sidechain"])
+        printJSON(["success": false, "error": "Missing command. Expected: scan-windows | dump-window | read-param | set-param | scan-tracks | list-channel-strips | set-fader | set-pan | open-insert | close-plugin-window | set-folder-expanded | select-track | load-plugin | list-insert-menu | set-send-bus | set-send-level | get-sidechain | set-sidechain | speech-recognize"])
         exit(1)
+    }
+
+    if command == "speech-recognize" {
+        let vocabArg = getArg("--vocabulary") ?? ""
+        let localeArg = getArg("--locale") ?? "de-DE"
+        var vocabList = vocabArg.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        if let appElement = findLogicApplicationElement() {
+            let allWindows = getLogicWindows(appElement)
+            let stripElements = findAllChannelStripElements(allWindows)
+            for el in stripElements {
+                let parsed = parseChannelStripElement(el)
+                if !parsed.trackName.isEmpty && !vocabList.contains(parsed.trackName) {
+                    vocabList.append(parsed.trackName)
+                }
+                for pg in parsed.pluginGroups {
+                    if !pg.name.isEmpty && !vocabList.contains(pg.name) {
+                        vocabList.append(pg.name)
+                    }
+                }
+            }
+        }
+        runStudioSpeechRecognition(vocabulary: vocabList, locale: localeArg)
+        exit(0)
     }
 
     guard let appElement = findLogicApplicationElement() else {

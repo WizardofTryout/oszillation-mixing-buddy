@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, AlertCircle, Info, Copy, Check, MessageSquarePlus, Loader2, CheckCircle2, XCircle, Square } from 'lucide-react';
+import { Send, Bot, User, Sparkles, AlertCircle, Info, Copy, Check, MessageSquarePlus, Loader2, CheckCircle2, XCircle, Square, Mic } from 'lucide-react';
 import type {
   MetrologyTelemetryFrame,
   MixActionProposal,
@@ -13,6 +13,7 @@ import { AgentRunner, type AgentStep, type AgentUsageStats } from '@mixing-buddy
 import { TokenUsageBadge } from './TokenUsageBadge.js';
 import { MarkdownRenderer } from './MarkdownRenderer.js';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { ProviderMode } from './ProviderSettings.js';
 
 function detectRoleFromUserInput(text: string): { scope: TargetScope; scopeLabel: string } | null {
@@ -113,15 +114,111 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [agentSteps, setAgentSteps] = useState<AgentStep[]>([]);
   const [usageStats, setUsageStats] = useState<AgentUsageStats | null>(null);
+
+  // Sprint 8: On-Device Speech Recognition (Speech.framework & Neural Engine)
+  const [isListening, setIsListening] = useState(false);
+  const [isOnDevice, setIsOnDevice] = useState<boolean | null>(null);
+  const [speechError, setSpeechError] = useState<string | null>(null);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const telemetryRef = useRef(telemetry);
   telemetryRef.current = telemetry;
 
+  // Listen to live transcripts and status from Swift/Rust speech engine
+  useEffect(() => {
+    let unlistenTranscript: (() => void) | undefined;
+    let unlistenStatus: (() => void) | undefined;
+    let unlistenError: (() => void) | undefined;
+
+    const setupSpeechListeners = async () => {
+      try {
+        unlistenTranscript = await listen<{ transcript: string; is_final: boolean }>(
+          'speech-transcript',
+          (event) => {
+            if (event.payload?.transcript) {
+              setInput(event.payload.transcript);
+            }
+          }
+        );
+
+        unlistenStatus = await listen<{ status: string; on_device?: boolean }>(
+          'speech-status',
+          (event) => {
+            if (event.payload?.status === 'listening') {
+              setIsListening(true);
+              if (typeof event.payload.on_device === 'boolean') {
+                setIsOnDevice(event.payload.on_device);
+              }
+            } else if (event.payload?.status === 'stopped') {
+              setIsListening(false);
+            }
+          }
+        );
+
+        unlistenError = await listen<{ error: string }>('speech-error', (event) => {
+          setSpeechError(event.payload?.error || 'Spracherkennungsfehler');
+          setIsListening(false);
+        });
+      } catch (err) {
+        console.warn('Failed to register speech listeners:', err);
+      }
+    };
+
+    setupSpeechListeners();
+
+    return () => {
+      if (unlistenTranscript) unlistenTranscript();
+      if (unlistenStatus) unlistenStatus();
+      if (unlistenError) unlistenError();
+    };
+  }, []);
+
+  const toggleDictation = async () => {
+    if (isListening) {
+      try {
+        await invoke('stop_speech_recognition');
+      } catch (e) {
+        console.warn('Failed to stop speech recognition:', e);
+      }
+      setIsListening(false);
+    } else {
+      setSpeechError(null);
+      const trackVocab = (tracks || []).map((t) => t.name).filter(Boolean);
+      const studioTerms = [
+        'Fader', 'Lautstärke', 'Pan', 'Panorama', 'Mute', 'Solo', 'Bypass',
+        'dB', 'Dezibel', 'EQ', 'Equalizer', 'Kompressor', 'Compressor', 'Limiter', 'Gate',
+        'Threshold', 'Ratio', 'Attack', 'Release', 'Gain', 'Makeup',
+        'Mitten', 'Bässe', 'Höhen', 'Subbass', 'Low Cut', 'High Cut', 'Low Shelf', 'High Shelf',
+        'ChromaVerb', 'Reverb', 'Hall', 'Delay', 'Echo', 'Sidechain', 'Bus', 'Send', 'Aux',
+        'Absenken', 'Anheben', 'Senke', 'Hebe', 'Cut', 'Boost', 'Räume auf',
+        'Spur', 'Kanal', 'Plugin', 'Slot', 'Insert'
+      ];
+      const vocabulary = Array.from(new Set([...trackVocab, ...studioTerms]));
+
+      try {
+        await invoke('start_speech_recognition', { vocabulary, locale: 'de-DE' });
+        setIsListening(true);
+      } catch (err: any) {
+        console.error('Failed to start speech recognition:', err);
+        setSpeechError(typeof err === 'string' ? err : err?.message || 'Fehler beim Start der Spracherkennung');
+        setIsListening(false);
+      }
+    }
+  };
+
   const handleCancel = async () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
+    }
+    if (isListening) {
+      try {
+        await invoke('stop_speech_recognition');
+      } catch (e) {
+        console.warn('Failed to stop speech recognition on cancel:', e);
+      }
+      setIsListening(false);
     }
     try {
       await invoke('daw_stop');
@@ -217,6 +314,15 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
   const handleSend = async () => {
     const query = input.trim();
     if (!query || isAnalyzing) return;
+
+    if (isListening) {
+      try {
+        await invoke('stop_speech_recognition');
+      } catch (e) {
+        console.warn('Failed to stop speech recognition on send:', e);
+      }
+      setIsListening(false);
+    }
 
     const userMsg: ChatMessage = {
       id: `msg_user_${Date.now()}`,
@@ -832,35 +938,79 @@ export const ChatConsole: React.FC<ChatConsoleProps> = ({
           </span>
         </div>
       ) : (
-        <div className="p-2 border-t border-darkBorder/70 bg-[#14161a] flex items-center gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={`Frag den Mixing Buddy (z. B. 'Hebe die Höhen an' oder 'Räume das Low-End auf')...`}
-            className="flex-1 bg-[#1a1c22] border border-darkBorder px-3 py-1.5 rounded text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
-          />
-          {isAnalyzing ? (
+        <div className="p-2 border-t border-darkBorder/70 bg-[#14161a] flex flex-col gap-1.5">
+          {speechError && (
+            <div className="flex items-center justify-between text-[11px] px-2 py-1 bg-red-950/40 border border-red-500/30 rounded text-red-300">
+              <span className="flex items-center gap-1">
+                <AlertCircle className="w-3 h-3 text-red-400 shrink-0" />
+                {speechError}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSpeechError(null)}
+                className="text-red-400 hover:text-red-200 text-xs px-1"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleCancel}
-              className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded flex items-center gap-1.5 text-xs font-semibold transition-colors shrink-0 shadow-sm"
-              title="Laufende Analyse und DAW-Wiedergabe sofort stoppen"
+              onClick={toggleDictation}
+              className={`p-1.5 rounded transition-all shrink-0 flex items-center gap-1.5 ${
+                isListening
+                  ? 'bg-red-500/20 text-red-400 border border-red-500/60 shadow-[0_0_12px_rgba(239,68,68,0.35)] animate-pulse'
+                  : 'bg-[#1a1c22] border border-darkBorder hover:border-slate-500 text-slate-400 hover:text-slate-200'
+              }`}
+              title={
+                isListening
+                  ? `Diktat aktiv (${isOnDevice ? 'Apple Silicon Neural Engine' : 'Apple Speech'}). Klick zum Stoppen.`
+                  : 'Sprachdiktat starten (Apple Neural Engine On-Device)'
+              }
             >
-              <Square className="w-3.5 h-3.5 fill-current" />
-              <span>Abbrechen</span>
+              <Mic className={`w-3.5 h-3.5 ${isListening ? 'text-red-400' : ''}`} />
+              {isListening && (
+                <span className="text-[10px] font-bold tracking-wider text-red-300 font-mono">REC</span>
+              )}
             </button>
-          ) : (
-            <button
-              onClick={handleSend}
-              disabled={!input.trim()}
-              className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white px-3 py-1.5 rounded flex items-center gap-1.5 text-xs font-semibold transition-colors shrink-0"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span>Senden</span>
-            </button>
-          )}
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                isListening
+                  ? 'Sprechen... Text wird in Echtzeit transkribiert'
+                  : `Frag den Mixing Buddy (z. B. 'Hebe die Höhen an' oder 'Räume das Low-End auf')...`
+              }
+              className={`flex-1 bg-[#1a1c22] border px-3 py-1.5 rounded text-xs text-slate-100 placeholder-slate-500 focus:outline-none transition-colors ${
+                isListening
+                  ? 'border-red-500/60 shadow-[0_0_8px_rgba(239,68,68,0.2)]'
+                  : 'border-darkBorder focus:border-blue-500'
+              }`}
+            />
+            {isAnalyzing ? (
+              <button
+                type="button"
+                onClick={handleCancel}
+                className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded flex items-center gap-1.5 text-xs font-semibold transition-colors shrink-0 shadow-sm"
+                title="Laufende Analyse und DAW-Wiedergabe sofort stoppen"
+              >
+                <Square className="w-3.5 h-3.5 fill-current" />
+                <span>Abbrechen</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={!input.trim()}
+                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:hover:bg-blue-600 text-white px-3 py-1.5 rounded flex items-center gap-1.5 text-xs font-semibold transition-colors shrink-0"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Senden</span>
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
