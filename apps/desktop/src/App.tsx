@@ -1274,31 +1274,22 @@ export const App: React.FC = () => {
     const dawLabel = isLogic ? 'Logic Pro' : 'Nuendo';
     const previousStatus = prop.status;
 
-    // Dynamischer Bar-Resolver für A/B Listen (kein hardcoded Takt 9!)
-    let startBar: number | undefined = (prop as any).startBar;
+    // Dynamischer Bar-Resolver für A/B Listen (kein hardcoded Takt!)
+    let explicitStartBar: number | undefined = (prop as any).startBar;
 
-    // Fallback A: Suche im Kartentitel oder der Beschreibung nach Taktangaben ("ab Takt 17", "Takt 25")
-    if (!startBar) {
+    // Fallback A: Suche im Kartentitel oder der Beschreibung nach expliziten Taktangaben ("ab Takt 17", "Takt 25")
+    if (!explicitStartBar) {
       const match = prop.title?.match(/(?:ab\s+Takt|Takt)\s+(\d+)/i) || 
                     (prop as any).description?.match(/(?:ab\s+Takt|Takt)\s+(\d+)/i) ||
                     prop.rationale?.match(/(?:ab\s+Takt|Takt)\s+(\d+)/i);
       if (match && match[1]) {
-        startBar = parseInt(match[1], 10);
+        explicitStartBar = parseInt(match[1], 10);
       }
     }
 
-    // Fallback B: Falls immer noch undefined, hole aktuellen Playhead aus Logic Pro
-    // oder nutze 1 als Default (NIEMALS hardcoded 9!)
-    if (!startBar) {
-      try {
-        const status: any = await invoke('daw_get_current_bar');
-        startBar = status?.bar ?? 1;
-      } catch (_) {
-        startBar = 1;
-      }
-    }
-    const effectiveStartBar: number = startBar ?? 1;
-    const endBar: number = (prop as any).endBar ?? (effectiveStartBar + 4);
+    const hasExplicitBar = typeof explicitStartBar === 'number' && explicitStartBar >= 1;
+    const effectiveStartBar: number = hasExplicitBar ? (explicitStartBar as number) : 0;
+    const endBar: number | undefined = (prop as any).endBar ?? (hasExplicitBar ? (explicitStartBar as number) + 4 : undefined);
 
     // Snapshot aller Parameter vor dem Umschalten zur deterministischen Wiederherstellung
     const auditionSnapshot = prop.deltas.map((delta) => ({
@@ -1316,17 +1307,23 @@ export const App: React.FC = () => {
       prev.map((p) => (p.id === id ? { ...p, status: 'auditioning' } : p))
     );
 
+    const locationLabel = hasExplicitBar ? ` (Takt ${effectiveStartBar}-${endBar})` : ' (an aktueller Abhörposition)';
+
     try {
       if (previousStatus === 'applied') {
         // ── A/B via Plugin-Bypass (bereits angewendete Karte) ──────────────
-        setChatLog(`🎧 A/B Audition: "${prop.title}" – Plugin-Bypass in ${dawLabel} umgeschaltet...`);
+        setChatLog(`🎧 A/B Audition: "${prop.title}" – Plugin-Bypass in ${dawLabel} umgeschaltet${locationLabel}...`);
 
-        // 1. Cycle-Bereich auf den Ziel-Takt setzen, Playhead positionieren und abspielen:
+        // Nur wenn explizit ein Takt angefragt wurde, Cycle/Playhead anpassen (ansonsten bestehenden Loop erhalten!)
+        if (hasExplicitBar && endBar) {
+          try {
+            await invoke('daw_set_cycle_region', { start: effectiveStartBar, end: endBar });
+          } catch (_) {}
+          try {
+            await invoke('daw_locate_bar', { bar: effectiveStartBar, keepCycle: true });
+          } catch (_) {}
+        }
         try {
-          await invoke('daw_set_cycle_region', { start: effectiveStartBar, end: endBar });
-        } catch (_) {}
-        try {
-          await invoke('daw_locate_bar', { bar: effectiveStartBar, keepCycle: true });
           await invoke('daw_play');
         } catch (playErr) {
           console.warn('[A/B] Playback-Start fehlgeschlagen:', playErr);
@@ -1345,14 +1342,18 @@ export const App: React.FC = () => {
         }
       } else {
         // ── A/B via Parameter-Preview (noch nicht angewendete Karte) ───────
-        setChatLog(`🎧 A/B Audition: "${prop.title}" (${prop.deltas.length} Änderungen) – 6s Vorschau in ${dawLabel} (Takt ${effectiveStartBar}-${endBar})...`);
+        setChatLog(`🎧 A/B Audition: "${prop.title}" (${prop.deltas.length} Änderungen) – 6s Vorschau in ${dawLabel}${locationLabel}...`);
 
-        // 1. Cycle-Bereich auf den Ziel-Takt setzen, Playhead positionieren und abspielen:
+        // Nur wenn explizit ein Takt angefragt wurde, Cycle/Playhead anpassen (ansonsten bestehenden Loop erhalten!)
+        if (hasExplicitBar && endBar) {
+          try {
+            await invoke('daw_set_cycle_region', { start: effectiveStartBar, end: endBar });
+          } catch (_) {}
+          try {
+            await invoke('daw_locate_bar', { bar: effectiveStartBar, keepCycle: true });
+          } catch (_) {}
+        }
         try {
-          await invoke('daw_set_cycle_region', { start: effectiveStartBar, end: endBar });
-        } catch (_) {}
-        try {
-          await invoke('daw_locate_bar', { bar: effectiveStartBar, keepCycle: true });
           await invoke('daw_play');
         } catch (playErr) {
           console.warn('[A/B] Playback-Start fehlgeschlagen:', playErr);

@@ -2289,15 +2289,12 @@ case "set-sidechain":
         }
     }
 
-    // If not found in rootMenu, traverse hierarchically
+    // If not found in rootMenu, traverse hierarchically or via deep submenu search
     if targetItem == nil {
         var currentMenu = rootMenu
+        var traversalFailed = false
         for (idx, seg) in segments.enumerated() {
             let isFinal = (idx == segments.count - 1)
-
-            let items = getAXChildren(currentMenu).filter {
-                (getAXString($0, kAXRoleAttribute as String) ?? "") == "AXMenuItem" && isVisibleItem($0)
-            }
 
             if let item = findMenuItem(menu: currentMenu, query: seg) {
                 if isFinal {
@@ -2305,29 +2302,27 @@ case "set-sidechain":
                     break
                 } else {
                     guard let nextMenu = getSubmenu(of: item, appElement: appElement) else {
-                        closeMenu(rootMenu)
-                        printJSON(["success": false, "error": "Submenu '\(seg)' could not be opened in Sidechain menu."])
-                        exit(0)
+                        traversalFailed = true
+                        break
                     }
                     currentMenu = nextMenu
                 }
             } else {
-                // Fallback for single segment: recursively check submenus
-                if segments.count == 1 {
-                    for it in items {
-                        if let sub = getSubmenu(of: it, appElement: appElement) {
-                            if let found = findMenuItem(menu: sub, query: seg) {
-                                targetItem = found
-                                break
-                            }
-                        }
-                    }
-                    if targetItem != nil { break }
-                }
+                traversalFailed = true
+                break
+            }
+        }
 
-                closeMenu(rootMenu)
-                printJSON(["success": false, "error": "Sidechain source '\(seg)' not found in menu."])
-                exit(0)
+        // Deep Search Fallback: If hierarchical path failed (e.g. track was under Instrument instead of Audio),
+        // scan all top-level submenus (Audio, Instrument, Bus, Inputs) for leafSegment!
+        if targetItem == nil || traversalFailed {
+            for it in rootItems {
+                if let sub = getSubmenu(of: it, appElement: appElement) {
+                    if let found = findMenuItem(menu: sub, query: leafSegment) {
+                        targetItem = found
+                        break
+                    }
+                }
             }
         }
     }

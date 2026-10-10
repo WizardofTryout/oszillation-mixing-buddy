@@ -1135,19 +1135,28 @@ export class AgentRunner {
 
     let historyContext = '';
     if (context?.recentMessages && context.recentMessages.length > 0) {
+      // Rolling Compact Memory: nur die letzten 2-3 relevanten Nachrichten kompakt einbinden
+      const trimmedRecent = context.recentMessages.slice(-3);
       historyContext =
-        `PREVIOUS CONVERSATION HISTORY:\n` +
-        context.recentMessages
-          .map((m) => `${m.sender === 'user' ? 'Engineer' : 'Assistant'}: "${m.text.slice(0, 300)}"`)
+        `COMPACT WORKING MEMORY (Recent Dialog Context):\n` +
+        trimmedRecent
+          .map((m) => `${m.sender === 'user' ? 'Engineer' : 'Assistant'}: "${m.text.slice(0, 160)}"`)
           .join('\n') +
         `\n\n`;
     }
+
+    const detectedDrums = compactStrips?.find((t) => /drum|kick|beat|moreki|motown/i.test(t.name))?.name;
+    const detectedBass = compactStrips?.find((t) => /bass|sub|foundation/i.test(t.name))?.name;
+    const dynamicStemHint = (detectedDrums && detectedBass)
+      ? `- Dynamic Low-End Relationship: Trigger '${detectedDrums}' -> Ducking Target '${detectedBass}' via 'sidechainRoute'.\n`
+      : '';
 
     const mixDirective =
       `CRITICAL MIXING DIRECTIVE (MANDATORY):\n` +
       `- You MUST generate a comprehensive, professional ActionCard via \`propose_mix_adjustment\` with multiple discrete deltas (3 to 6 targeted deltas) distributed across the actual tracks and insert plugins in the session (Channel EQ, Compressor, Fader, Pan, Sidechain).\n` +
       `- NEVER propose only a master fader boost! The master fader ('Stereo Out') MUST stay <= 0.0 dB.\n` +
-      `- To achieve the target loudness and frequency envelope, balance the stems (drums, bass, keys), carve clashing frequencies via Channel EQ, control dynamics via Compressor, and configure 'sidechainRoute' between Kick and Bass where appropriate!\n`;
+      `- To achieve the target loudness and frequency envelope, balance the stems across the session, carve clashing frequencies via Channel EQ, control dynamics via Compressor, and configure 'sidechainRoute' where appropriate!\n` +
+      dynamicStemHint;
 
     const initialUserText =
       historyContext +
@@ -1472,6 +1481,22 @@ function buildAgentSystemPrompt(context?: MixAnalysisContext): string {
   const activeTrack = context?.activeMeterTrack || (activeScope === 'mix_bus' ? 'Stereo Out' : 'Active Channel');
   const isMaster = activeScope === 'mix_bus';
 
+  let skillDirectives = '';
+  if (context?.activeSkill) {
+    const sk = context.activeSkill;
+    skillDirectives =
+      `\n## ACTIVE MIXING SKILL: "${sk.name}" (${sk.version}, Category: ${sk.category.toUpperCase()})\n` +
+      `- ⭐ QUICKSTART DIRECTIVE: "${sk.prompts.quickstart}"\n` +
+      `- 🛠️ WORKSHOP DIRECTIVE: "${sk.prompts.workshop}"\n` +
+      `- 🎯 METROLOGY TARGETS: Integrated LUFS: ${sk.metrologyTargets.integratedLufs.toFixed(1)} LUFS (Toleranz: ±${sk.metrologyTargets.toleranceLufs.toFixed(1)} LUFS), Crest: ${sk.metrologyTargets.crestFactor.min.toFixed(1)}-${sk.metrologyTargets.crestFactor.max.toFixed(1)} dB, Max True Peak: ${sk.metrologyTargets.maxTruePeakDb.toFixed(1)} dBTP\n` +
+      (sk.preferredChain && sk.preferredChain.length > 0
+        ? `- 🎛️ PREFERRED PROCESSING CHAIN:\n` +
+          sk.preferredChain
+            .map((slot, i) => `  ${i + 1}. [${slot.slotType.toUpperCase()}] ${slot.preferredPluginHint || 'DAW Plugin'}: ${slot.typicalRules.join('; ')}`)
+            .join('\n') + '\n'
+        : '');
+  }
+
   const scopeSafeguards = isMaster
     ? `## ACTIVE MONITORING POINT & HOLISTIC SESSION MIXING RULES:\n` +
       `ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${activeScope})\n` +
@@ -1480,13 +1505,13 @@ function buildAgentSystemPrompt(context?: MixAnalysisContext): string {
       `  * Der Master-Fader dient dem Headroom und darf NIEMALS über 0.0 dB angehoben werden (Acoustic Shock Shield).\n` +
       `- Um den Ziel-Sound (LUFS, Frequenzbalance, Dichte, Punch) zu formen, MUSST DU DIE EINZELSPUREN (Stems) und deren Insert-Plugins aufeinander abstimmen!\n` +
       `- Erstelle EINE UMFANGREICHE, GANZHEITLICHE ACTIONCARD mit 3 bis 6 aufeinander abgestimmten Anpassungen über die echten Spuren und Plugins im Projekt:\n` +
-      `  1. Einzelspur-Balance & Panning: Lautstärke (fader_db) und Panorama (pan) der konkurrierenden Spuren (z. B. Drums, Bass, Keys) abstimmen.\n` +
+      `  1. Einzelspur-Balance & Panning: Lautstärke (fader_db) und Panorama (pan) der Spuren (Drums/Percussion, Bass, Harmonie/Keys, Vocals) abstimmen.\n` +
       `  2. Frequenzbereinigung (Channel EQ):\n` +
-      `     * High-Pass Filter (low_cut_frequency: 80-120 Hz) auf Keys/Klavier ('Studio Grand'), Gitarren und Vocals, um den Sub-Bass für Kick und Bass freizuschaufeln.\n` +
-      `     * Schlamm-Absenkung (peak_1_gain oder peak_2_gain bei 250-400 Hz) auf basslastigen Spuren um -1.5 bis -3.0 dB.\n` +
+      `     * High-Pass Filter (low_cut_frequency: 80-120 Hz) auf Tasteninstrumenten, Gitarren und Vocals, um den Sub-Bassbereich für Kick und Bass freizuschaufeln.\n` +
+      `     * Mulm-/Resonanz-Absenkung (peak_1_gain oder peak_2_gain bei 250-400 Hz) auf basslastigen oder dichten Spuren um -1.5 bis -3.0 dB.\n` +
       `     * Präsenz/Air dezent anheben (peak_3_gain oder high_shelf_gain bei 3-10 kHz).\n` +
       `  3. Dynamik & Verdichtung (Compressor): Threshold (-12 bis -20 dB), Ratio (2:1 bis 4:1) und Attack/Release auf Drums und Bass anpassen.\n` +
-      `  4. Sidechain-Ducking & Maskenreduktion: Wenn Kick/Drums ('Motown Revisited Kit') und Bass ('Simple Foundation') existieren, schlage Sidechain-Ducking vor via 'sidechainRoute' (Receiver: Bass-Kompressor, Trigger: Kick/Drums)!\n`
+      `  4. Sidechain-Ducking & Maskenreduktion: Wenn Kick/Drums und Bass im Projekt existieren, schlage Sidechain-Ducking vor via 'sidechainRoute' (Receiver: Bass-Kompressor, Trigger: Kick/Drums)!\n`
     : `## ACTIVE MONITORING POINT & SCOPE SAFEGUARDS:\n` +
       `ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${activeScope})\n` +
       `- KRITISCHE REGEL: Du hörst aktuell NUR DIESES EINZELSIGNAL / DIESE SUBGRUPPE ('${activeTrack}')!\n` +
@@ -1497,6 +1522,8 @@ function buildAgentSystemPrompt(context?: MixAnalysisContext): string {
   return (
     MIXING_BUDDY_SYSTEM_PROMPT +
     `\n\n` +
+    skillDirectives +
+    `\n` +
     scopeSafeguards +
     `\n## AGENTIC GOVERNOR & TURN RULES (STRICTLY ENFORCED)\n\n` +
     `1. TURN-BUDGET: You have a strict budget of maximum 4 turns (maxTurns = 4).\n` +

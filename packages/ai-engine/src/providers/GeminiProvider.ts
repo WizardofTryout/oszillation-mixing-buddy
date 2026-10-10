@@ -683,23 +683,20 @@ export function normalizeProposal(
     const resolvedTarget = resolveTrackDescriptor(targetTrackName || '', tracks);
     const finalTargetName = resolvedTarget ? resolvedTarget.name : targetTrackName || 'Bass';
 
-    // Resolve source track if it's "Audio > MoReKi" etc.
+    // Resolve source track cleanly (e.g. "Motown Revisited Kit", "Bus 1", etc.)
     let finalSourcePath = sidechainRoute?.sourcePath;
     if (!finalSourcePath) {
       const kickTrack = tracks.find((t) => t.name.toLowerCase().includes('kick') || t.name.toLowerCase().includes('motown') || t.name.toLowerCase().includes('drum'));
-      finalSourcePath = kickTrack ? `Audio > ${kickTrack.name}` : 'Bus > Bus 1';
+      finalSourcePath = kickTrack ? kickTrack.name : 'Bus 1';
     } else if (finalSourcePath.includes('>')) {
       const parts = finalSourcePath.split('>');
-      const category = parts[0].trim();
       const rawSource = parts.slice(1).join('>').trim();
       const resolvedSource = resolveTrackDescriptor(rawSource, tracks);
-      if (resolvedSource) {
-        finalSourcePath = `${category} > ${resolvedSource.name}`;
-      }
+      finalSourcePath = resolvedSource ? resolvedSource.name : rawSource;
     } else {
       const resolvedSource = resolveTrackDescriptor(finalSourcePath, tracks);
       if (resolvedSource) {
-        finalSourcePath = `Audio > ${resolvedSource.name}`;
+        finalSourcePath = resolvedSource.name;
       }
     }
 
