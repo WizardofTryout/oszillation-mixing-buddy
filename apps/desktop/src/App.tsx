@@ -42,7 +42,7 @@ import { SkillWizardModal } from './components/SkillWizardModal.js';
 import { SessionManagerModal } from './components/SessionManagerModal.js';
 import { MemoryInspectorModal } from './components/MemoryInspectorModal.js';
 import { useDawSessionRecall } from './hooks/useDawSessionRecall.js';
-import { Sliders, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu, Search, FolderArchive } from 'lucide-react';
+import { Sliders, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu, Search, FolderArchive, Brain } from 'lucide-react';
 
 const SatelliteMiniMeter: React.FC<{ lufs?: number }> = ({ lufs }) => {
   const level = lufs ?? -100;
@@ -182,10 +182,11 @@ export const App: React.FC = () => {
   const [activeReferenceProfile, setActiveReferenceProfile] = useState<ReferenceTrackProfile | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Sprint 4: Session Manager & Memory Vault Persistence State
+  // Sprint 4 & 6: Session Manager & Memory Vault Persistence State
   const [sessionUuid, setSessionUuid] = useState<string>(() => `proj_${Date.now()}`);
   const [sessionName, setSessionName] = useState<string>('Unbenannte Session');
   const [isSessionModalOpen, setIsSessionModalOpen] = useState<boolean>(false);
+  const [isMemoryModalOpen, setIsMemoryModalOpen] = useState<boolean>(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -2150,18 +2151,22 @@ export const App: React.FC = () => {
               type="button"
               onClick={() => setIsSessionModalOpen(true)}
               className="flex items-center gap-1.5 text-xs font-medium text-cyan-300 hover:text-white bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 px-2.5 py-1 rounded transition-all shadow-sm cursor-pointer shrink-0"
-              title={`Session Memory & Vault: ${sessionName}`}
+              title={`Session-Verwaltung: ${sessionName}`}
             >
               <FolderArchive className="w-3.5 h-3.5 text-cyan-400" />
               <span className="truncate max-w-[120px]">{sessionName}</span>
             </button>
 
-            {/* Sprint 6: Memory Inspector Badge & Timeline */}
-            <MemoryInspectorModal
-              sessionName={sessionName}
-              actionJournal={actionJournal}
-              onRestoreProposal={handleProposalFromChat}
-            />
+            {/* Sprint 6: Memory Inspector Toolbar Button */}
+            <button
+              type="button"
+              onClick={() => setIsMemoryModalOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-medium text-purple-300 hover:text-white bg-purple-950/50 hover:bg-purple-900/60 border border-purple-500/40 px-2.5 py-1 rounded transition-all shadow-sm cursor-pointer shrink-0"
+              title={`Studio Memory & Action Journal: ${actionJournal.getAllEntries().length} Aktionen`}
+            >
+              <Brain className="w-3.5 h-3.5 text-purple-400" />
+              <span className="truncate max-w-[130px]">{sessionName} ({actionJournal.getAllEntries().length})</span>
+            </button>
           </div>
 
           {/* Pinned Abhörpunkt-Garantie & Satelliten-Manager */}
@@ -2596,10 +2601,7 @@ export const App: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => {
-                      handleLearnActivePlugin();
-                      setIsMobileMenuOpen(false);
-                    }}
+                    onClick={() => { handleLearnActivePlugin(); setIsMobileMenuOpen(false); }}
                     className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-500/30 text-emerald-300 transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2 font-medium">
@@ -2611,10 +2613,7 @@ export const App: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => {
-                      handleOpenVaultDrawer();
-                      setIsMobileMenuOpen(false);
-                    }}
+                    onClick={() => { handleOpenVaultDrawer(); setIsMobileMenuOpen(false); }}
                     className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-slate-950/60 hover:bg-slate-800 border border-slate-800 text-slate-200 transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2 font-medium">
@@ -2628,10 +2627,7 @@ export const App: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsSkillModalOpen(true);
-                      setIsMobileMenuOpen(false);
-                    }}
+                    onClick={() => { setIsSkillModalOpen(true); setIsMobileMenuOpen(false); }}
                     className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-amber-950/40 hover:bg-amber-900/50 border border-amber-500/30 text-amber-300 transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2 font-medium">
@@ -2645,18 +2641,29 @@ export const App: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setIsSessionModalOpen(true);
-                      setIsMobileMenuOpen(false);
-                    }}
+                    onClick={() => { setIsSessionModalOpen(true); setIsMobileMenuOpen(false); }}
                     className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-500/30 text-cyan-300 transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2 font-medium">
                       <FolderArchive className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>💾 Session Memory & Vault</span>
+                      <span>📁 Session-Verwaltung</span>
                     </div>
                     <span className="text-[11px] font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-600/30 truncate max-w-[90px]">
                       {sessionName}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => { setIsMemoryModalOpen(true); setIsMobileMenuOpen(false); }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-purple-950/40 hover:bg-purple-900/50 border border-purple-500/30 text-purple-300 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <Brain className="w-3.5 h-3.5 text-purple-400" />
+                      <span>🧠 Session-Gedächtnis</span>
+                    </div>
+                    <span className="text-[11px] font-mono text-purple-400 bg-purple-950/60 px-2 py-0.5 rounded border border-purple-600/30">
+                      {actionJournal.getAllEntries().length}
                     </span>
                   </button>
                 </div>
@@ -2704,31 +2711,20 @@ export const App: React.FC = () => {
 
       <SkillManagerModal
         isOpen={isSkillModalOpen}
-        onClose={() => {
-          setIsSkillModalOpen(false);
-          refreshSkillsCount();
-        }}
+        onClose={() => { setIsSkillModalOpen(false); refreshSkillsCount(); }}
         onSelectSkill={(skill) => {
           setActiveSkill(skill);
           setChatLog(`⭐ Mixing Skill "${skill.name}" aktiviert (${skill.metrologyTargets.integratedLufs} LUFS, Kategorie: ${skill.category}).`);
         }}
-        onStartSynthesisWizard={() => {
-          setIsSkillModalOpen(false);
-          setIsSkillWizardOpen(true);
-        }}
+        onStartSynthesisWizard={() => { setIsSkillModalOpen(false); setIsSkillWizardOpen(true); }}
       />
 
       <SkillWizardModal
         isOpen={isSkillWizardOpen}
-        onClose={() => {
-          setIsSkillWizardOpen(false);
-          refreshSkillsCount();
-        }}
+        onClose={() => { setIsSkillWizardOpen(false); refreshSkillsCount(); }}
         onSkillCreatedAndActivated={(skill) => {
           setActiveSkill(skill);
-          setChatLog(
-            `🚀 Neuer KI-synthetisierter Skill "${skill.name}" (${skill.metrologyTargets.integratedLufs.toFixed(1)} LUFS, Kategorie: ${skill.category}) erfolgreich gespeichert & im Studio aktiviert.`
-          );
+          setChatLog(`🚀 Neuer KI-synthetisierter Skill "${skill.name}" (${skill.metrologyTargets.integratedLufs.toFixed(1)} LUFS, Kategorie: ${skill.category}) erfolgreich gespeichert & im Studio aktiviert.`);
           refreshSkillsCount();
         }}
         apiKey={apiKey}
@@ -2747,6 +2743,14 @@ export const App: React.FC = () => {
         onUpdateSessionName={(name: string) => { setSessionName(name); triggerAutoSave(name); }}
         actionsCount={actionJournal.getAllEntries().length}
         recentTurnsCount={dialogueMemory.getRecentTurns().length}
+      />
+
+      <MemoryInspectorModal
+        isOpen={isMemoryModalOpen}
+        onClose={() => setIsMemoryModalOpen(false)}
+        sessionName={sessionName}
+        actionJournal={actionJournal}
+        onRestoreProposal={handleProposalFromChat}
       />
 
       {/* Main Studio Workspace */}
