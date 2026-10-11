@@ -98,22 +98,28 @@ Das Monorepo ruht strikt auf vier voneinander getrennten Schichten. Code und Log
 
 ---
 
-## 📏 Modulare Code-Hygiene, OOP-Architektur & 3.000 LOC-Regel (CRITICAL)
+## 📐 Adaptive Modularity & Elastic LOC Governance (CRITICAL)
 
-Die Regel `≤ 3.000 Zeilen Code pro Datei` (`./scripts/lint-loc.sh`) dient **ausschließlich der Lesbarkeit, Wartbarkeit und sauberen Modularisierung**.
+Das Projekt folgt dem graph-gestützten **2-Zonen-Modell** (`./scripts/lint-loc.sh`), um sowohl unkontrollierte Monolithen als auch schädliche Mikro-Zersplitterung (Premature Fragmentation) dauerhaft zu verhindern:
 
-1. **Absolutes Verbot von Code- und Formatierungs-Quetschen:**
-   - Es ist **STRIKT VERBOTEN**, Skripte (wie Python-Snippets) auszuführen, die Leerzeilen entfernen, Kommentare löschen, Fehlerbehandlungen eindampfen oder Guards streichen, um krampfhaft unter 3.000 Zeilen zu landen.
-2. **Objektorientiertes Splitten statt God-Objects (Single Responsibility Principle):**
-   - Sobald eine Datei bzw. ein Objekt ca. **2.800–2.900 Zeilen** erreicht oder zu viele Aufgaben bündelt, MUSS sie modular in spezialisierte Teil-Dateien und Klassen aufgeteilt werden:
-     * **In Swift (`packages/daw-adapters/src/logic/swift/`):**
-       - `LogicAXTransport.swift` (Play, Stop, Locate, Cycle- & Loop-Handling)
-       - `LogicAXMixer.swift` (Fader, Pan, Channel-Strips, Inserts, Sends)
-       - `LogicAXPlugins.swift` (Plugin-Scans, Parameter, Sidechain, Menü-Traversierung)
-       *(Hinweis: Alle Swift-Dateien im selben Target/Modul teilen sich denselben Namespace und können direkt aufeinander zugreifen – keine Redundanz nötig!)*
-     * **In Rust & TypeScript:**
-       - Saubere Auslagerung in Submodule (`mod transport;`, `import { ... }`).
-3. **Erhaltungs-Garantie:**
+1. **Das 2-Zonen-Modell (Soft 3.000 / Hard 4.500):**
+   - **Zone 1 – Standard-Module (≤ 3.000 LOC):** Zielkorridor für alle Komponenten, Controller, Adapter, Audio-DSP-Klassen und Rust-Submodule. Status: Grün.
+   - **Zone 2 – Elastischer Orchestrator-Korridor (3.001 – 4.500 LOC):** Vorbehalten für deklarierte State-Orchestratoren und Event-Hubs (`App.tsx`, `lib.rs`), bei denen eine künstliche Aufspaltung den Lebenszyklus zerreißen würde. Solche Dateien tragen in den ersten 10 Zeilen eine Ausnahmemarkierung:
+     `// @loc-exemption: <Begründung>`
+     *Exit-Code: 0 (Grün / Informative Meldung).*
+   - **Zone 3 – Absolute Monolithen-Schranke (> 4.500 LOC):** Roter Stopp-Fehler (*Exit-Code: 1*). Gilt unerbittlich für das gesamte Repository.
+
+2. **Absolutes Verbot von Code-Quetschen & Silent Stripping:**
+   - Es ist **STRIKT VERBOTEN**, Skripte oder Hacks auszuführen, die Leerzeilen entfernen, Kommentare löschen, Fehlerbehandlungen eindampfen oder Sicherheits-Guards streichen, um krampfhaft unter Zeilengrenzen zu landen.
+
+3. **Verbot von künstlicher Mikro-Zersplitterung (Premature Fragmentation):**
+   - Es ist verboten, künstliche 30-Zeilen-Hilfsdateien für Trivialcode zu erzeugen, die den React-Lebenszyklus oder State-Zusammenhang zerreißen, nur um Zeilenkosmetik zu betreiben.
+   - Eine modulare Aufteilung erfolgt **inhalts- und graph-gestützt**:
+     * Wenn `find_large_functions_tool` Monster-Funktionen (> 150 Zeilen) identifiziert.
+     * Wenn `get_architecture_overview_tool` High-Coupling-Warnungen oder Domänen-Vermischungen meldet.
+     * Wenn eine logische Teilkomponente (wie Modals, Dialoge, Scopes) autark isoliert werden kann.
+
+4. **Erhaltungs-Garantie:**
    - Jede funktionierende Funktion, jede Sicherheitsabfrage und jede Fehlerbehandlung bleibt beim modularen Splitten zu 100 % erhalten.
 
 ---

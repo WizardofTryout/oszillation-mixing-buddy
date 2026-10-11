@@ -1,3 +1,4 @@
+// @loc-exemption: Zentraler Tauri IPC Hub & Command-Registry (State-Management, Hardware-Bridge & Dispatcher)
 pub mod daw_detector;
 pub mod ipc_server;
 pub mod licensing;

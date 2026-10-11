@@ -1,3 +1,4 @@
+// @loc-exemption: Zentraler React HUD State- & Event-Orchestrator (UI-Lebenszyklus, WebSocket-Sync & Modals)
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   type MetrologyTelemetryFrame,
