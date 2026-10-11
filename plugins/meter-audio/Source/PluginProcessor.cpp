@@ -105,10 +105,14 @@ PluginProcessor::PluginProcessor()
     telemetryClient.setTrackIdentity(mInstanceId, mTrackName);
 
     // Register listener for project context changes from the Desktop HUD
-    telemetryClient.setContextReceivedCallback([this](const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs) {
+    telemetryClient.setContextReceivedCallback([this](const juce::String& sessionUuid, const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs) {
         std::lock_guard<std::mutex> lock(contextMutex);
-        currentTargetScope = scope;
-        currentGenreProfile = genre;
+        if (sessionUuid.isNotEmpty())
+            currentSessionUuid = sessionUuid;
+        if (scope.isNotEmpty())
+            currentTargetScope = scope;
+        if (genre.isNotEmpty())
+            currentGenreProfile = genre;
         currentCustomNotes = notes;
         currentTargetLufs = lufs;
     });
@@ -187,12 +191,13 @@ juce::AudioProcessorEditor* PluginProcessor::createEditor()
 
 void PluginProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    // DAW Project Persistence (Sprint 3)
+    // DAW Project Persistence (Sprint 3 & Sprint 5)
     // Saved into .logicx or .cpr project file when user saves in DAW (Cmd + S)
     juce::XmlElement xml("MixingBuddyMeterSettings");
     xml.setAttribute("version", 1);
     {
         std::lock_guard<std::mutex> lock(contextMutex);
+        xml.setAttribute("sessionUuid", currentSessionUuid);
         xml.setAttribute("targetScope", currentTargetScope);
         xml.setAttribute("genreProfile", currentGenreProfile);
         xml.setAttribute("customNotes", currentCustomNotes);
@@ -207,6 +212,7 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
     std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
     if (xmlState != nullptr && xmlState->hasTagName("MixingBuddyMeterSettings"))
     {
+        juce::String sessionUuid;
         juce::String scope;
         juce::String genre;
         juce::String notes;
@@ -214,11 +220,13 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
 
         {
             std::lock_guard<std::mutex> lock(contextMutex);
+            currentSessionUuid = xmlState->getStringAttribute("sessionUuid", "");
             currentTargetScope = xmlState->getStringAttribute("targetScope", "mix_bus");
             currentGenreProfile = xmlState->getStringAttribute("genreProfile", "pop_radio");
             currentCustomNotes = xmlState->getStringAttribute("customNotes", "");
             currentTargetLufs = xmlState->getDoubleAttribute("targetLufs", -12.0);
 
+            sessionUuid = currentSessionUuid;
             scope = currentTargetScope;
             genre = currentGenreProfile;
             notes = currentCustomNotes;
@@ -226,20 +234,28 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes)
         }
 
         // Broadcast restored context to the Desktop Companion HUD
-        telemetryClient.sendProjectContextSync(scope, genre, notes, lufs);
+        telemetryClient.sendProjectContextSync(sessionUuid, scope, genre, notes, lufs);
     }
 }
 
-void PluginProcessor::setProjectContext(const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs)
+void PluginProcessor::setProjectContext(const juce::String& sessionUuid, const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs)
 {
     {
         std::lock_guard<std::mutex> lock(contextMutex);
+        if (sessionUuid.isNotEmpty())
+            currentSessionUuid = sessionUuid;
         currentTargetScope = scope;
         currentGenreProfile = genre;
         currentCustomNotes = notes;
         currentTargetLufs = lufs;
     }
-    telemetryClient.sendProjectContextSync(scope, genre, notes, lufs);
+    telemetryClient.sendProjectContextSync(sessionUuid, scope, genre, notes, lufs);
+}
+
+juce::String PluginProcessor::getSessionUuid() const
+{
+    std::lock_guard<std::mutex> lock(contextMutex);
+    return currentSessionUuid;
 }
 
 juce::String PluginProcessor::getTargetScope() const

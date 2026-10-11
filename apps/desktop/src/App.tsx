@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   type MetrologyTelemetryFrame,
   type MeterSatellite,
@@ -40,6 +40,7 @@ import {
 import { SkillManagerModal } from './components/SkillManagerModal.js';
 import { SkillWizardModal } from './components/SkillWizardModal.js';
 import { SessionManagerModal } from './components/SessionManagerModal.js';
+import { useDawSessionRecall } from './hooks/useDawSessionRecall.js';
 import { Sliders, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu, Search, FolderArchive } from 'lucide-react';
 
 const SatelliteMiniMeter: React.FC<{ lufs?: number }> = ({ lufs }) => {
@@ -243,15 +244,7 @@ export const App: React.FC = () => {
     return savedPath;
   };
 
-  const handleLoadSessionFile = async (rawContent?: string): Promise<void> => {
-    let contentToParse = rawContent;
-    if (!contentToParse) {
-      const res = await invoke<{ content: string; file_path: string }>('load_session_file');
-      contentToParse = res.content;
-    }
-    const parsed = JSON.parse(contentToParse);
-    const validated = validateAndMigrateSession(parsed);
-
+  const handleApplySessionData = useCallback((validated: OmbSessionFile) => {
     setSessionUuid(validated.sessionUuid);
     setSessionName(validated.sessionName);
     actionJournal.deserialize({
@@ -269,6 +262,24 @@ export const App: React.FC = () => {
       setCustomNotes(validated.customNotes);
     }
     setLastSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  }, []);
+
+  // Sprint 5: Automatischer DAW-Recall via JUCE Plugin State
+  const { recallBanner } = useDawSessionRecall({
+    activeSessionUuid: sessionUuid,
+    onRestoreSession: handleApplySessionData,
+    onNotify: setChatLog
+  });
+
+  const handleLoadSessionFile = async (rawContent?: string): Promise<void> => {
+    let contentToParse = rawContent;
+    if (!contentToParse) {
+      const res = await invoke<{ content: string; file_path: string }>('load_session_file');
+      contentToParse = res.content;
+    }
+    const parsed = JSON.parse(contentToParse);
+    const validated = validateAndMigrateSession(parsed);
+    handleApplySessionData(validated);
   };
 
   const handleNewSession = async (): Promise<void> => {
@@ -306,30 +317,14 @@ export const App: React.FC = () => {
           try {
             const parsed = JSON.parse(vaultContent);
             const validated = validateAndMigrateSession(parsed);
-            setSessionUuid(validated.sessionUuid);
-            setSessionName(validated.sessionName);
-            actionJournal.deserialize({
-              entries: validated.actionJournal,
-              sidechains: validated.activeSidechains
-            });
-            dialogueMemory.deserialize(validated.dialogueHistory);
-            if (validated.learnedTrackScopes && Object.keys(validated.learnedTrackScopes).length > 0) {
-              setLearnedTrackScopes(validated.learnedTrackScopes);
-            }
-            if (validated.targetProfile) {
-              setGenreProfile(validated.targetProfile as GenreProfileId);
-            }
-            if (validated.customNotes !== undefined) {
-              setCustomNotes(validated.customNotes);
-            }
-            setLastSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            handleApplySessionData(validated);
           } catch (e) {
             console.warn('[SessionVault] Konnte letzte Session nicht laden:', e);
           }
         }
       })
       .catch((e) => console.warn('[SessionVault] Fehler bei get_last_session_vault:', e));
-  }, []);
+  }, [handleApplySessionData]);
 
   // Phase 2A, 2C & Learning: Active Meter Track, Auto-Scope & Acoustic Classification State
   const [activeMeterTrack, setActiveMeterTrack] = useState<string | null>(null);
@@ -565,6 +560,7 @@ export const App: React.FC = () => {
   ) => {
     const payload = {
       type: 'set_project_context',
+      sessionUuid,
       targetScope: scope,
       genreProfile: genre,
       customNotes: notes,
@@ -2752,6 +2748,13 @@ export const App: React.FC = () => {
 
       {/* Main Studio Workspace */}
       <main className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+        {recallBanner && (
+          <div className="bg-cyan-950/80 border border-cyan-500/40 rounded-lg px-3 py-2 text-xs text-cyan-200 flex items-center justify-between shadow-md">
+            <span className="font-medium">{recallBanner}</span>
+            <span className="text-[10px] text-cyan-400 font-mono uppercase tracking-wider">DAW Recall</span>
+          </div>
+        )}
+
         {/* System Settings & Provider Status (Collapsible Accordion) */}
         {!isAiConfigOpen ? (
           <div className="bg-[#14161a] border border-darkBorder/70 rounded-lg px-3.5 py-2 flex items-center justify-between shadow-sm transition-all">

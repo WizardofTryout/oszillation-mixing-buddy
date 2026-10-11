@@ -50,10 +50,14 @@ void TelemetryClient::setContextReceivedCallback(ContextCallback cb)
     onContextReceived = std::move(cb);
 }
 
-void TelemetryClient::sendProjectContextSync(const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs)
+void TelemetryClient::sendProjectContextSync(const juce::String& sessionUuid, const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs)
 {
     juce::String json = "{";
     json += "\"type\":\"project_context_sync\",";
+    if (sessionUuid.isNotEmpty())
+    {
+        json += "\"sessionUuid\":\"" + sessionUuid.replace("\"", "\\\"") + "\",";
+    }
     json += "\"targetScope\":\"" + scope.replace("\"", "\\\"") + "\",";
     json += "\"genreProfile\":\"" + genre.replace("\"", "\\\"") + "\",";
     json += "\"customNotes\":\"" + notes.replace("\"", "\\\"") + "\",";
@@ -313,12 +317,13 @@ juce::String TelemetryClient::buildJsonPayload(uint64_t seq)
 
 void TelemetryClient::parseIncomingMessage(const juce::String& msg)
 {
-    // Extract targetScope, genreProfile, customNotes, targetLufs if present
+    // Extract targetScope, genreProfile, customNotes, targetLufs, sessionUuid if present
     if (msg.contains("set_project_context") || msg.contains("project_context_sync"))
     {
         auto parsed = juce::JSON::parse(msg);
         if (parsed.isObject())
         {
+            juce::String sessionUuid = parsed["sessionUuid"].toString();
             juce::String scope = parsed["targetScope"].toString();
             juce::String genre = parsed["genreProfile"].toString();
             juce::String notes = parsed["customNotes"].toString();
@@ -330,9 +335,9 @@ void TelemetryClient::parseIncomingMessage(const juce::String& msg)
                 cb = onContextReceived;
             }
 
-            if (cb && scope.isNotEmpty() && genre.isNotEmpty())
+            if (cb && (scope.isNotEmpty() || sessionUuid.isNotEmpty()))
             {
-                cb(scope, genre, notes, lufs);
+                cb(sessionUuid, scope, genre, notes, lufs);
             }
         }
     }

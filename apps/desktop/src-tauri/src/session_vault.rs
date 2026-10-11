@@ -328,3 +328,18 @@ pub async fn list_session_vaults() -> Result<Vec<SessionVaultSummary>, String> {
     result.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     Ok(result)
 }
+
+/// Liest den Vault einer spezifischen Session anhand ihrer UUID aus (für DAW-Recall)
+#[tauri::command]
+pub async fn get_session_vault(session_uuid: String) -> Result<Option<String>, String> {
+    let vault_dir = get_project_vault_dir(&session_uuid)?;
+    let vault_file = vault_dir.join("vault.json");
+    if vault_file.exists() {
+        let content = fs::read_to_string(&vault_file)
+            .map_err(|e| format!("Fehler beim Lesen des Vaults für '{}': {}", session_uuid, e))?;
+        // Auch als zuletzt aktive Session vermerken
+        let _ = record_last_session_uuid(&session_uuid);
+        return Ok(Some(content));
+    }
+    Ok(None)
+}

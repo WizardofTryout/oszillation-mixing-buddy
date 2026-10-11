@@ -17,7 +17,7 @@ namespace mixing_buddy
 class TelemetryClient : public juce::Thread
 {
 public:
-    using ContextCallback = std::function<void(const juce::String&, const juce::String&, const juce::String&, double)>;
+    using ContextCallback = std::function<void(const juce::String& /*sessionUuid*/, const juce::String& /*scope*/, const juce::String& /*genre*/, const juce::String& /*notes*/, double /*lufs*/)>;
 
     TelemetryClient();
     ~TelemetryClient() override;
@@ -28,7 +28,11 @@ public:
     void updateMetrics(const LoudnessSnapshot& loudness, const SpectralSnapshot& spectral);
     bool isConnected() const noexcept { return connected.load(); }
 
-    void sendProjectContextSync(const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs);
+    void sendProjectContextSync(const juce::String& sessionUuid, const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs);
+    void sendProjectContextSync(const juce::String& scope, const juce::String& genre, const juce::String& notes, double lufs)
+    {
+        sendProjectContextSync({}, scope, genre, notes, lufs);
+    }
     void setContextReceivedCallback(ContextCallback cb);
 
     // Phase 3 Multi-Instance Identity

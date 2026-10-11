@@ -45,9 +45,15 @@ public:
   void getStateInformation(juce::MemoryBlock &destData) override;
   void setStateInformation(const void *data, int sizeInBytes) override;
 
-  // Project context & DAW session persistence (Sprint 3)
-  void setProjectContext(const juce::String &scope, const juce::String &genre,
+  // Project context & DAW session persistence (Sprint 3 & Sprint 5)
+  void setProjectContext(const juce::String &sessionUuid, const juce::String &scope, const juce::String &genre,
                          const juce::String &notes, double lufs);
+  void setProjectContext(const juce::String &scope, const juce::String &genre,
+                         const juce::String &notes, double lufs)
+  {
+      setProjectContext(getSessionUuid(), scope, genre, notes, lufs);
+  }
+  juce::String getSessionUuid() const;
   juce::String getTargetScope() const;
   juce::String getGenreProfile() const;
   juce::String getCustomNotes() const;
@@ -75,6 +81,7 @@ private:
   juce::AudioBuffer<float> scratchBuffer;
 
   mutable std::mutex contextMutex;
+  juce::String currentSessionUuid { "" };
   juce::String currentTargetScope { "mix_bus" };
   juce::String currentGenreProfile { "pop_radio" };
   juce::String currentCustomNotes { "" };

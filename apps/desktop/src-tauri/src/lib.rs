@@ -2902,6 +2902,7 @@ pub fn run() {
             session_vault::load_session_file,
             session_vault::save_vault_background,
             session_vault::get_last_session_vault,
+            session_vault::get_session_vault,
             session_vault::list_session_vaults
         ])
         .run(tauri::generate_context!())
