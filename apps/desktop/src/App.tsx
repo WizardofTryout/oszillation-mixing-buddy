@@ -42,6 +42,7 @@ import { SkillManagerModal } from './components/SkillManagerModal.js';
 import { SkillWizardModal } from './components/SkillWizardModal.js';
 import { SessionManagerModal } from './components/SessionManagerModal.js';
 import { MemoryInspectorModal } from './components/MemoryInspectorModal.js';
+import { DawStatusBadge } from './components/DawStatusBadge.js';
 import { useDawSessionRecall } from './hooks/useDawSessionRecall.js';
 import { Sliders, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu, Search, FolderArchive, Brain } from 'lucide-react';
 
@@ -1052,8 +1053,21 @@ export const App: React.FC = () => {
           try {
             const data = JSON.parse(event.data);
 
-            // Sprint 3: Handle project context sync from JUCE plugin
+            // Sprint 3 & 10: Handle project context sync from JUCE plugin (AU or VST3)
             if (data.type === 'project_context_sync') {
+              if (data.dawHost || data.daw) {
+                const host = String(data.dawHost || data.daw).toLowerCase();
+                const detected = host.includes('nuendo')
+                  ? 'nuendo'
+                  : host.includes('cubase')
+                  ? 'cubase'
+                  : host.includes('logic')
+                  ? 'logic_pro'
+                  : null;
+                if (detected && detected !== activeDaw) {
+                  setActiveDaw(detected);
+                }
+              }
               if (!activeMeterTrackRef.current && data.targetScope) {
                 setTargetScope(data.targetScope);
               }
@@ -1063,6 +1077,7 @@ export const App: React.FC = () => {
               console.log(`[OMB] DAW-Projekt-Persistenz synchronisiert: Scope "${data.targetScope}", Genre "${data.genreProfile}"`);
               return;
             }
+
 
             // Handle incoming MCP action proposal
             if (data.type === 'action_proposal' && data.proposal) {
@@ -1969,6 +1984,26 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleDeploySteinbergScript = async () => {
+    try {
+      let paths: string[] = [];
+      try {
+        paths = await invoke<string[]>('deploy_steinberg_remote_script');
+      } catch {
+        const res = await fetch('http://127.0.0.1:48123/api/steinberg/deploy-script', {
+          method: 'POST'
+        });
+        if (res.ok) {
+          const data = await res.json();
+          paths = data.deployedPaths || [];
+        }
+      }
+      setChatLog(`🎹 Steinberg MIDI Remote Skript erfolgreich installiert (${paths.length} Versionen):\n${paths.join('\n')}`);
+    } catch (err: unknown) {
+      setChatLog(`❌ Fehler bei der Steinberg MIDI Remote Installation: ${String(err)}`);
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-darkBg text-slate-100">
       {/* Top Navbar */}
@@ -1980,8 +2015,17 @@ export const App: React.FC = () => {
           <span className="font-bold text-xs sm:text-sm tracking-wide text-slate-100 hidden sm:inline">
             OSZILLATION MIXING BUDDY
           </span>
-          <span className="text-xs text-blue-400 font-mono ml-1 sm:ml-2">v0.8.0</span>
+          <span className="text-xs text-blue-400 font-mono ml-1 sm:ml-2">v0.9.0</span>
+
+          {/* Sprint 10: Multi-DAW Status Badge & Diagnostics */}
+          <DawStatusBadge
+            activeDaw={activeDaw}
+            isAudioConnected={isAudioConnected}
+            onDeploySteinbergScript={handleDeploySteinbergScript}
+            onSwitchDaw={setActiveDaw}
+          />
         </div>
+
 
         <div className="flex items-center gap-2 shrink-0">
           {/* Desktop Toolbar (>= 1280px xl:flex) */}
@@ -2667,15 +2711,29 @@ export const App: React.FC = () => {
                       {actionJournal.getAllEntries().length}
                     </span>
                   </button>
+
+                  {/* Sprint 10: Steinberg MIDI Remote Script Installer */}
+                  <button
+                    type="button"
+                    onClick={() => { handleDeploySteinbergScript(); setIsMobileMenuOpen(false); }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-sky-950/40 hover:bg-sky-900/50 border border-sky-500/30 text-sky-300 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <Cpu className="w-3.5 h-3.5 text-sky-400" />
+                      <span>🎹 Steinberg MIDI Remote</span>
+                    </div>
+                    <span className="text-[10px] text-sky-400/80 font-mono">Installieren</span>
+                  </button>
                 </div>
 
                 {/* Fußzeile: Status & Version */}
                 <div className="border-t border-slate-800/80 pt-2 flex items-center justify-between text-[10px] text-slate-400 font-mono">
                   <span>DAW: {activeDaw === 'none' ? 'Apple Logic Pro (Bereit)' : activeDaw}</span>
-                  <span className="text-blue-400 font-bold">v0.8.0</span>
+                  <span className="text-blue-400 font-bold">v0.9.0</span>
                 </div>
               </div>
             )}
+
           </div>
         </div>
       </header>

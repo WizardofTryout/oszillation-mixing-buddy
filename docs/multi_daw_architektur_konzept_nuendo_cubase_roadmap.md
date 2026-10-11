@@ -332,15 +332,15 @@ Damit die bestehende Stabilität von Logic Pro zu 100 % erhalten bleibt, gelten 
 │ ROADMAP: MULTI-DAW EXPANSION                                                           │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                        │
-│  [ SPRINT 7: DDAL Core & Architecture Decoupling ]                                     │
-│   • Erstellung des Rust-seitigen `daw_dispatcher.rs` im Desktop Companion              │
-│   • Umleitung der Tauri Commands von harten Logic-Aufrufen auf den Dispatcher          │
-│   • 100 % Regressionsprüfung: Logic Pro muss unverändert funktionieren                 │
+│  [ SPRINT 7: DDAL Core & Architecture Decoupling ] [ABGESCHLOSSEN]                    │
+│   • [x] Erstellung des Rust-seitigen `daw_dispatcher.rs` im Desktop Companion          │
+│   • [x] Umleitung der Tauri Commands von harten Logic-Aufrufen auf den Dispatcher      │
+│   • [x] 100 % Regressionsprüfung: Logic Pro muss unverändert funktionieren             │
 │                                                                                        │
-│  [ SPRINT 8: Steinberg MIDI Remote Driver & Virtual Port Engine ]                      │
-│   • Implementierung des JS-Drivers `Oszillation_MixingBuddy.js` für Nuendo 14          │
-│   • Einrichtung der virtuellen MIDI-Ports (CoreMIDI auf macOS, midir auf Win)          │
-│   • Anbindung von Volume, Pan, Mute, Solo und Transport an Nuendo 14 (und 13/12)       │
+│  [ SPRINT 8: Steinberg MIDI Remote Driver & Virtual Port Engine ] [ABGESCHLOSSEN]     │
+│   • [x] Implementierung des JS-Drivers `Oszillation_MixingBuddy.js` für Nuendo 14      │
+│   • [x] Einrichtung der virtuellen MIDI-Ports (CoreMIDI auf macOS, midir auf Win)      │
+│   • [x] Anbindung von Volume, Pan, Mute, Solo und Transport an Nuendo 14 (und 13/12)   │
 │                                                                                        │
 │  [ SPRINT 9: Nuendo Stock Plugins & Parameter-Normalisierung ] [ABGESCHLOSSEN]        │
 │   • [x] Mapping für Nuendo Channel EQ, Frequency 2 und Steinberg Compressor            │
@@ -349,10 +349,13 @@ Damit die bestehende Stabilität von Logic Pro zu 100 % erhalten bleibt, gelten 
 │   • [x] Auto-Deploy & Remote Binding für Channel EQ (CC 64-79), QCs & Bypass           │
 │   • [x] 100% Zero-Regression Garantie für Apple Logic Pro (0 Zeilen geändert)          │
 │                                                                                        │
-│  [ SPRINT 10: Multi-DAW HUD & Nahtloses Switching ]                                   │
-│   • Live-Status im HUD: Anzeige von Nuendo/Cubase inkl. VST3-Satelliten-Indikation     │
-│   • Nahtloser Heiß-Wechsel: Wechsel von Logic-Projekt zu Nuendo-Projekt ohne Neustart  │
-│   • Verifikations-Release v0.9.0                                                       │
+│  [ SPRINT 10: Multi-DAW HUD & Nahtloses Switching ] [ABGESCHLOSSEN]                   │
+│   • [x] Live-Status im HUD: Anzeige von Nuendo/Cubase/Logic inkl. Satelliten-Indikation│
+│   • [x] Modulare `DawStatusBadge.tsx` Komponente mit Farbkodierung & Bridge-Status     │
+│   • [x] Nahtloser Heiß-Wechsel: Wechsel von Logic zu Nuendo ohne Neustart              │
+│   • [x] Steinberg MIDI Remote Installer im Hamburger-Menü unter Werkzeuge & Vault      │
+│   • [x] 100% Zero-Regression Garantie für Apple Logic Pro (0 Zeilen geändert)          │
+│   • [x] Verifikations-Release v0.9.0                                                   │
 │                                                                                        │
 │  [ SPRINT 11+: Ableton Live & Studio One ]                                             │
 │   • Anbindung von AbletonOSC (Python LOM) und PreSonus Control Link                    │
