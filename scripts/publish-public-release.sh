@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-v0.7.0}"
+VERSION="${1:-v0.8.0}"
 PUBLIC_REMOTE="public"
 PUBLIC_BRANCH="main"
 RELEASE_BRANCH="release/public-export-${VERSION}"

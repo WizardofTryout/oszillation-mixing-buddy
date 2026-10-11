@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.0] - 2026-10-11 (Studio Memory Vault & DAW Session Recall)
+
+### 🚀 Highlights & Features
+* **Automated DAW Session Recall & Plugin State Handshake:**
+  - JUCE meter plugin (`MixingBuddyMeter`) serializes `sessionUuid` and DAW session metadata directly into the DAW project state chunk (`getStateInformation` / `setStateInformation`).
+  - Automatic TCP/IPC handshake synchronizes session identity with the Desktop Companion on project open (`project-context-sync` on port 48123).
+* **Studio Memory Vault & Action Timeline:**
+  - Persistent multi-session memory vault tracking AI mix decisions, parameter modifications, and A/B adjustments.
+  - Interactive Session Manager modal with active session switching, renaming, archiving, and JSON session export.
+  - Interactive Memory Inspector modal displaying chronologically ordered action histories, before/after parameter delta badges, and instant replay capabilities.
+  - Deep integration into the top navigation toolbar and hamburger menu.
+* **Adaptive Modularity & Elastic LOC Governance:**
+  - Implemented 2-Zone modularity model (`scripts/lint-loc.sh`) preventing both premature fragmentation and unmanaged God-files.
+  - Strict AST and line-of-code compliance gates across all monorepo packages.
+
+---
+
 ## [0.7.0] - 2026-10-11 (Beta Preview)
 
 ### 🚀 Highlights & Features

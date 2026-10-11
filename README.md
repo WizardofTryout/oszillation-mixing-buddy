@@ -1,7 +1,7 @@
 # Oszillation Mixing Buddy (Universal AI Co-Producer)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.7.0-0ea5e9.svg?style=for-the-badge" alt="Version v0.7.0" />
+  <img src="https://img.shields.io/badge/version-v0.8.0-0ea5e9.svg?style=for-the-badge" alt="Version v0.8.0" />
   <img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-f59e0b.svg?style=for-the-badge" alt="License: PolyForm Noncommercial 1.0.0" />
   <img src="https://img.shields.io/badge/Platform-macOS%20Apple%20Silicon%20%7C%20Intel-10b981.svg?style=for-the-badge" alt="Platform macOS" />
   <img src="https://img.shields.io/badge/Core-JUCE%208%20%7C%20Tauri%20v2%20%7C%20Rust%20%7C%20Swift-8b5cf6.svg?style=for-the-badge" alt="Core Stack" />
@@ -153,12 +153,12 @@ Oszillation Mixing Buddy operates alongside your DAW as an intelligent, responsi
 *No compilation required. Download pre-built bundles from [GitHub Releases](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases).*
 
 1. **Download Packages:**
-   * **Desktop App:** [`Oszillation-Mixing-Buddy-v0.7.0.dmg`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (Tauri v2 Desktop HUD + native Swift accessibility sidecar).
-   * **Meter Satellites:** [`MixingBuddyMeter-Plugins-v0.7.0.zip`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (AudioUnit for Logic Pro & VST3 for Steinberg Nuendo / Cubase).
+   * **Desktop App:** [`Oszillation-Mixing-Buddy-v0.8.0.dmg`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (Tauri v2 Desktop HUD + native Swift accessibility sidecar).
+   * **Meter Satellites:** [`MixingBuddyMeter-Plugins-v0.8.0.zip`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (AudioUnit for Logic Pro & VST3 for Steinberg Nuendo / Cubase).
 2. **Install Desktop App:**
    * Open the `.dmg` and drag **Oszillation Mixing Buddy.app** into your `/Applications` folder.
 3. **Install Plugins (1-Click):**
-   * Unzip `MixingBuddyMeter-Plugins-v0.7.0.zip` and double-click **`install-plugins.command`**.
+   * Unzip `MixingBuddyMeter-Plugins-v0.8.0.zip` and double-click **`install-plugins.command`**.
    * *Alternatively copy manually:*
      * AU: `MixingBuddyMeter.component` $\rightarrow$ `~/Library/Audio/Plug-Ins/Components/`
      * VST3: `MixingBuddyMeter.vst3` $\rightarrow$ `~/Library/Audio/Plug-Ins/VST3/`
