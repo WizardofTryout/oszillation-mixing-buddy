@@ -9,6 +9,7 @@ pub mod safety_guard;
 pub mod skill_vault;
 pub mod speech_service;
 pub mod session_vault;
+pub mod steinberg_midi;
 
 use daw_detector::{DAWDetector, DetectedDAW};
 use daw_dispatcher::DAWDispatcher;
@@ -2830,10 +2831,18 @@ fn get_meter_satellites(state: State<'_, AppState>) -> Result<Vec<ipc_server::Me
     Ok(state.ipc_server.get_satellites())
 }
 
+#[tauri::command]
+async fn deploy_steinberg_remote_script() -> Result<Vec<String>, String> {
+    steinberg_midi::SteinbergMidiEngine::deploy_script()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let ipc_server = IPCServer::new(48123);
     ipc_server.start();
+
+    // Start Steinberg MIDI Remote virtual ports for Nuendo 14 / Cubase 14
+    let _ = steinberg_midi::SteinbergMidiEngine::global();
 
     let app_state = AppState {
         safety_guard: Mutex::new(SafetyGuard::new()),
@@ -2916,7 +2925,8 @@ pub fn run() {
             session_vault::save_vault_background,
             session_vault::get_last_session_vault,
             session_vault::get_session_vault,
-            session_vault::list_session_vaults
+            session_vault::list_session_vaults,
+            deploy_steinberg_remote_script
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

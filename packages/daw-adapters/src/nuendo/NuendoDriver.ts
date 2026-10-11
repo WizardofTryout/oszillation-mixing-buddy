@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import type {
   SupportedDAW,
   TrackDescriptor,
@@ -195,6 +198,17 @@ export class NuendoDriver implements DAWDriver {
     this.notifyTrackListChanged();
   }
 
+  public async setTrackSolo(trackId: string, solo: boolean): Promise<void> {
+    const track = this.findOrCreateTrack(trackId);
+
+    track.isSoloed = solo;
+    const channelIndex = track.index % this.numChannels;
+    // CC 48 + channelIndex with 127 (solo) or 0 (unsolo)
+    this.sendMIDI([0xb0, 48 + channelIndex, solo ? 127 : 0]);
+
+    this.notifyTrackListChanged();
+  }
+
   public async inspectPluginSlot(trackId: string, slotIndex: number): Promise<PluginMetadata | null> {
     const track = this.findOrCreateTrack(trackId);
     return track.insertSlots[slotIndex] ?? null;
@@ -285,6 +299,131 @@ export class NuendoDriver implements DAWDriver {
       loopStartBar: 1,
       loopEndBar: 5
     });
+  }
+
+  public async play(): Promise<void> {
+    // CC 114 (Play Start)
+    this.sendMIDI([0xb0, 114, 127]);
+    this.notifyTransportChanged({
+      isPlaying: true,
+      isRecording: false,
+      isLooping: false,
+      currentBar: 1,
+      currentBeat: 1,
+      tempoBpm: 120.0,
+      timeSignature: '4/4',
+      loopStartBar: 1,
+      loopEndBar: 5
+    });
+  }
+
+  public async locateBar(bar: number): Promise<void> {
+    // CC 117 (Rewind / Locate Step)
+    this.sendMIDI([0xb0, 117, 127]);
+    this.notifyTransportChanged({
+      isPlaying: false,
+      isRecording: false,
+      isLooping: false,
+      currentBar: bar,
+      currentBeat: 1,
+      tempoBpm: 120.0,
+      timeSignature: '4/4',
+      loopStartBar: 1,
+      loopEndBar: 5
+    });
+  }
+
+  public async setCycleRegion(startBar: number, endBar: number): Promise<void> {
+    // CC 116 (Cycle active)
+    this.sendMIDI([0xb0, 116, 127]);
+    this.notifyTransportChanged({
+      isPlaying: false,
+      isRecording: false,
+      isLooping: true,
+      currentBar: startBar,
+      currentBeat: 1,
+      tempoBpm: 120.0,
+      timeSignature: '4/4',
+      loopStartBar: startBar,
+      loopEndBar: endBar
+    });
+  }
+
+  public async routeSend(trackId: string, sendIndex: number, _busName: string, gainDb: number): Promise<void> {
+    const _track = this.findOrCreateTrack(trackId);
+    const clampedGain = Math.max(-96.0, Math.min(6.0, gainDb));
+    const norm = Math.max(0.0, Math.min(1.0, Math.pow(10, clampedGain / 40.0) * 0.75));
+    const midiVal = Math.round(norm * 127);
+    this.sendMIDI([0xb1, sendIndex % 8, midiVal]);
+    this.notifyTrackListChanged();
+  }
+
+  public async routeSidechain(targetTrackId: string, _slotIndex: number, _sourceTrackName: string): Promise<void> {
+    this.findOrCreateTrack(targetTrackId);
+    this.notifyTrackListChanged();
+  }
+
+  /**
+   * Deploys the native Steinberg MIDI Remote JavaScript script into Nuendo and Cubase user script locations
+   */
+  public static deployMidiRemoteScript(): string[] {
+    const home = os.homedir();
+    const baseDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd();
+    const candidatePaths = [
+      path.resolve(baseDir, 'scripts', 'Oszillation_MixingBuddy.js'),
+      path.resolve(baseDir, 'src', 'nuendo', 'scripts', 'Oszillation_MixingBuddy.js'),
+      path.resolve(process.cwd(), 'packages', 'daw-adapters', 'src', 'nuendo', 'scripts', 'Oszillation_MixingBuddy.js')
+    ];
+
+    let scriptContent = '';
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        scriptContent = fs.readFileSync(p, 'utf8');
+        break;
+      }
+    }
+
+    const targetApps = [
+      'Nuendo 14',
+      'Nuendo 13',
+      'Nuendo 12',
+      'Cubase 14',
+      'Cubase 13',
+      'Cubase 12'
+    ];
+
+    const deployed: string[] = [];
+
+    for (const app of targetApps) {
+      const destDir = path.join(
+        home,
+        'Documents',
+        'Steinberg',
+        app,
+        'MIDI Remote',
+        'Driver Scripts',
+        'Local',
+        'Oszillation',
+        'MixingBuddy'
+      );
+
+      try {
+        fs.mkdirSync(destDir, { recursive: true });
+        const destFile = path.join(destDir, 'Oszillation_MixingBuddy.js');
+        if (scriptContent) {
+          fs.writeFileSync(destFile, scriptContent, 'utf8');
+          deployed.push(destFile);
+        }
+      } catch (err) {
+        // Silently continue if app directory cannot be created
+      }
+    }
+
+    return deployed;
+  }
+
+  public deployMidiRemoteScript(): string[] {
+    return NuendoDriver.deployMidiRemoteScript();
   }
 
   public subscribe(events: DAWDriverEvents): () => void {

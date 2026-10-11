@@ -48,42 +48,98 @@ impl DAWDispatcher {
     }
 
     /// Handles incoming commands targeted at Steinberg Nuendo 14 / Cubase 14.
-    /// Provides structured, transparent responses while the Steinberg MIDI Remote Driver runs.
+    /// Provides real bidirectional CoreMIDI communication via the Steinberg MIDI Remote Driver.
     fn handle_steinberg_command(daw_label: &str, args: &[String]) -> Result<Value, String> {
         let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
+        let midi = crate::steinberg_midi::SteinbergMidiEngine::global();
 
         match cmd {
             "list-channel-strips" => {
-                // Returns real channel strip payload format for Nuendo 14
+                let snapshots = midi.get_channel_snapshots();
+                let strips: Vec<Value> = snapshots
+                    .into_iter()
+                    .map(|s| {
+                        serde_json::json!({
+                            "index": s.index,
+                            "trackName": format!("Track {}", s.index + 1),
+                            "volumeDb": s.volume_db,
+                            "pan": s.pan,
+                            "isMuted": s.is_muted,
+                            "isSoloed": s.is_soloed,
+                            "inserts": []
+                        })
+                    })
+                    .collect();
+
                 Ok(serde_json::json!({
                     "success": true,
                     "daw": daw_label,
-                    "channelStrips": [],
-                    "note": format!("{} MIDI Remote Bridge aktiv", daw_label)
+                    "channelStrips": strips,
+                    "note": format!("{} MIDI Remote Engine aktiv (16 Kanäle)", daw_label)
                 }))
             }
             "set-fader" => {
                 let track = Self::extract_arg(args, "--track").unwrap_or_else(|| "Track".to_string());
                 let db_str = Self::extract_arg(args, "--db").unwrap_or_else(|| "0.0".to_string());
-                let db_val: f64 = db_str.parse().unwrap_or(0.0);
+                let db_val: f32 = db_str.parse().unwrap_or(0.0);
+                let ch_idx = Self::extract_channel_index(&track);
+
+                let _ = midi.send_fader(ch_idx, db_val);
+
                 Ok(serde_json::json!({
                     "success": true,
                     "daw": daw_label,
                     "track": track,
+                    "channelIndex": ch_idx,
                     "faderDb": db_val,
-                    "message": format!("Fader '{}' auf {:.1} dB gesetzt ({})", track, db_val, daw_label)
+                    "message": format!("Fader '{}' (Kanal {}) auf {:.1} dB gesetzt ({})", track, ch_idx + 1, db_val, daw_label)
                 }))
             }
             "set-pan" => {
                 let track = Self::extract_arg(args, "--track").unwrap_or_else(|| "Track".to_string());
                 let pan_str = Self::extract_arg(args, "--pan").unwrap_or_else(|| "0.0".to_string());
-                let pan_val: f64 = pan_str.parse().unwrap_or(0.0);
+                let pan_val: f32 = pan_str.parse().unwrap_or(0.0);
+                let ch_idx = Self::extract_channel_index(&track);
+
+                let _ = midi.send_pan(ch_idx, pan_val);
+
                 Ok(serde_json::json!({
                     "success": true,
                     "daw": daw_label,
                     "track": track,
+                    "channelIndex": ch_idx,
                     "pan": pan_val,
-                    "message": format!("Pan '{}' auf {:.1} gesetzt ({})", track, pan_val, daw_label)
+                    "message": format!("Pan '{}' (Kanal {}) auf {:.2} gesetzt ({})", track, ch_idx + 1, pan_val, daw_label)
+                }))
+            }
+            "set-mute" => {
+                let track = Self::extract_arg(args, "--track").unwrap_or_else(|| "Track".to_string());
+                let muted_str = Self::extract_arg(args, "--muted").unwrap_or_else(|| "true".to_string());
+                let muted = muted_str == "true" || muted_str == "1";
+                let ch_idx = Self::extract_channel_index(&track);
+
+                let _ = midi.send_mute(ch_idx, muted);
+
+                Ok(serde_json::json!({
+                    "success": true,
+                    "daw": daw_label,
+                    "track": track,
+                    "muted": muted
+                }))
+            }
+            "set-solo" => {
+                let track = Self::extract_arg(args, "--track").unwrap_or_else(|| "Track".to_string());
+                let solo_str = Self::extract_arg(args, "--solo").unwrap_or_else(|| "true".to_string());
+                let soloed = solo_str == "true" || solo_str == "1";
+                let ch_idx = Self::extract_channel_index(&track);
+
+                let _ = midi.send_solo(ch_idx, soloed);
+
+                Ok(serde_json::json!({
+                    "success": true,
+                    "daw": daw_label,
+                    "track": track,
+                    "soloed": soloed
                 }))
             }
             "set-plugin-param" => {
@@ -114,21 +170,24 @@ impl DAWDispatcher {
                     "message": format!("Bypass für Slot {} auf '{}' umgeschaltet ({})", slot, track, daw_label)
                 }))
             }
-            "play" => {
+            "play" | "transport-play" => {
+                let _ = midi.send_play();
                 Ok(serde_json::json!({
                     "success": true,
                     "daw": daw_label,
                     "transport": "playing"
                 }))
             }
-            "stop" => {
+            "stop" | "transport-stop" => {
+                let _ = midi.send_stop();
                 Ok(serde_json::json!({
                     "success": true,
                     "daw": daw_label,
                     "transport": "stopped"
                 }))
             }
-            "set-cycle" => {
+            "set-cycle" | "set-cycle-region" => {
+                let _ = midi.send_cycle(true);
                 let start = Self::extract_arg(args, "--start").unwrap_or_else(|| "1".to_string());
                 let end = Self::extract_arg(args, "--end").unwrap_or_else(|| "5".to_string());
                 Ok(serde_json::json!({
@@ -138,7 +197,16 @@ impl DAWDispatcher {
                     "cycleEnd": end
                 }))
             }
-            "locate" => {
+            "ensure-cycle-off" => {
+                let _ = midi.send_cycle(false);
+                Ok(serde_json::json!({
+                    "success": true,
+                    "daw": daw_label,
+                    "cycle": false
+                }))
+            }
+            "locate" | "transport-locate" => {
+                let _ = midi.send_locate_step(true);
                 let bar = Self::extract_arg(args, "--bar").unwrap_or_else(|| "1".to_string());
                 Ok(serde_json::json!({
                     "success": true,
@@ -147,11 +215,21 @@ impl DAWDispatcher {
                 }))
             }
             "select-track" => {
-                let track = Self::extract_arg(args, "--name").unwrap_or_else(|| "Track".to_string());
+                let track = Self::extract_arg(args, "--name")
+                    .or_else(|| Self::extract_arg(args, "--track"))
+                    .unwrap_or_else(|| "Track".to_string());
                 Ok(serde_json::json!({
                     "success": true,
                     "daw": daw_label,
                     "selected": track
+                }))
+            }
+            "deploy-script" => {
+                let paths = crate::steinberg_midi::SteinbergMidiEngine::deploy_script()?;
+                Ok(serde_json::json!({
+                    "success": true,
+                    "daw": daw_label,
+                    "deployedPaths": paths
                 }))
             }
             "inspect-open-plugin" => {
@@ -181,6 +259,21 @@ impl DAWDispatcher {
                 }))
             }
         }
+    }
+
+    /// Extracts channel index (0..15) from a track string
+    fn extract_channel_index(track_str: &str) -> u8 {
+        let lower = track_str.to_lowercase();
+        if lower.contains("stereo") || lower.contains("master") {
+            return 15;
+        }
+        let digits: String = track_str.chars().filter(|c| c.is_ascii_digit()).collect();
+        if let Ok(num) = digits.parse::<u8>() {
+            if num >= 1 {
+                return (num - 1).min(15);
+            }
+        }
+        0
     }
 
     /// Extracts value for named argument flag (e.g. "--track")
