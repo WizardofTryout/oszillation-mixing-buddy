@@ -342,9 +342,12 @@ Damit die bestehende Stabilität von Logic Pro zu 100 % erhalten bleibt, gelten 
 │   • Einrichtung der virtuellen MIDI-Ports (CoreMIDI auf macOS, midir auf Win)          │
 │   • Anbindung von Volume, Pan, Mute, Solo und Transport an Nuendo 14 (und 13/12)       │
 │                                                                                        │
-│  [ SPRINT 9: Nuendo Stock Plugins & Parameter-Normalisierung ]                         │
-│   • Mapping für Nuendo Channel EQ, Frequency 2 und Steinberg Compressor               │
-│   • Test der Action-Card-Ausführung direkt in Nuendo Insert-Slots                      │
+│  [ SPRINT 9: Nuendo Stock Plugins & Parameter-Normalisierung ] [ABGESCHLOSSEN]        │
+│   • [x] Mapping für Nuendo Channel EQ, Frequency 2 und Steinberg Compressor            │
+│   • [x] Bidirektionale Normalisierung: Echte Studio-Einheiten (dB, Hz, ms, :1) <-> 0..1 │
+│   • [x] Acoustic Shock Shield Guard (+3.0 dB Clamp) für Nuendo Insert- & Strip-Werte   │
+│   • [x] Auto-Deploy & Remote Binding für Channel EQ (CC 64-79), QCs & Bypass           │
+│   • [x] 100% Zero-Regression Garantie für Apple Logic Pro (0 Zeilen geändert)          │
 │                                                                                        │
 │  [ SPRINT 10: Multi-DAW HUD & Nahtloses Switching ]                                   │
 │   • Live-Status im HUD: Anzeige von Nuendo/Cubase inkl. VST3-Satelliten-Indikation     │

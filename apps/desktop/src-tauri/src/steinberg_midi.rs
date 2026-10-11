@@ -275,6 +275,35 @@ impl SteinbergMidiEngine {
         self.send_bytes(&[0xB0, cc, 127])
     }
 
+    /// Sets Channel EQ parameter (Band 1..4: freq, gain, q, on) via CC 64..79
+    pub fn send_channel_eq(&self, band: u8, param_type: &str, val_norm: f32) -> Result<(), String> {
+        let b = band.clamp(1, 4);
+        let base_cc = 64 + (b - 1) * 4;
+        let offset = match param_type {
+            "freq" | "frequency" => 0,
+            "gain" => 1,
+            "q" => 2,
+            _ => 3, // "on" / "bypass"
+        };
+        let val = (val_norm.clamp(0.0, 1.0) * 127.0).round() as u8;
+        self.send_bytes(&[0xB0, base_cc + offset, val])
+    }
+
+    /// Controls Focused Quick Controls (0..7) for VST3 plugins (e.g. Frequency 2, Compressor) via CC 80..87
+    pub fn send_quick_control(&self, qc_idx: u8, val_norm: f32) -> Result<(), String> {
+        let qc = qc_idx.min(7);
+        let val = (val_norm.clamp(0.0, 1.0) * 127.0).round() as u8;
+        self.send_bytes(&[0xB0, 80 + qc, val])
+    }
+
+    /// Toggles Insert Slot Bypass (Slot 0..7) on the selected channel via CC 88..95
+    pub fn send_insert_bypass(&self, slot_idx: u8, bypassed: bool) -> Result<(), String> {
+        let slot = slot_idx.min(7);
+        let val = if bypassed { 127 } else { 0 };
+        self.send_bytes(&[0xB0, 88 + slot, val])
+    }
+
+
     /// Retrieves snapshot of all 16 monitored channels
     pub fn get_channel_snapshots(&self) -> Vec<SteinbergChannelState> {
         let vols = self.channel_volumes.lock().map(|v| *v).unwrap_or([0.0; 16]);

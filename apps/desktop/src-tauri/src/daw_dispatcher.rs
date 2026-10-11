@@ -142,32 +142,61 @@ impl DAWDispatcher {
                     "soloed": soloed
                 }))
             }
-            "set-plugin-param" => {
-                let track = Self::extract_arg(args, "--track").unwrap_or_else(|| "Track".to_string());
-                let param = Self::extract_arg(args, "--param").unwrap_or_else(|| "Parameter".to_string());
+            "set-plugin-param" | "set-param" => {
+                let track = Self::extract_arg(args, "--track")
+                    .or_else(|| Self::extract_arg(args, "--window"))
+                    .unwrap_or_else(|| "Track".to_string());
+                let param = Self::extract_arg(args, "--param")
+                    .or_else(|| Self::extract_arg(args, "--description"))
+                    .unwrap_or_else(|| "Parameter".to_string());
                 let val_str = Self::extract_arg(args, "--value").unwrap_or_else(|| "0.0".to_string());
-                let val: f64 = val_str.parse().unwrap_or(0.0);
+                let val: f32 = val_str.parse().unwrap_or(0.0);
                 let unit = Self::extract_arg(args, "--unit").unwrap_or_default();
+                let explicit_qc = Self::extract_arg(args, "--qc").and_then(|s| s.parse::<u8>().ok());
+                let explicit_norm = Self::extract_arg(args, "--norm").and_then(|s| s.parse::<f32>().ok());
+
+                // Parameter normalization with Acoustic Shock Shield protection
+                let (norm_val, target_desc) = Self::normalize_steinberg_param(&param, val, &unit, explicit_qc, explicit_norm);
+
+                // Execute via Steinberg CoreMIDI virtual port
+                if let Some(qc_idx) = explicit_qc {
+                    let _ = midi.send_quick_control(qc_idx, norm_val);
+                } else if let Some((band, ptype)) = Self::detect_channel_eq_param(&param) {
+                    let _ = midi.send_channel_eq(band, &ptype, norm_val);
+                } else {
+                    let qc_idx = Self::detect_quick_control_index(&param);
+                    let _ = midi.send_quick_control(qc_idx, norm_val);
+                }
+
                 Ok(serde_json::json!({
                     "success": true,
                     "daw": daw_label,
                     "track": track,
                     "param": param,
+                    "target": target_desc,
                     "value": val,
+                    "normalizedValue": norm_val,
                     "unit": unit,
-                    "message": format!("Parameter '{}' auf {:.2} {} gesetzt ({})", param, val, unit, daw_label)
+                    "message": format!("Parameter '{}' auf {:.2} {} gesetzt (norm: {:.3}) ({})", param, val, unit, norm_val, daw_label)
                 }))
             }
             "toggle-bypass" => {
-                let track = Self::extract_arg(args, "--track").unwrap_or_else(|| "Track".to_string());
+                let track = Self::extract_arg(args, "--track")
+                    .or_else(|| Self::extract_arg(args, "--window"))
+                    .unwrap_or_else(|| "Track".to_string());
                 let slot = Self::extract_arg(args, "--slot").unwrap_or_else(|| "1".to_string());
+                let slot_num: u8 = slot.parse().unwrap_or(1);
+                let slot_idx = slot_num.saturating_sub(1).min(7);
+                let _ = midi.send_insert_bypass(slot_idx, true);
+
                 Ok(serde_json::json!({
                     "success": true,
                     "daw": daw_label,
                     "track": track,
-                    "slot": slot,
-                    "bypassed": false,
-                    "message": format!("Bypass für Slot {} auf '{}' umgeschaltet ({})", slot, track, daw_label)
+                    "slot": slot_num,
+                    "slotIndex": slot_idx,
+                    "bypassed": true,
+                    "message": format!("Bypass für Slot {} auf '{}' umgeschaltet ({})", slot_num, track, daw_label)
                 }))
             }
             "play" | "transport-play" => {
@@ -284,4 +313,120 @@ impl DAWDispatcher {
             None
         }
     }
+
+    /// Detects Channel EQ band (1..4) and parameter type ("freq", "gain", "q", "on")
+    fn detect_channel_eq_param(param: &str) -> Option<(u8, String)> {
+        let p = param.to_lowercase();
+        let band = if p.contains("band 1") || p.contains("band1") || p.contains("eq1") || p.contains("low_shelf") || p.contains("hp_") || p.contains("low_cut") {
+            1
+        } else if p.contains("band 2") || p.contains("band2") || p.contains("eq2") || p.contains("low_mid") {
+            2
+        } else if p.contains("band 3") || p.contains("band3") || p.contains("eq3") || p.contains("high_mid") {
+            3
+        } else if p.contains("band 4") || p.contains("band4") || p.contains("eq4") || p.contains("high_shelf") || p.contains("lp_") || p.contains("high_cut") {
+            4
+        } else {
+            return None;
+        };
+
+        let ptype = if p.contains("freq") || p.contains("frequenz") {
+            "freq".to_string()
+        } else if p.contains("gain") || p.contains("pegel") {
+            "gain".to_string()
+        } else if p.contains("q") || p.contains("bandwidth") {
+            "q".to_string()
+        } else {
+            "on".to_string()
+        };
+
+        Some((band, ptype))
+    }
+
+    /// Maps common VST3 parameters (Frequency 2 & Compressor) to Focused Quick Controls 0..7
+    fn detect_quick_control_index(param: &str) -> u8 {
+        let p = param.to_lowercase();
+        if p.contains("threshold") || p.contains("thresh") || p.contains("band1") || p.contains("low cut") {
+            0
+        } else if p.contains("ratio") || p.contains("band2") || p.contains("low shelf") {
+            1
+        } else if p.contains("attack") || p.contains("band3") || p.contains("low mid") {
+            2
+        } else if p.contains("release") || p.contains("band4") || p.contains("mid") {
+            3
+        } else if p.contains("makeup") || p.contains("make-up") || p.contains("band5") || p.contains("high mid") {
+            4
+        } else if p.contains("band7") || p.contains("high shelf") || p.contains("air") {
+            5
+        } else if p.contains("band8") || p.contains("high cut") || p.contains("knee") {
+            6
+        } else {
+            0
+        }
+    }
+
+    /// Normalizes real studio values (Hz, dB, ms, :1) to Steinberg 0.0 .. 1.0 curve values
+    /// Enforces the Acoustic Shock Shield (+3.0 dB safety clamp on gain boosts).
+    fn normalize_steinberg_param(
+        param: &str,
+        value: f32,
+        unit: &str,
+        explicit_qc: Option<u8>,
+        explicit_norm: Option<f32>,
+    ) -> (f32, String) {
+        if let Some(norm) = explicit_norm {
+            return (norm.clamp(0.0, 1.0), "explicit_norm".to_string());
+        }
+
+        let p = param.to_lowercase();
+        let u = unit.to_lowercase();
+
+        // Acoustic Shock Shield: clamp gain boost to max +3.0 dB delta (assuming 0 dB neutral baseline)
+        let safe_value = if (p.contains("gain") || p.contains("makeup") || u == "db") && value > 3.0 {
+            3.0
+        } else {
+            value
+        };
+
+        let norm = if u == "hz" || p.contains("freq") {
+            // Logarithmic Frequency (20 Hz .. 20,000 Hz)
+            let clamped_hz = safe_value.clamp(20.0, 20000.0);
+            (clamped_hz / 20.0).log10() / (20000.0f32 / 20.0).log10()
+        } else if u == "q" || p.contains("bandwidth") {
+            // Logarithmic Q (0.5 .. 100.0)
+            let clamped_q = safe_value.clamp(0.5, 100.0);
+            (clamped_q / 0.5).log10() / (100.0f32 / 0.5).log10()
+        } else if u == "ms" || p.contains("attack") || p.contains("release") {
+            // Logarithmic Time (0.1ms .. 1000ms)
+            let (min_ms, max_ms) = if p.contains("attack") { (0.1, 100.0) } else { (10.0, 1000.0) };
+            let clamped_ms = safe_value.clamp(min_ms, max_ms);
+            (clamped_ms / min_ms).log10() / (max_ms / min_ms).log10()
+        } else if u == ":1" || p.contains("ratio") {
+            // Linear Ratio (1.0 .. 8.0)
+            (safe_value.clamp(1.0, 8.0) - 1.0) / (8.0 - 1.0)
+        } else if u == "db" || p.contains("gain") || p.contains("threshold") || p.contains("makeup") {
+            if p.contains("threshold") {
+                // Threshold (-60 dB .. 0 dB)
+                (safe_value.clamp(-60.0, 0.0) - (-60.0)) / (0.0 - (-60.0))
+            } else if p.contains("makeup") {
+                // Makeup (0 dB .. 24 dB)
+                safe_value.clamp(0.0, 24.0) / 24.0
+            } else {
+                // EQ Gain (-24 dB .. +24 dB)
+                (safe_value.clamp(-24.0, 24.0) - (-24.0)) / (24.0 - (-24.0))
+            }
+        } else if safe_value >= 0.0 && safe_value <= 1.0 {
+            safe_value
+        } else {
+            0.5
+        };
+
+        let target_desc = if let Some(qc) = explicit_qc {
+            format!("QC {}", qc + 1)
+        } else {
+            param.to_string()
+        };
+
+        (norm.clamp(0.0, 1.0), target_desc)
+    }
 }
+

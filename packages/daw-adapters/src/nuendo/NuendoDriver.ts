@@ -8,6 +8,13 @@ import type {
   TransportState
 } from '@mixing-buddy/shared-types';
 import type { DAWDriver, DAWDriverEvents, MIDITransport } from '../types.js';
+import {
+  resolveNuendoParameter,
+  STEINBERG_CHANNEL_EQ_SPEC,
+  STEINBERG_FREQUENCY_2_SPEC,
+  STEINBERG_COMPRESSOR_SPEC,
+  type NuendoPluginMapping
+} from './NuendoPluginMap.js';
 
 export interface NuendoDriverOptions {
   midiTransport?: MIDITransport;
@@ -141,8 +148,8 @@ export class NuendoDriver implements DAWDriver {
     if (track.insertSlots[slotIndex]) {
       const slot = track.insertSlots[slotIndex]!;
       slot.isBypassed = !slot.isBypassed;
-      // Send Nuendo MIDI Quick Control Bypass (CC 64 + slot)
-      this.sendMIDI([0xb0, 64 + (slotIndex % 8), slot.isBypassed ? 127 : 0]);
+      // Send Nuendo MIDI Insert Bypass CC 88..95 (Slot 1..8)
+      this.sendMIDI([0xb0, 88 + (slotIndex % 8), slot.isBypassed ? 127 : 0]);
       this.notifyTrackListChanged();
       return true;
     }
@@ -211,7 +218,29 @@ export class NuendoDriver implements DAWDriver {
 
   public async inspectPluginSlot(trackId: string, slotIndex: number): Promise<PluginMetadata | null> {
     const track = this.findOrCreateTrack(trackId);
-    return track.insertSlots[slotIndex] ?? null;
+    const slot = track.insertSlots[slotIndex];
+    if (!slot) return null;
+
+    // Populate default parameters if empty based on Steinberg spec
+    if (slot.parameters.length === 0) {
+      const spec = slot.pluginName.toLowerCase().includes('comp')
+        ? STEINBERG_COMPRESSOR_SPEC
+        : slot.pluginName.toLowerCase().includes('channel')
+          ? STEINBERG_CHANNEL_EQ_SPEC
+          : STEINBERG_FREQUENCY_2_SPEC;
+
+      slot.parameters = spec.parameters.map((p) => ({
+        id: p.id,
+        name: p.name,
+        currentValue: p.defaultValue,
+        minValue: p.minDisplay,
+        maxValue: p.maxDisplay,
+        displayValue: `${p.defaultValue} ${p.unit}`,
+        unit: p.unit
+      }));
+    }
+
+    return slot;
   }
 
   public async setPluginParameter(
@@ -223,22 +252,11 @@ export class NuendoDriver implements DAWDriver {
   ): Promise<void> {
     const track = this.findOrCreateTrack(trackId);
 
-    // Map through Steinberg Focused Quick Controls (knobs 0..7)
-    const qcIndex = slotIndex % 8;
-    const norm = Math.max(0.0, Math.min(1.0, targetValue));
-    const value14Bit = Math.round(norm * 16383);
-    const msb = (value14Bit >> 7) & 0x7f;
-    const lsb = value14Bit & 0x7f;
-
-    // Send Quick Control 14-bit CC: CC 48+q (MSB) and CC 80+q (LSB)
-    this.sendMIDI([0xb0, 48 + qcIndex, msb]);
-    this.sendMIDI([0xb0, 80 + qcIndex, lsb]);
-
-    // Update track slot metadata cache
     if (!track.insertSlots[slotIndex]) {
+      const isComp = paramName.toLowerCase().includes('comp') || paramName.toLowerCase().includes('ratio');
       track.insertSlots[slotIndex] = {
         slotIndex,
-        pluginName: 'VST3 Insert Plugin',
+        pluginName: isComp ? 'Compressor' : 'Frequency 2',
         format: 'vst3',
         isBypassed: false,
         parameters: []
@@ -246,25 +264,47 @@ export class NuendoDriver implements DAWDriver {
     }
 
     const slot = track.insertSlots[slotIndex]!;
-    let param = slot.parameters.find((p) => p.name === paramName);
-    if (!param) {
-      param = {
-        id: `qc_${qcIndex}`,
-        name: paramName,
-        currentValue: targetValue,
-        minValue: 0.0,
-        maxValue: 1.0,
-        displayValue: `${targetValue.toFixed(2)} ${unit}`,
-        unit
-      };
-      slot.parameters.push(param);
+    const existingParam = slot.parameters.find((p) => p.name.toLowerCase() === paramName.toLowerCase() || p.id === paramName);
+    const currentValue = existingParam ? existingParam.currentValue : 0.0;
+
+    // Resolve parameter definition, apply Shock Shield, and get normalized 0.0..1.0 value
+    const resolved = resolveNuendoParameter(slot.pluginName, paramName, targetValue, currentValue);
+    const safeTarget = resolved ? resolved.clampedDisplayValue : targetValue;
+    const norm = resolved ? resolved.normalizedValue : Math.max(0.0, Math.min(1.0, targetValue));
+    const effectiveUnit = resolved ? resolved.definition.unit : unit;
+
+    // Dispatch MIDI CC based on target mapping
+    if (resolved?.definition.ccNumber !== undefined) {
+      // Channel EQ dedicated CC (64..79)
+      this.sendMIDI([0xb0, resolved.definition.ccNumber, Math.round(norm * 127)]);
+    } else if (resolved?.definition.qcIndex !== undefined) {
+      // Focused Quick Control CC 80..87 (Frequency 2, Compressor)
+      this.sendMIDI([0xb0, 80 + resolved.definition.qcIndex, Math.round(norm * 127)]);
     } else {
-      param.currentValue = targetValue;
-      param.displayValue = `${targetValue.toFixed(2)} ${unit}`;
+      // Fallback: Generic Focused Quick Control based on slot
+      const qcIndex = slotIndex % 8;
+      this.sendMIDI([0xb0, 80 + qcIndex, Math.round(norm * 127)]);
+    }
+
+    // Update track slot parameter metadata cache
+    if (!existingParam) {
+      slot.parameters.push({
+        id: resolved?.definition.id ?? `param_${slot.parameters.length + 1}`,
+        name: resolved?.definition.name ?? paramName,
+        currentValue: safeTarget,
+        minValue: resolved?.definition.minDisplay ?? 0.0,
+        maxValue: resolved?.definition.maxDisplay ?? 1.0,
+        displayValue: `${safeTarget.toFixed(2)} ${effectiveUnit}`,
+        unit: effectiveUnit
+      });
+    } else {
+      existingParam.currentValue = safeTarget;
+      existingParam.displayValue = `${safeTarget.toFixed(2)} ${effectiveUnit}`;
     }
 
     this.notifyTrackListChanged();
   }
+
 
   public async playRegion(startBar: number, endBar: number): Promise<void> {
     // CC 116 (Cycle / Loop active)

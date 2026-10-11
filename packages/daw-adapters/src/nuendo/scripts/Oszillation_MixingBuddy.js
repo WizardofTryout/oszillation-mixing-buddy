@@ -6,7 +6,8 @@
  * License: PolyForm Noncommercial 1.0.0
  * 
  * Provides native, low-latency (< 0.2ms) bidirectional MIDI Remote integration
- * for Volume Faders, Pan, Mute, Solo and Transport Control without screen scraping.
+ * for Volume Faders, Pan, Mute, Solo, Transport Control, Channel EQ (Bands 1-4),
+ * Focused Quick Controls (VST3 Stock Plugins: Frequency 2, Compressor) and Insert Bypass.
  */
 
 var midiremote_api = require('midiremote_api');
@@ -68,43 +69,98 @@ for (var i = 0; i < NUM_CHANNELS; ++i) {
     });
 }
 
-// 5. Transport Controls
-// Play (CC 114)
-var playBtn = surface.makeButton(0, 13, 2, 1);
+// 5. Channel EQ Surface Elements (CC 64..79: 4 Bands x Freq, Gain, Q, On)
+var eqControls = [];
+for (var b = 0; b < 4; ++b) {
+    var baseCc = 64 + (b * 4);
+    var eqX = b * 4;
+
+    var freqKnob = surface.makeKnob(eqX, 13, 1, 1);
+    freqKnob.mSurfaceValue.mMidiBinding
+        .setInputPort(midiInput)
+        .setOutputPort(midiOutput)
+        .bindToControlChange(0, baseCc);
+
+    var gainKnob = surface.makeKnob(eqX + 1, 13, 1, 1);
+    gainKnob.mSurfaceValue.mMidiBinding
+        .setInputPort(midiInput)
+        .setOutputPort(midiOutput)
+        .bindToControlChange(0, baseCc + 1);
+
+    var qKnob = surface.makeKnob(eqX + 2, 13, 1, 1);
+    qKnob.mSurfaceValue.mMidiBinding
+        .setInputPort(midiInput)
+        .setOutputPort(midiOutput)
+        .bindToControlChange(0, baseCc + 2);
+
+    var onBtn = surface.makeButton(eqX + 3, 13, 1, 1);
+    onBtn.mSurfaceValue.mMidiBinding
+        .setInputPort(midiInput)
+        .setOutputPort(midiOutput)
+        .bindToControlChange(0, baseCc + 3);
+
+    eqControls.push({
+        freq: freqKnob,
+        gain: gainKnob,
+        q: qKnob,
+        on: onBtn
+    });
+}
+
+// 6. Focused Quick Controls Surface Elements (CC 80..87: Knobs 1..8)
+var qcKnobs = [];
+for (var q = 0; q < 8; ++q) {
+    var qcKnob = surface.makeKnob(q * 2, 15, 1, 1);
+    qcKnob.mSurfaceValue.mMidiBinding
+        .setInputPort(midiInput)
+        .setOutputPort(midiOutput)
+        .bindToControlChange(0, 80 + q);
+    qcKnobs.push(qcKnob);
+}
+
+// 7. Insert Slot Bypass Surface Elements (CC 88..95: Slots 1..8)
+var insertBypassBtns = [];
+for (var ins = 0; ins < 8; ++ins) {
+    var insBtn = surface.makeButton(ins * 2, 17, 1, 1);
+    insBtn.mSurfaceValue.mMidiBinding
+        .setInputPort(midiInput)
+        .setOutputPort(midiOutput)
+        .bindToControlChange(0, 88 + ins);
+    insertBypassBtns.push(insBtn);
+}
+
+// 8. Transport Controls (CC 114..118)
+var playBtn = surface.makeButton(0, 19, 2, 1);
 playBtn.mSurfaceValue.mMidiBinding
     .setInputPort(midiInput)
     .setOutputPort(midiOutput)
     .bindToControlChange(0, 114);
 
-// Stop (CC 115)
-var stopBtn = surface.makeButton(2, 13, 2, 1);
+var stopBtn = surface.makeButton(2, 19, 2, 1);
 stopBtn.mSurfaceValue.mMidiBinding
     .setInputPort(midiInput)
     .setOutputPort(midiOutput)
     .bindToControlChange(0, 115);
 
-// Cycle / Loop (CC 116)
-var cycleBtn = surface.makeButton(4, 13, 2, 1);
+var cycleBtn = surface.makeButton(4, 19, 2, 1);
 cycleBtn.mSurfaceValue.mMidiBinding
     .setInputPort(midiInput)
     .setOutputPort(midiOutput)
     .bindToControlChange(0, 116);
 
-// Rewind / Prev Marker (CC 117)
-var prevBtn = surface.makeButton(6, 13, 2, 1);
+var prevBtn = surface.makeButton(6, 19, 2, 1);
 prevBtn.mSurfaceValue.mMidiBinding
     .setInputPort(midiInput)
     .setOutputPort(midiOutput)
     .bindToControlChange(0, 117);
 
-// Fast Forward / Next Marker (CC 118)
-var nextBtn = surface.makeButton(8, 13, 2, 1);
+var nextBtn = surface.makeButton(8, 19, 2, 1);
 nextBtn.mSurfaceValue.mMidiBinding
     .setInputPort(midiInput)
     .setOutputPort(midiOutput)
     .bindToControlChange(0, 118);
 
-// 6. Host Mapping Page
+// 9. Host Mapping Page
 var page = deviceDriver.mMapping.makePage('Oszillation Mixing Buddy');
 var hostMixerBankZone = page.mHostAccess.mMixerBankZone.makeMixerBankChannelZone();
 
@@ -112,17 +168,40 @@ for (var ch = 0; ch < NUM_CHANNELS; ++ch) {
     var hostChannel = hostMixerBankZone.makeBankChannel();
     var strip = channelStrips[ch];
 
-    // Volume with standard DAW dB scaling
     page.makeValueBinding(strip.fader.mSurfaceValue, hostChannel.mValue.mVolume);
-
-    // Pan (-1.0 Left .. 0.0 Center .. +1.0 Right)
     page.makeValueBinding(strip.pan.mSurfaceValue, hostChannel.mValue.mPan);
-
-    // Mute
     page.makeValueBinding(strip.muteBtn.mSurfaceValue, hostChannel.mValue.mMute);
-
-    // Solo
     page.makeValueBinding(strip.soloBtn.mSurfaceValue, hostChannel.mValue.mSolo);
+}
+
+// Selected Track Access
+var selectedTrack = page.mHostAccess.mTrackSelection.mMixerChannel;
+
+// Channel EQ Mappings
+var bands = [
+    selectedTrack.mChannelEQ.mBand1,
+    selectedTrack.mChannelEQ.mBand2,
+    selectedTrack.mChannelEQ.mBand3,
+    selectedTrack.mChannelEQ.mBand4
+];
+
+for (var bIdx = 0; bIdx < 4; ++bIdx) {
+    var eqBand = bands[bIdx];
+    var ctrl = eqControls[bIdx];
+    page.makeValueBinding(ctrl.freq.mSurfaceValue, eqBand.mFreq);
+    page.makeValueBinding(ctrl.gain.mSurfaceValue, eqBand.mGain);
+    page.makeValueBinding(ctrl.q.mSurfaceValue, eqBand.mQ);
+    page.makeValueBinding(ctrl.on.mSurfaceValue, eqBand.mOn);
+}
+
+// Focused Quick Controls (VST3 Stock Plugins e.g. Frequency 2, Compressor)
+for (var qIdx = 0; qIdx < 8; ++qIdx) {
+    page.makeValueBinding(qcKnobs[qIdx].mSurfaceValue, page.mHostAccess.mFocusedQuickControls.getByIndex(qIdx));
+}
+
+// Insert Slots Bypass (Slots 1..8)
+for (var insIdx = 0; insIdx < 8; ++insIdx) {
+    page.makeValueBinding(insertBypassBtns[insIdx].mSurfaceValue, selectedTrack.mInsertAndStripEffects.mInsertSlots.getByIndex(insIdx).mBypass);
 }
 
 // Transport Mapping
