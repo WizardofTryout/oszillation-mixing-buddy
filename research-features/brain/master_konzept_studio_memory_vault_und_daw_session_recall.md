@@ -201,36 +201,36 @@ export interface OmbSessionFile {
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                       ÜBERSICHT: DIE 6 SPRINT-MEILENSTEINE                      │
+│              ÜBERSICHT: DIE 6 SPRINT-MEILENSTEINE (ALLE ABGESCHLOSSEN)          │
 ├─────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                 │
-│  [ SPRINT 1: Action-Journal, Sidechain- & Monitoring-Recorder ]                 │
+│  [x] SPRINT 1: Action-Journal, Sidechain- & Monitoring-Recorder [ABGESCHLOSSEN] │
 │   • Neue Module: packages/ai-engine/src/memory/ (types.ts, ActionJournal.ts)    │
 │   • Ringpuffer für 50 Aktionen mit getLineage(track, param)                     │
 │   • Additives Event-Hooking in App.tsx (handleApplyAction, Rollback, Redo, Undo)│
 │   • ZERO-REGRESSION: ActionCard.tsx bleibt 100 % unangetastet!                  │
 │                                                                                 │
-│  [ SPRINT 2: Rolling Dialogue Memory & Kondensierungs-Logik ]                   │
+│  [x] SPRINT 2: Rolling Dialogue Memory & Kondensierungs-Logik [ABGESCHLOSSEN]   │
 │   • Neues Modul: packages/ai-engine/src/memory/DialogueMemory.ts                │
 │   • Sliding Window (3 Turns) + deterministischer 2-Zeilen-Summary-Block         │
 │   • Strikte Token-Diät: Maximal 350 Tokens im System-Prompt                     │
 │                                                                                 │
-│  [ SPRINT 3: DAW-Drift Guard, Prompt-Injektion & 'restore_action' Tool ]        │
+│  [x] SPRINT 3: DAW-Drift Guard, Prompt-Injektion & 'restore_action' [ABGESCHL.] │
 │   • Abgleich des Journals gegen reale Mixer-Inserts in AgentRunner.ts           │
 │   • Injektion des Memory-Blocks in prompts.ts & buildAgentSystemPrompt          │
 │   • Bereitstellung des deterministischen Restore-Tools für die KI               │
 │                                                                                 │
-│  [ SPRINT 4: Manuelle Session-Verwaltung ("Speichern unter..." / "Laden") ]     │
+│  [x] SPRINT 4: Manuelle Session-Verwaltung ("Speichern unter...") [ABGESCHL.]   │
 │   • Export & Import von *.omb-session.json im Desktop HUD                       │
 │   • Native Datei-Dialoge in Tauri v2 (Rust Backend: session_vault.rs)           │
 │   • Nahtlose Wiederherstellung des gesamten HUD-Zustands                        │
 │                                                                                 │
-│  [ SPRINT 5: Automatischer DAW-Recall via JUCE Plugin State ]                   │
+│  [x] SPRINT 5: Automatischer DAW-Recall via JUCE Plugin State [ABGESCHLOSSEN]   │
 │   • Erweiterung von PluginProcessor.cpp (getState/setState) um sessionUuid      │
 │   • Erweiterung von TelemetryClient.cpp sendProjectContextSync                  │
 │   • App.tsx lauscht auf project-context-sync und wechselt Session automatisch   │
 │                                                                                 │
-│  [ SPRINT 6: HUD Memory-Transparenz, End-to-End Verifikation & Release ]       │
+│  [x] SPRINT 6: HUD Memory-Transparenz, End-to-End Verifikation & Release [x]    │
 │   • HUD-Header-Badge "Gedächtnis: 8 Aktionen" mit interaktivem Verlaufs-Popover│
 │   • Studio-Stresstest mit Logic Pro & Nuendo                                    │
 │   • LOC-Audit (≤ 3000 LOC), TCC Codesign mit MixingBuddyDev & Commit            │
@@ -240,9 +240,10 @@ export interface OmbSessionFile {
 
 ---
 
-### SPRINT 1: Action-Journal, Sidechain- & Monitoring-Recorder (Maßgeschneidert)
+### [x] SPRINT 1: Action-Journal, Sidechain- & Monitoring-Recorder (Maßgeschneidert)
 
 * **Ziel:** Das In-Memory Journal erfasst jede Benutzerinteraktion lückenlos und deterministisch.
+* **Status:** [x] Vollständig implementiert, verifiziert und abgenommen.
 * **Dateien:**
   * Neu: `packages/ai-engine/src/memory/types.ts`
   * Neu: `packages/ai-engine/src/memory/ActionJournal.ts`
@@ -263,9 +264,10 @@ export interface OmbSessionFile {
 
 ---
 
-### SPRINT 2: Rolling Dialogue Memory & Kondensierungs-Logik
+### [x] SPRINT 2: Rolling Dialogue Memory & Kondensierungs-Logik
 
 * **Ziel:** Die KI versteht sprachliche Rückbezüge auf die letzten Runden, ohne das Token-Budget zu sprengen.
+* **Status:** [x] Vollständig implementiert, verifiziert und abgenommen.
 * **Dateien:**
   * Neu: `packages/ai-engine/src/memory/DialogueMemory.ts`
   * Edit: `packages/ai-engine/src/providers/AgentRunner.ts`
@@ -276,9 +278,10 @@ export interface OmbSessionFile {
 
 ---
 
-### SPRINT 3: DAW-Drift Guard, Prompt-Injektion & 'restore_action' Tool
+### [x] SPRINT 3: DAW-Drift Guard, Prompt-Injektion & 'restore_action' Tool
 
 * **Ziel:** Die KI erhält vollen Zugriff auf die Ground Truth und wird vor gelöschten/verschobenen Plugins geschützt.
+* **Status:** [x] Vollständig implementiert, verifiziert und abgenommen.
 * **Dateien:**
   * Edit: `packages/ai-engine/src/prompts.ts`
   * Edit: `packages/ai-engine/src/providers/AgentRunner.ts`
@@ -290,9 +293,10 @@ export interface OmbSessionFile {
 
 ---
 
-### SPRINT 4: Manuelle Session-Verwaltung ("Speichern unter..." / "Session öffnen")
+### [x] SPRINT 4: Manuelle Session-Verwaltung ("Speichern unter..." / "Session öffnen")
 
 * **Ziel:** Der Musiker kann seine Song-Session manuell archivieren, teilen oder zu einem späteren Zeitpunkt fortsetzen.
+* **Status:** [x] Vollständig implementiert, verifiziert und abgenommen.
 * **Dateien:**
   * Neu: `apps/desktop/src-tauri/src/session_vault.rs`
   * Edit: `apps/desktop/src-tauri/src/lib.rs` (Tauri Commands: `save_session_file`, `load_session_file`)
@@ -305,9 +309,10 @@ export interface OmbSessionFile {
 
 ---
 
-### SPRINT 5: Automatischer DAW-Recall via JUCE Plugin State
+### [x] SPRINT 5: Automatischer DAW-Recall via JUCE Plugin State
 
 * **Ziel:** Vollautomatische Wiedererkennung des Songs direkt beim Öffnen in Logic Pro oder Nuendo.
+* **Status:** [x] Vollständig implementiert, verifiziert und abgenommen.
 * **Dateien:**
   * Edit: `plugins/meter-audio/Source/PluginProcessor.cpp` & `.h`
   * Edit: `plugins/meter-audio/Source/TelemetryClient.cpp` & `.h`
@@ -320,9 +325,10 @@ export interface OmbSessionFile {
 
 ---
 
-### SPRINT 6: HUD Memory-Transparenz, End-to-End Verifikation & Release
+### [x] SPRINT 6: HUD Memory-Transparenz, End-to-End Verifikation & Release
 
 * **Ziel:** Sichtbare Kontrolle für den Produzenten, End-to-End Test im Studio und Release-Vorbereitung.
+* **Status:** [x] Vollständig implementiert, verifiziert und abgenommen.
 * **Dateien:**
   * Edit: `apps/desktop/src/App.tsx` (Memory-Badge im Header)
   * Neu: `apps/desktop/src/components/MemoryInspectorModal.tsx` (Visuelle Zeitleiste)

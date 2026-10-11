@@ -40,6 +40,7 @@ import {
 import { SkillManagerModal } from './components/SkillManagerModal.js';
 import { SkillWizardModal } from './components/SkillWizardModal.js';
 import { SessionManagerModal } from './components/SessionManagerModal.js';
+import { MemoryInspectorModal } from './components/MemoryInspectorModal.js';
 import { useDawSessionRecall } from './hooks/useDawSessionRecall.js';
 import { Sliders, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu, Search, FolderArchive } from 'lucide-react';
 
@@ -2154,6 +2155,13 @@ export const App: React.FC = () => {
               <FolderArchive className="w-3.5 h-3.5 text-cyan-400" />
               <span className="truncate max-w-[120px]">{sessionName}</span>
             </button>
+
+            {/* Sprint 6: Memory Inspector Badge & Timeline */}
+            <MemoryInspectorModal
+              sessionName={sessionName}
+              actionJournal={actionJournal}
+              onRestoreProposal={handleProposalFromChat}
+            />
           </div>
 
           {/* Pinned Abhörpunkt-Garantie & Satelliten-Manager */}
@@ -2733,15 +2741,10 @@ export const App: React.FC = () => {
         sessionUuid={sessionUuid}
         sessionName={sessionName}
         lastSavedAt={lastSavedAt || undefined}
-        onSaveSessionAs={async () => {
-          await handleSaveSessionAs();
-        }}
+        onSaveSessionAs={async () => { await handleSaveSessionAs(); }}
         onLoadSessionFile={handleLoadSessionFile}
         onNewSession={handleNewSession}
-        onUpdateSessionName={(name: string) => {
-          setSessionName(name);
-          triggerAutoSave(name);
-        }}
+        onUpdateSessionName={(name: string) => { setSessionName(name); triggerAutoSave(name); }}
         actionsCount={actionJournal.getAllEntries().length}
         recentTurnsCount={dialogueMemory.getRecentTurns().length}
       />
