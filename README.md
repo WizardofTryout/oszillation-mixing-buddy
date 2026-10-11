@@ -1,7 +1,7 @@
 # Oszillation Mixing Buddy (Universal AI Co-Producer)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v0.8.0-0ea5e9.svg?style=for-the-badge" alt="Version v0.8.0" />
+  <img src="https://img.shields.io/badge/version-v0.9.0-0ea5e9.svg?style=for-the-badge" alt="Version v0.9.0" />
   <img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-f59e0b.svg?style=for-the-badge" alt="License: PolyForm Noncommercial 1.0.0" />
   <img src="https://img.shields.io/badge/Platform-macOS%20Apple%20Silicon%20%7C%20Intel-10b981.svg?style=for-the-badge" alt="Platform macOS" />
   <img src="https://img.shields.io/badge/Core-JUCE%208%20%7C%20Tauri%20v2%20%7C%20Rust%20%7C%20Swift-8b5cf6.svg?style=for-the-badge" alt="Core Stack" />
@@ -10,7 +10,7 @@
 
 <p align="center">
   <strong>The Autonomous, Hearing-Protected AI Co-Producer for Professional Digital Audio Workstations.</strong><br />
-  Bit-transparent ITU-R BS.1770-4 metrology, 128-band hardware-grade RTA, multi-satellite monitoring, and zero-latency native accessibility bridges for Apple Logic Pro & Steinberg Nuendo.
+  Bit-transparent ITU-R BS.1770-4 metrology, 128-band hardware-grade RTA, multi-satellite monitoring, and zero-latency native bridges for Apple Logic Pro & Steinberg Nuendo 14 / Cubase 14.
 </p>
 
 ---
@@ -148,24 +148,28 @@ Oszillation Mixing Buddy operates alongside your DAW as an intelligent, responsi
 ---
 
 ## 🚀 Quick Start & Installation
-
+ 
 ### Option 1: 1-Click Tester Setup (Recommended for Producers & Beta Testers)
 *No compilation required. Download pre-built bundles from [GitHub Releases](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases).*
 
 1. **Download Packages:**
-   * **Desktop App:** [`Oszillation-Mixing-Buddy-v0.8.0.dmg`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (Tauri v2 Desktop HUD + native Swift accessibility sidecar).
-   * **Meter Satellites:** [`MixingBuddyMeter-Plugins-v0.8.0.zip`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (AudioUnit for Logic Pro & VST3 for Steinberg Nuendo / Cubase).
+   * **Desktop App:** [`Oszillation-Mixing-Buddy-v0.9.0.dmg`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (Tauri v2 Desktop HUD + native Swift accessibility sidecar & Steinberg engine).
+   * **Meter Satellites:** [`MixingBuddyMeter-Plugins-v0.9.0.zip`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (AudioUnit for Logic Pro & VST3 for Steinberg Nuendo / Cubase).
+   * **Steinberg Remote Script:** [`Steinberg-MIDI-Remote-Script-v0.9.0.zip`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (Natives JS MIDI Remote Skript für Nuendo 14 / Cubase 14).
+   * **Full Suite:** [`Oszillation-Mixing-Buddy-v0.9.0-macOS-Full-Suite.zip`](https://github.com/WizardofTryout/oszillation-mixing-buddy/releases/latest) (Gesamtes Studio-Paket).
 2. **Install Desktop App:**
    * Open the `.dmg` and drag **Oszillation Mixing Buddy.app** into your `/Applications` folder.
 3. **Install Plugins (1-Click):**
-   * Unzip `MixingBuddyMeter-Plugins-v0.8.0.zip` and double-click **`install-plugins.command`**.
+   * Unzip `MixingBuddyMeter-Plugins-v0.9.0.zip` and double-click **`install-plugins.command`**.
    * *Alternatively copy manually:*
      * AU: `MixingBuddyMeter.component` $\rightarrow$ `~/Library/Audio/Plug-Ins/Components/`
      * VST3: `MixingBuddyMeter.vst3` $\rightarrow$ `~/Library/Audio/Plug-Ins/VST3/`
-4. **Grant macOS Permissions:**
+4. **Steinberg Remote Setup (Nuendo 14 & Cubase):**
+   * In the desktop HUD under **Hamburger Menu $\rightarrow$ Werkzeuge & Vault**, click **„Steinberg MIDI Remote Installieren“** (or copy `Oszillation_MixingBuddy.js` to `~/Documents/Steinberg/Nuendo 14/MIDI Remote/Driver Scripts/Local/Oszillation/MixingBuddy/`).
+5. **Grant macOS Permissions:**
    * **Accessibility (Bedienungshilfen):** Open **macOS System Settings** $\rightarrow$ **Privacy & Security** $\rightarrow$ **Accessibility** and enable **Oszillation Mixing Buddy**.
    * **Microphone (Speech Assistant):** Required when using the Push-to-Talk voice assistant.
-5. **Launch & Mix:**
+6. **Launch & Mix:**
    * Launch **Oszillation Mixing Buddy** from `/Applications/`.
    * Insert `MixingBuddyMeter` on your DAW master bus or group stems. Telemetry locks in within 33 milliseconds.
 
@@ -175,7 +179,7 @@ Oszillation Mixing Buddy operates alongside your DAW as an intelligent, responsi
 
 #### Prerequisites
 * macOS 13.0+ (Ventura, Sonoma, Sequoia on Apple Silicon or Intel)
-* Apple Logic Pro (v10.8+ / v11.x) or Steinberg Nuendo 13 / Cubase 13
+* Apple Logic Pro (v10.8+ / v11.x) or Steinberg Nuendo 14 / Cubase 14 (also 12 & 13)
 * Node.js $\ge 20$, `pnpm` $\ge 9$, Rust toolchain (`cargo`, `rustc`), CMake $\ge 3.25$, Xcode Command Line Tools
 
 ```bash

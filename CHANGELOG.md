@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.9.0] - 2026-10-11 (Multi-DAW Expansion & Steinberg Nuendo 14 / Cubase 14)
+
+### 🚀 Highlights & Features
+* **Multi-DAW Support & Steinberg MIDI Remote Driver:**
+  - Nativer Steinberg MIDI Remote JavaScript Treiber (`Oszillation_MixingBuddy.js`) für Nuendo 14, Cubase 14 (sowie Nuendo/Cubase 12 & 13).
+  - 16-Kanal-Mixer-Steuerung: Lautstärke-Fader (14-Bit hochauflösend), Pan (Balance & Stereo Panner), Mute, Solo und Transport-Automation (Play, Stop, Cycle, Locate).
+  - Automatisierter 1-Klick Script-Installer im Desktop HUD Hamburger-Menü und REST/Tauri API.
+* **Plugin-Normalisierung & Stock Processing:**
+  - Volle bidirektionale Parameter-Normalisierung für Steinberg Channel EQ (Bänder 1–4 mit Frequency, Gain, Q, Filtertypen), Frequency 2 und Steinberg Compressor.
+  - Skalierung zwischen standardisierten AI Studio-Einheiten (Hz, dB, ms, Ratio) und DAW-spezifischen 0.0–1.0 Wertebereichen.
+  - Asymmetrischer Acoustic Shock Shield Schutz (+3.0 dB Begrenzung & A/B-Restore) für alle Steinberg Strip- und Insert-Operationen.
+* **Studio Memory Vault & DAW Auto-Recall:**
+  - Lückenlose Session-Historie (`*.omb-session.json`), In-Memory Ringpuffer und automatischer DAW-Recall via JUCE Plugin State (`sessionUuid`).
+  - Interaktiver Session Manager und Memory Inspector im Desktop HUD.
+* **Multi-DAW HUD & Nahtloses Heiß-Switching (Hot-Switching):**
+  - Neues modulares `DawStatusBadge.tsx` mit Farbkodierung (🍎 Logic Pro, 🟦 Nuendo 14, 🟥 Cubase 14).
+  - Anzeige des Satelliten-Metrology-Status (AU / VST3) und der Steuerungs-Bridge (Apple AX vs. Steinberg MIDI Remote).
+  - Laufzeit-Umschaltung ohne Neustart der Desktop-App und ohne Datenverlust im Vault.
+* **100 % Lane-Isolation (Zero-Regression für Apple Logic Pro):**
+  - Die native Swift Mach-O Binary (`logic-ax-bridge`) und alle Logic-Adapter blieben zu exakt 0 Zeilen verändert.
+* **Adaptive Modularity Governance:**
+  - Einhaltung des 2-Zonen-Modells (`scripts/lint-loc.sh`) für nachhaltige Code-Hygiene und strikte Architektur-Schranken.
+
+---
+
 ## [0.8.0] - 2026-10-11 (Studio Memory Vault & DAW Session Recall)
 
 ### 🚀 Highlights & Features

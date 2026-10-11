@@ -1,13 +1,13 @@
-# 🎙️ Steinberg Mixing Buddy — Studio Deployment Guide
+# 🎙️ Oszillation Mixing Buddy — Studio Deployment Guide (v0.9.0)
 
-Dieser Leitfaden führt dich in 4 einfachen Schritten durch das Setup deines **Steinberg Mixing Buddy** Systems auf deinem Studio-Mac (mit installiertem **Steinberg Nuendo / Cubase** oder **Apple Logic Pro**).
+Dieser Leitfaden führt dich in 4 einfachen Schritten durch das Setup deines **Oszillation Mixing Buddy** Systems auf deinem Studio-Mac (mit installiertem **Steinberg Nuendo 14 / Cubase 14** oder **Apple Logic Pro**).
 
 ---
 
 ## 📋 Voraussetzungen auf dem Studio-Mac
-- **macOS** (Apple Silicon M1/M2/M3/M4 empfohlen)
-- **Node.js 20+** & **pnpm 12+** (`brew install node pnpm`)
-- **Steinberg Nuendo 12/13+** (oder Cubase Pro) und/oder **Apple Logic Pro 10.8/11+**
+- **macOS** 13.0+ (Apple Silicon M1/M2/M3/M4 empfohlen, Intel unterstützt)
+- **Node.js 20+** & **pnpm 9+** (`brew install node pnpm`)
+- **Steinberg Nuendo 14 / Cubase 14** (auch 12 & 13) und/oder **Apple Logic Pro 10.8 / 11+**
 - **Claude Desktop** (oder Gemini CLI / Cursor)
 
 ---
@@ -30,8 +30,8 @@ Anschließend startest du das Desktop Companion HUD:
 pnpm --filter desktop dev
 ```
 
-*Alternativ:* Du kannst auch direkt die fertig kompilierte macOS-App starten:
-`/Volumes/Spacestation/MCP/Antigravity-MCP-tools/Steinberg-Mixing-Buddy/target/release/bundle/macos/Steinberg Mixing Buddy.app` (oder die `.dmg`-Datei im `bundle/dmg/`-Ordner installieren).
+*Alternativ:* Du kannst auch direkt die fertig kompilierte und permanent mit `MixingBuddyDev` signierte macOS-App starten:
+`/Applications/Oszillation Mixing Buddy.app` (oder die `.dmg`-Datei aus `dist-release/v0.9.0/` installieren).
 
 ---
 
@@ -41,7 +41,7 @@ Das JUCE C++20 Plugin wurde bereits automatisch in deine nativen macOS-Plugin-Ve
 
 | DAW | Plugin-Format | Pfad auf dem Mac |
 | :--- | :--- | :--- |
-| **Steinberg Nuendo / Cubase** | VST3 | `~/Library/Audio/Plug-Ins/VST3/MixingBuddyMeter.vst3` |
+| **Steinberg Nuendo 14 / Cubase 14** | VST3 | `~/Library/Audio/Plug-Ins/VST3/MixingBuddyMeter.vst3` |
 | **Apple Logic Pro** | Audio Unit (AU) | `~/Library/Audio/Plug-Ins/Components/MixingBuddyMeter.component` |
 
 ### Aktivierung in der DAW:
@@ -49,24 +49,33 @@ Das JUCE C++20 Plugin wurde bereits automatisch in deine nativen macOS-Plugin-Ve
 2. Füge das Plugin **`MixingBuddyMeter`** auf dem **Master Bus / Stereo Out** im letzten Insert-Slot ein (hinter allen Mix-Plugins, vor dem Monitoring).
 3. Starte die Wiedergabe in der DAW:
    - Das Plugin überträgt die Telemetrie (EBU R128 LUFS, True Peak, 32-Band FFT) automatisch und latenzfrei über WebSocket an `ws://127.0.0.1:48123/meter`.
-   - Im Desktop HUD leuchtet die Anzeige sofort auf **"Audio: Live (48123)"** und das Spektrum schlägt live aus.
+   - Im Desktop HUD leuchtet das neue Multi-DAW Badge (`DawStatusBadge`) sofort auf **"Live (48123)"** und schaltet automatisch auf die aktive DAW um.
+   - Der integrierte **Session Recall** überträgt die `sessionUuid` direkt in das Desktop HUD und stellt den zugehörigen Mix-Zustand wieder her!
 
 ---
 
-## 🎹 Schritt 3: Steinberg MIDI Remote Script in Nuendo aktivieren
+## 🎹 Schritt 3: Steinberg MIDI Remote Script in Nuendo 14 / Cubase 14 aktivieren
 
-Das Skript zur 14-Bit-Fader- und Insert-Steuerung liegt in:
-`~/Documents/Steinberg/Nuendo/MIDI Remote/Driver Scripts/Local/Steinberg/MixingBuddy/ai_agent_driver.js`
+Das native JavaScript-Remote-Skript liegt in:
+`~/Documents/Steinberg/Nuendo 14/MIDI Remote/Driver Scripts/Local/Oszillation/MixingBuddy/Oszillation_MixingBuddy.js`
 
-### Aktivierung in Nuendo (1 Klick):
+### 1-Klick Installation via Desktop HUD:
+1. Öffne das Hamburger-Menü im Desktop HUD oben rechts.
+2. Klicke unter **„Werkzeuge & Vault“** auf **„🎹 Steinberg MIDI Remote Installieren“**.
+3. Das Skript wird vollautomatisch in die Pfade für Nuendo 14, Cubase 14 sowie ältere Versionen geschrieben!
+
+### Aktivierung in Nuendo 14 / Cubase 14:
 1. Öffne in Nuendo das untere Panel und klicke auf den Tab **„MIDI Remote“**.
-2. Klicke auf das **„+“** (Neuen Controller hinzufügen) oder wähle aus der Liste **„Steinberg Mixing Buddy (AI Agent)“**.
-3. Wähle als MIDI-Ports deinen virtuellen CoreMIDI-Loopback (z. B. *IAC-Treiber Bus 1* oder *MixingBuddy Virtuell*).
-4. **Fertig!** Nuendo synchronisiert nun Fader-Lautstärken in 14-Bit-Präzision und Quick Controls bidirektional mit dem Mixing Buddy.
+2. Wähle aus der Liste **„Oszillation - Mixing Buddy“**.
+3. Nuendo synchronisiert nun 16-Kanal-Fader, Pan, Mute, Solo, Channel EQ, Frequency 2 und Transport bidirektional!
 
-*(Hinweis für Logic Pro: Die Steuerung läuft automatisch über das Mackie Control Universal (MCU) Protokoll und macOS Accessibility `AXUIElement`.)*
+*(Hinweis für Apple Logic Pro: Die Steuerung läuft vollkommen isoliert und regressionsfrei über die native Swift Mach-O Binary `logic-ax-bridge` und macOS Accessibility `AXUIElement`.)*
 
 ---
+
+## 🗄️ Studio Memory Vault & Memory Inspector
+- Im Desktop HUD findest du unter **„Session Vault“** den interaktiven **Session Manager** zum Verwalten deiner Projekthistorie.
+- Der **Memory Inspector** erlaubt das Durchblättern aller AI-Misch-Entscheidungen mit vorher/nachher Parameter-Deltas und Instant-Replay.
 
 ## 🤖 Schritt 4: Claude Desktop als Co-Producer verknüpfen
 
