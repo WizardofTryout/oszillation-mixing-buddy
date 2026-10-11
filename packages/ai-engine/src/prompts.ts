@@ -177,6 +177,7 @@ export interface MixAnalysisContext {
   customNotes?: string;
   activeSkill?: MixingSkill;
   recentMessages?: Array<{ sender: 'user' | 'assistant'; text: string }>;
+  sessionMemoryBlock?: string;
 }
 
 export function buildAnalysisUserPrompt(
@@ -245,7 +246,7 @@ User Request: ${context.userPrompt ?? 'Analyze the current mix balance and propo
 
 ACTIVE MONITORING POINT: Track '${activeTrack}' (Scope: ${scope})
 
-${skillSection ? `${skillSection}\n\n` : ''}${targetSection}
+${context.sessionMemoryBlock ? `${context.sessionMemoryBlock}\n` : ''}${skillSection ? `${skillSection}\n\n` : ''}${targetSection}
 
 --- Live Metrology Frame ---
 ${telemetrySummary}

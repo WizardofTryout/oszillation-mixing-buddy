@@ -18,6 +18,7 @@ import { TONMISCHMEISTER_SEED_SKILL } from '@mixing-buddy/shared-types';
 import {
   computeSpectralDifference,
   generateReferenceMatchProposal,
+  actionJournal,
   type SpectralDifferenceAnalysis
 } from '@mixing-buddy/ai-engine';
 import type {
@@ -32,7 +33,8 @@ import type {
   SelectTrackInput,
   LoadPluginInput,
   RouteSendInput,
-  RouteSidechainInput
+  RouteSidechainInput,
+  RestorePreviousActionInput
 } from './tools.js';
 
 export interface ResonancePeak {
@@ -526,6 +528,86 @@ export class MixingToolHandlers {
     this.proposals.set(proposal.id, proposal);
     await this.broadcastProposalToHUD(proposal);
     return { proposal, shieldStatus };
+  }
+
+  /**
+   * Sprint 3: Erzeugt aus dem ActionJournal eine Restore-ActionCard (Human-in-the-Loop).
+   * - ohne cardId: zurück auf den ursprünglichen DAW-Ausgangswert (baseValue)
+   * - mit cardId: zurück auf den Zustand unmittelbar vor dieser Karte (oldValue)
+   * Es wird nichts direkt in der DAW ausgeführt; die Karte läuft durch den regulären HUD-Apply-Pfad.
+   * Leeres Journal => echter Fehler, keine Scheindaten.
+   */
+  public async restorePreviousAction(args: RestorePreviousActionInput): Promise<{
+    proposal: MixActionProposal;
+    restoredCount: number;
+  }> {
+    const trackKey = args.track.trim().toLowerCase();
+    const paramKey = args.parameter?.trim().toLowerCase();
+
+    const candidates = actionJournal
+      .getAllEntries()
+      .filter(
+        (e) =>
+          e.status === 'applied' &&
+          e.track.trim().toLowerCase() === trackKey &&
+          (!paramKey || e.parameter.trim().toLowerCase() === paramKey) &&
+          (!args.cardId || e.cardId === args.cardId)
+      );
+
+    if (candidates.length === 0) {
+      throw new Error(
+        `Kein angewendeter Journal-Eintrag für Spur '${args.track}'` +
+          `${args.parameter ? ` / Parameter '${args.parameter}'` : ''}` +
+          `${args.cardId ? ` / Karte '${args.cardId}'` : ''} gefunden. ` +
+          `Es gibt nichts wiederherzustellen (oder das Journal dieser Session ist leer).`
+      );
+    }
+
+    // Journal ist neueste-zuerst; pro (Plugin, Parameter) zählt nur der jüngste Eintrag.
+    const seen = new Set<string>();
+    const deltas: MixActionProposal['deltas'] = [];
+    for (const e of candidates) {
+      const key = `${e.pluginName ?? 'strip'}::${e.parameter}`.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const target = args.cardId ? e.lineage.oldValue : e.lineage.baseValue;
+      if (target === e.lineage.newValue) continue;
+
+      deltas.push({
+        trackId: e.track,
+        trackName: e.track,
+        slotIndex: typeof e.slotIndex === 'number' && e.slotIndex > 0 ? e.slotIndex : undefined,
+        pluginName: e.pluginName ?? undefined,
+        parameterName: e.parameter,
+        currentValue: e.lineage.newValue,
+        proposedValue: target,
+        unit: e.lineage.unit
+      });
+    }
+
+    if (deltas.length === 0) {
+      throw new Error(
+        `Die ausgewählten Parameter auf '${args.track}' stehen bereits auf dem gewünschten Ausgangswert.`
+      );
+    }
+
+    const proposal: MixActionProposal = {
+      id: `prop_restore_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: Date.now(),
+      category: 'masking_reduction',
+      title: `Wiederherstellen: ${args.track}${args.parameter ? ` › ${args.parameter}` : ''}`,
+      rationale: args.cardId
+        ? `Setzt ${deltas.length} Parameter auf den Stand vor Karte ${args.cardId} zurück (Journal-Ground-Truth).`
+        : `Setzt ${deltas.length} Parameter auf den ursprünglichen DAW-Ausgangswert zurück (Journal-Ground-Truth).`,
+      confidenceScore: 1.0,
+      deltas,
+      status: 'pending'
+    };
+
+    this.proposals.set(proposal.id, proposal);
+    await this.broadcastProposalToHUD(proposal);
+    return { proposal, restoredCount: deltas.length };
   }
 
   public async executeMixAdjustment(args: ExecuteMixAdjustmentInput): Promise<{

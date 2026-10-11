@@ -17,7 +17,8 @@ import {
   SelectTrackSchema,
   LoadPluginSchema,
   RouteSendSchema,
-  RouteSidechainSchema
+  RouteSidechainSchema,
+  RestorePreviousActionSchema
 } from './tools.js';
 
 export interface ServerOptions {
@@ -390,6 +391,31 @@ export class MixingBuddyMCPServer {
           return {
             isError: true,
             content: [{ type: 'text', text: `Route sidechain failed: ${String(err)}` }]
+          };
+        }
+      }
+    );
+
+    // 14. Restore Previous Action (Sprint 3: deterministischer Restore via Journal)
+    this.server.tool(
+      'mcp__restore_previous_action',
+      'Restores an earlier parameter state (original DAW value, or the state before a specific ActionCard) from the session ActionJournal. Creates a Human-in-the-Loop restore ActionCard in the HUD; nothing is applied to the DAW directly.',
+      RestorePreviousActionSchema.shape,
+      async (args) => {
+        try {
+          const result = await this.handlers.restorePreviousAction(args);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ]
+          };
+        } catch (err: unknown) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Restore failed: ${String(err)}` }]
           };
         }
       }

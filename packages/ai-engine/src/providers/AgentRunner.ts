@@ -27,6 +27,7 @@ import {
 import { MIXING_BUDDY_SYSTEM_PROMPT, type MixAnalysisContext } from '../prompts.js';
 import { normalizeProposal } from './GeminiProvider.js';
 import { dialogueMemory } from '../memory/DialogueMemory.js';
+import { buildSessionMemoryBlock } from '../memory/SessionMemoryBlock.js';
 
 // --------------------------------------------------------------------------
 // Types
@@ -1142,6 +1143,14 @@ export class AgentRunner {
       historyContext = dialogueMemory.toPromptContext();
     }
 
+    // Sprint 3: Journal + Dialog-Gedächtnis + DAW-Drift-Warnungen als System-Prompt-Block.
+    // Das Dialog-Gedächtnis steckt bereits im Block, daher kein doppelter historyContext.
+    const sessionMemoryBlock = buildSessionMemoryBlock(compactStrips);
+    if (sessionMemoryBlock) {
+      historyContext = '';
+    }
+    const effectiveSystemInstruction = systemInstruction + sessionMemoryBlock;
+
     const detectedDrums = compactStrips?.find((t) => /drum|kick|beat|moreki|motown/i.test(t.t))?.t;
     const detectedBass = compactStrips?.find((t) => /bass|sub|foundation/i.test(t.t))?.t;
     const dynamicStemHint = (detectedDrums && detectedBass)
@@ -1202,7 +1211,7 @@ export class AgentRunner {
         this.checkAborted(activeSignal);
 
         const response = await this.generateContentWithRetry(
-          systemInstruction,
+          effectiveSystemInstruction,
           contents,
           activeSignal
         );

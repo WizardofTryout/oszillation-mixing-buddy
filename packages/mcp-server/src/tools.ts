@@ -121,6 +121,13 @@ export const RouteSidechainSchema = z.object({
   sourcePath: z.string().describe('Source path for sidechain trigger, separated by ">" (e.g. "Audio > Motown Revisited Kit", "Bus > Bus 1", or "Intern" / "None" to disconnect)')
 });
 
+// Sprint 3: Deterministic ActionCard Restore Tool
+export const RestorePreviousActionSchema = z.object({
+  track: z.string().describe('Name of the track to restore (e.g. "Snare Top", "Bass", "Stereo Out")'),
+  parameter: z.string().optional().describe('Optional specific parameter identifier to revert (e.g. "fader_db", "peak_2_gain", "threshold"). If omitted, all modified parameters for this track or card are restored.'),
+  cardId: z.string().optional().describe('Optional specific ActionCard ID to revert (e.g. "act_1728345600_1")')
+});
+
 export type GetMixTelemetryInput = z.infer<typeof GetMixTelemetrySchema>;
 export type ListTracksInput = z.infer<typeof ListTracksSchema>;
 export type ParameterDeltaInput = z.infer<typeof ParameterDeltaSchema>;
@@ -136,3 +143,4 @@ export type SelectTrackInput = z.infer<typeof SelectTrackSchema>;
 export type LoadPluginInput = z.infer<typeof LoadPluginSchema>;
 export type RouteSendInput = z.infer<typeof RouteSendSchema>;
 export type RouteSidechainInput = z.infer<typeof RouteSidechainSchema>;
+export type RestorePreviousActionInput = z.infer<typeof RestorePreviousActionSchema>;

@@ -21,6 +21,8 @@ export * from './targetScopeResolver.js';
 export * from './memory/types.js';
 export * from './memory/ActionJournal.js';
 export * from './memory/DialogueMemory.js';
+export * from './memory/DawDriftGuard.js';
+export * from './memory/SessionMemoryBlock.js';
 
 export type ProviderType = 'managed' | 'anthropic' | 'gemini' | 'openai' | 'ollama' | 'mock';
 
