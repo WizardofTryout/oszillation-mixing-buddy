@@ -1,5 +1,6 @@
 import { NuendoDriver, type NuendoDriverOptions } from './nuendo/NuendoDriver.js';
 import { LogicProDriver, type LogicProDriverOptions } from './logic/LogicProDriver.js';
+import { DAWRouter, type DAWRouterOptions } from './DAWRouter.js';
 import {
   MacOSAccessibilityClient,
   findAXElement,
@@ -14,6 +15,7 @@ export * from './logic/transformers.js';
 export * from './logic/PluginRegistry.js';
 export { NuendoDriver, type NuendoDriverOptions } from './nuendo/NuendoDriver.js';
 export { LogicProDriver, type LogicProDriverOptions } from './logic/LogicProDriver.js';
+export { DAWRouter, type DAWRouterOptions } from './DAWRouter.js';
 export {
   MacOSAccessibilityClient,
   findAXElement,
@@ -34,4 +36,11 @@ export function createNuendoDriver(options?: NuendoDriverOptions): DAWDriver {
  */
 export function createLogicProDriver(options?: LogicProDriverOptions): DAWDriver {
   return new LogicProDriver(options);
+}
+
+/**
+ * Factory function to create a DAWRouter instance
+ */
+export function createDAWRouter(options?: DAWRouterOptions): DAWRouter {
+  return new DAWRouter(options);
 }

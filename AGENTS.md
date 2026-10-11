@@ -212,7 +212,7 @@ In Tonstudios arbeiten Nutzer mit hohen Abhörlautstärken. Falsche Pegelsprüng
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **Steinberg-Mixing-Buddy** (3285 symbols, 6668 relationships, 252 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **Steinberg-Mixing-Buddy** (3412 symbols, 7138 relationships, 283 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

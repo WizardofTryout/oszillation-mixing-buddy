@@ -422,7 +422,7 @@ async fn handle_connection(
                 {
                     let bridge_path = crate::resolve_bridge_path();
                     if bridge_path.exists() {
-                        match crate::execute_logic_ax_bridge(&bridge_path, &["list-channel-strips".to_string()]) {
+                        match crate::daw_dispatcher::DAWDispatcher::dispatch_action(&bridge_path, &["list-channel-strips".to_string()]) {
                             Ok(val) => val.to_string(),
                             Err(e) => serde_json::json!({"success": false, "error": e, "channelStrips": []}).to_string(),
                         }
@@ -782,7 +782,7 @@ async fn handle_connection(
                         // 2. Exaktes Bar-Locate via native Swift Bridge
                         let bridge_path = crate::resolve_bridge_path();
                         let args = vec!["transport-locate".to_string(), "--bar".to_string(), bar.to_string()];
-                        match crate::execute_logic_ax_bridge(&bridge_path, &args) {
+                        match crate::daw_dispatcher::DAWDispatcher::dispatch_action(&bridge_path, &args) {
                             Ok(res) => res.to_string(),
                             Err(e) => {
                                 println!("⚠️ [/api/transport/locate] Bridge locate failed ({}), falling back to MCU", e);
@@ -816,7 +816,7 @@ async fn handle_connection(
                     {
                         let bridge_path = crate::resolve_bridge_path();
                         if bridge_path.exists() {
-                            match crate::execute_logic_ax_bridge(
+                            match crate::daw_dispatcher::DAWDispatcher::dispatch_action(
                                 &bridge_path,
                                 &[
                                     "set-folder-expanded".to_string(),
@@ -856,7 +856,7 @@ async fn handle_connection(
                     {
                         let bridge_path = crate::resolve_bridge_path();
                         if bridge_path.exists() {
-                            match crate::execute_logic_ax_bridge(
+                            match crate::daw_dispatcher::DAWDispatcher::dispatch_action(
                                 &bridge_path,
                                 &[
                                     "select-track".to_string(),
@@ -907,7 +907,7 @@ async fn handle_connection(
                     {
                         let bridge_path = crate::resolve_bridge_path();
                         if bridge_path.exists() {
-                            match crate::execute_logic_ax_bridge(
+                            match crate::daw_dispatcher::DAWDispatcher::dispatch_action(
                                 &bridge_path,
                                 &[
                                     "load-plugin".to_string(),
@@ -961,7 +961,7 @@ async fn handle_connection(
                     {
                         let bridge_path = crate::resolve_bridge_path();
                         if bridge_path.exists() {
-                            match crate::execute_logic_ax_bridge(
+                            match crate::daw_dispatcher::DAWDispatcher::dispatch_action(
                                 &bridge_path,
                                 &[
                                     "set-send-bus".to_string(),
@@ -1015,7 +1015,7 @@ async fn handle_connection(
                     {
                         let bridge_path = crate::resolve_bridge_path();
                         if bridge_path.exists() {
-                            match crate::execute_logic_ax_bridge(
+                            match crate::daw_dispatcher::DAWDispatcher::dispatch_action(
                                 &bridge_path,
                                 &[
                                     "set-send-level".to_string(),
@@ -1070,7 +1070,7 @@ async fn handle_connection(
                     {
                         let bridge_path = crate::resolve_bridge_path();
                         if bridge_path.exists() {
-                            match crate::execute_logic_ax_bridge(
+                            match crate::daw_dispatcher::DAWDispatcher::dispatch_action(
                                 &bridge_path,
                                 &[
                                     "set-sidechain".to_string(),

@@ -2,7 +2,7 @@
  * Polymorphic DAW Abstraction Types ("The Hands")
  */
 
-export type SupportedDAW = 'nuendo' | 'logic_pro';
+export type SupportedDAW = 'nuendo' | 'cubase' | 'logic_pro' | 'studio_one' | 'ableton_live' | 'bitwig' | 'reaper';
 
 export interface PluginParameter {
   id: string;

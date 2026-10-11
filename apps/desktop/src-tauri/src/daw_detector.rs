@@ -13,8 +13,8 @@ pub enum DetectedDAW {
 impl DetectedDAW {
     pub fn display_name(&self) -> &'static str {
         match self {
-            Self::Nuendo => "Nuendo",
-            Self::Cubase => "Cubase",
+            Self::Nuendo => "Nuendo 14",
+            Self::Cubase => "Cubase 14",
             Self::LogicPro => "Logic Pro",
             Self::None => "Standalone / None",
         }
@@ -72,25 +72,63 @@ impl DAWDetector {
                 }
             }
 
-            // 2. Exact Nuendo process match
-            if let Ok(output) = std::process::Command::new(pgrep_bin)
-                .arg("-x")
-                .arg("Nuendo")
-                .output()
-            {
-                if output.status.success() && !output.stdout.is_empty() {
-                    return DetectedDAW::Nuendo;
+            // 2. Exact Nuendo process match (Nuendo 14 Primary, 13, 12, generic Nuendo)
+            for nuendo_proc in &["Nuendo 14", "Nuendo", "Nuendo 13", "Nuendo 12"] {
+                if let Ok(output) = std::process::Command::new(pgrep_bin)
+                    .arg("-x")
+                    .arg(nuendo_proc)
+                    .output()
+                {
+                    if output.status.success() && !output.stdout.is_empty() {
+                        return DetectedDAW::Nuendo;
+                    }
                 }
             }
 
-            // 3. Exact Cubase process match
-            if let Ok(output) = std::process::Command::new(pgrep_bin)
-                .arg("-x")
-                .arg("Cubase")
-                .output()
-            {
-                if output.status.success() && !output.stdout.is_empty() {
-                    return DetectedDAW::Cubase;
+            // 2b. Exact Nuendo bundle path match (including bundle ID com.steinberg.nuendo14)
+            for nuendo_path in &[
+                "/Nuendo 14.app/Contents/MacOS/Nuendo 14",
+                "/Nuendo 14.app/Contents/MacOS/Nuendo",
+                "/Nuendo.app/Contents/MacOS/Nuendo",
+            ] {
+                if let Ok(output) = std::process::Command::new(pgrep_bin)
+                    .arg("-f")
+                    .arg(nuendo_path)
+                    .output()
+                {
+                    if output.status.success() && !output.stdout.is_empty() {
+                        return DetectedDAW::Nuendo;
+                    }
+                }
+            }
+
+            // 3. Exact Cubase process match (Cubase 14 Primary, 13, 12, generic Cubase)
+            for cubase_proc in &["Cubase 14", "Cubase", "Cubase 13", "Cubase 12"] {
+                if let Ok(output) = std::process::Command::new(pgrep_bin)
+                    .arg("-x")
+                    .arg(cubase_proc)
+                    .output()
+                {
+                    if output.status.success() && !output.stdout.is_empty() {
+                        return DetectedDAW::Cubase;
+                    }
+                }
+            }
+
+            // 3b. Exact Cubase bundle path match
+            for cubase_path in &[
+                "/Cubase 14.app/Contents/MacOS/Cubase 14",
+                "/Cubase 14.app/Contents/MacOS/Cubase",
+                "/Cubase.app/Contents/MacOS/Cubase",
+            ] {
+                if let Ok(output) = std::process::Command::new(pgrep_bin)
+                    .arg("-f")
+                    .arg(cubase_path)
+                    .output()
+                {
+                    if output.status.success() && !output.stdout.is_empty() {
+                        return DetectedDAW::Cubase;
+                    }
                 }
             }
         }

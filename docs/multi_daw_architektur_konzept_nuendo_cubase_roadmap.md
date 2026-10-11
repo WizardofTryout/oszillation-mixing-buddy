@@ -2,7 +2,7 @@
 
 **Dokument-Status:** Verbindliche Architektur-Spezifikation (v1.0.0)  
 **Ziel-Meilenstein:** Multi-DAW Expansion (Phase 4 / Sprints 7–10)  
-**Fokus:** Steinberg Nuendo 12/13 & Cubase 12/13 Integration bei 100 % Zero-Regression für Apple Logic Pro  
+**Fokus:** Steinberg Nuendo 14 (Primärversion, abwärtskompatibel zu 13/12) & Cubase 14/13/12 Integration bei 100 % Zero-Regression für Apple Logic Pro  
 
 ---
 
@@ -68,7 +68,7 @@ Jede professionelle DAW besitzt eine grundlegend andere Schnittstellen-Philosoph
 | DAW | Primäre Steuerungs-Architektur | Latenz | Berechtigungen | Stärken & Besonderheiten |
 |---|---|---|---|---|
 | **Apple Logic Pro** | **macOS Accessibility (`AXUIElement`) + Virtual MCU** via native Swift Binary | $< 0.1\text{ ms}$ | macOS TCC (Accessibility) | Vollständiger UI-Zugriff auf alle Parameter, Plugin-Fenster & Routing ohne DAW-Modifikation. |
-| **Steinberg Nuendo 12/13 & Cubase 12/13** | **Steinberg MIDI Remote API (JavaScript)** + Bidirektionale MIDI/SysEx Bridge | $< 0.5\text{ ms}$ | **Keine TCC nötig!** Rein intern über MIDI. | Native Objekt-API von Steinberg (`midiremote_api`); Zugriff auf Kanal-EQ (Frequency 2), Sends, Pan, Volume (dB), Plugins & Selektion. Cross-Platform (macOS & Windows). |
+| **Steinberg Nuendo 14 (Primär) / 13/12 & Cubase 14/13/12** | **Steinberg MIDI Remote API (JavaScript)** + Bidirektionale MIDI/SysEx Bridge | $< 0.5\text{ ms}$ | **Keine TCC nötig!** Rein intern über MIDI. | Native Objekt-API von Steinberg (`midiremote_api`); Zugriff auf Kanal-EQ (Frequency 2), Sends, Pan, Volume (dB), Plugins & Selektion. Cross-Platform (macOS & Windows). Prozessname `Nuendo 14`, Bundle-ID `com.steinberg.nuendo14`. |
 | **Ableton Live 11/12** | **Live Object Model (LOM)** via Python Remote Script + UDP/OSC (`AbletonOSC`) | $\approx 1\text{–}2\text{ ms}$ | Keine | Direkter Zugriff auf Song-, Track-, Device- und Clip-Hierarchien; JSON-RPC über lokalen UDP-Port. |
 | **PreSonus Studio One 6/7** | **Control Link / Dawson Protocol** + PreSonus Extension SDK | $< 1\text{ ms}$ | Keine | Bidirektionale Parameter-Rückmeldung mit exakter dB-/Hz-Skalierung. |
 | **Bitwig Studio** | **Bitwig Controller API (Java/JS)** + WebSocket | $< 0.5\text{ ms}$ | Keine | Extrem offenes Modulations- und Controller-System; nativer WebSocket-Stream. |
@@ -129,7 +129,7 @@ Anstatt sich auf ein flüchtiges In-Memory-Flag zu verlassen, bestimmt der `DAWD
 2. **Kanal B: JUCE Plugin-Host-Telemetrie:**
    - Wenn das Meter-Plugin in der DAW instanziiert wird, ermittelt JUCE über `juce::PluginHostType` exakt den Host (`hostType.isNuendo()`, `hostType.isLogic()`, `hostType.isCubase()`).
    - Das Plugin meldet das Host-Flag im ersten Frame an Port 48123:
-     `{"type":"project_context_sync", "dawHost":"Nuendo 13", "sessionUuid":"..."}`.
+     `{"type":"project_context_sync", "dawHost":"Nuendo 14", "sessionUuid":"..."}`.
 - **Ergebnis:** Der Dispatcher schaltet vollautomatisch und verzögerungsfrei auf den richtigen Treiber um, sobald ein Projekt in einer DAW geöffnet wird!
 
 ---
@@ -212,11 +212,11 @@ packages/daw-adapters/
 
 ## 5. Steinberg Nuendo & Cubase: Technische Realisierung im Detail
 
-### 1. Wie Steinberg MIDI Remote funktioniert
-Seit Cubase 12 und Nuendo 12 bietet Steinberg eine offene JavaScript-basierte Remote-API:
+### 1. Wie Steinberg MIDI Remote in Nuendo 14 funktioniert
+Seit Cubase 12 und Nuendo 12 (und vollwertig ausgebaut in Nuendo 14) bietet Steinberg eine offene JavaScript-basierte Remote-API:
 - Ein Skript namens `Oszillation_MixingBuddy.js` wird im Steinberg-Benutzerordner platziert:
-  `~/Documents/Steinberg/Nuendo/MIDI Remote/Driver Scripts/Local/Oszillation/MixingBuddy/` (macOS)
-  bzw. `%USERPROFILE%\Documents\Steinberg\Nuendo\MIDI Remote\Driver Scripts\Local\Oszillation\MixingBuddy\` (Windows).
+  `~/Documents/Steinberg/Nuendo 14/MIDI Remote/Driver Scripts/Local/Oszillation/MixingBuddy/` (bzw. `Nuendo/MIDI Remote/...` auf älteren Versionen)
+  bzw. `%USERPROFILE%\Documents\Steinberg\Nuendo 14\MIDI Remote\Driver Scripts\Local\Oszillation\MixingBuddy\` (Windows).
 - Beim Start bindet Nuendo dieses Skript an ein virtuelles MIDI-Port-Paar (`MixingBuddy In` / `MixingBuddy Out`).
 - Das Skript nutzt die globale Steinberg-API `midiremote_api`:
   ```javascript
@@ -338,9 +338,9 @@ Damit die bestehende Stabilität von Logic Pro zu 100 % erhalten bleibt, gelten 
 │   • 100 % Regressionsprüfung: Logic Pro muss unverändert funktionieren                 │
 │                                                                                        │
 │  [ SPRINT 8: Steinberg MIDI Remote Driver & Virtual Port Engine ]                      │
-│   • Implementierung des JS-Drivers `Oszillation_MixingBuddy.js` für Nuendo             │
+│   • Implementierung des JS-Drivers `Oszillation_MixingBuddy.js` für Nuendo 14          │
 │   • Einrichtung der virtuellen MIDI-Ports (CoreMIDI auf macOS, midir auf Win)          │
-│   • Anbindung von Volume, Pan, Mute, Solo und Transport an Nuendo 12/13                │
+│   • Anbindung von Volume, Pan, Mute, Solo und Transport an Nuendo 14 (und 13/12)       │
 │                                                                                        │
 │  [ SPRINT 9: Nuendo Stock Plugins & Parameter-Normalisierung ]                         │
 │   • Mapping für Nuendo Channel EQ, Frequency 2 und Steinberg Compressor               │

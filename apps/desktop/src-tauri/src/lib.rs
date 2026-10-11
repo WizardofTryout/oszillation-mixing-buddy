@@ -1,5 +1,6 @@
 // @loc-exemption: Zentraler Tauri IPC Hub & Command-Registry (State-Management, Hardware-Bridge & Dispatcher)
 pub mod daw_detector;
+pub mod daw_dispatcher;
 pub mod ipc_server;
 pub mod licensing;
 pub mod mcu_bridge;
@@ -10,6 +11,7 @@ pub mod speech_service;
 pub mod session_vault;
 
 use daw_detector::{DAWDetector, DetectedDAW};
+use daw_dispatcher::DAWDispatcher;
 use ipc_server::IPCServer;
 use licensing::{LicenseGatekeeper, LicenseState};
 use safety_guard::SafetyGuard;
@@ -751,7 +753,7 @@ fn validate_volume_adjustment(
 }
 
 #[cfg(target_os = "macos")]
-fn execute_logic_ax_bridge(bridge_path: &PathBuf, args: &[String]) -> Result<serde_json::Value, String> {
+pub(crate) fn execute_logic_ax_bridge(bridge_path: &PathBuf, args: &[String]) -> Result<serde_json::Value, String> {
     let output = std::process::Command::new(bridge_path)
         .args(args)
         .output();
@@ -813,6 +815,16 @@ fn execute_logic_ax_bridge(bridge_path: &PathBuf, args: &[String]) -> Result<ser
     }
 
     Ok(parsed)
+}
+
+#[inline]
+fn dispatch_bridge(bridge_path: &PathBuf, args: &[String]) -> Result<serde_json::Value, String> {
+    DAWDispatcher::dispatch_action(bridge_path, args)
+}
+
+#[inline]
+fn dispatch_bridge_with_daw(active_daw: &DetectedDAW, bridge_path: &PathBuf, args: &[String]) -> Result<serde_json::Value, String> {
+    DAWDispatcher::execute_bridge(active_daw, bridge_path, args)
 }
 
 fn is_subsequence(sub: &str, full: &str) -> bool {
@@ -906,7 +918,7 @@ fn resolve_canonical_track_name(track_query: &str) -> String {
         let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
             let strips_args = vec!["list-channel-strips".to_string()];
-            if let Ok(strips_result) = execute_logic_ax_bridge(&bridge_path, &strips_args) {
+            if let Ok(strips_result) = dispatch_bridge(&bridge_path, &strips_args) {
                 if let Some(arr) = strips_result.get("channelStrips").and_then(|s| s.as_array()) {
                     if let Some(found) = arr.iter().find(|strip| {
                         let name = strip.get("trackName").and_then(|n| n.as_str()).unwrap_or("");
@@ -1036,7 +1048,7 @@ async fn apply_daw_action(
                     "--db".to_string(),
                     format!("{:.2}", sanitized_volume),
                 ];
-                if let Ok(res) = execute_logic_ax_bridge(&bridge_path, &fader_args) {
+                if let Ok(res) = dispatch_bridge_with_daw(&active_daw, &bridge_path, &fader_args) {
                     if res.get("success").and_then(|v| v.as_bool()) == Some(true) {
                         return Ok(format!(
                             "Fader '{}' → {:.1} dB ({})",
@@ -1071,7 +1083,7 @@ async fn apply_daw_action(
                 "--pan".to_string(),
                 format!("{:.1}", value),
             ];
-            let res = execute_logic_ax_bridge(&bridge_path, &pan_args)?;
+            let res = dispatch_bridge_with_daw(&active_daw, &bridge_path, &pan_args)?;
             if res.get("success").and_then(|v| v.as_bool()) == Some(true) {
                 return Ok(format!(
                     "Pan '{}' → {:.0} via AX-Mixer ({})",
@@ -1109,7 +1121,7 @@ async fn apply_daw_action(
                 "--window".to_string(),
                 track_name.clone(),
             ];
-            let parsed = execute_logic_ax_bridge(&bridge_path, &bypass_args)?;
+            let parsed = dispatch_bridge_with_daw(&active_daw, &bridge_path, &bypass_args)?;
 
             if parsed.get("success").and_then(|v| v.as_bool()) != Some(true) {
                 let err_msg = parsed
@@ -1154,7 +1166,7 @@ async fn apply_daw_action(
             cmd_args.push(band_name.to_string());
         }
 
-        let parsed_result = execute_logic_ax_bridge(&bridge_path, &cmd_args)?;
+        let parsed_result = dispatch_bridge_with_daw(&active_daw, &bridge_path, &cmd_args)?;
 
         // ── Auto open-insert fallback if plugin window is closed ─────────────────
         let success = parsed_result.get("success").and_then(|v| v.as_bool()) == Some(true);
@@ -1174,7 +1186,7 @@ async fn apply_daw_action(
         if window_not_found {
             // 1. Find which slot contains the target plugin via list-channel-strips
             let strips_args = vec!["list-channel-strips".to_string()];
-            let strips_result = execute_logic_ax_bridge(&bridge_path, &strips_args)
+            let strips_result = dispatch_bridge_with_daw(&active_daw, &bridge_path, &strips_args)
                 .unwrap_or_else(|_| serde_json::json!({}));
 
             let slot: Option<u64> = slot_index
@@ -1274,7 +1286,7 @@ async fn apply_daw_action(
                     "--slot".to_string(),
                     target_slot.to_string(),
                 ];
-                let open_result = execute_logic_ax_bridge(&bridge_path, &open_args)
+                let open_result = dispatch_bridge_with_daw(&active_daw, &bridge_path, &open_args)
                     .unwrap_or_else(|_| serde_json::json!({}));
                 let opened_window = open_result
                     .get("openedWindow")
@@ -1296,7 +1308,7 @@ async fn apply_daw_action(
                             }
                         }
                     }
-                    let retry_result = execute_logic_ax_bridge(&bridge_path, &retry_args)
+                    let retry_result = dispatch_bridge_with_daw(&active_daw, &bridge_path, &retry_args)
                         .unwrap_or_else(|_| serde_json::json!({}));
 
                     // NOTE (PUNKT 2): Do NOT close the window! Keep it open so audition & apply work
@@ -1397,7 +1409,7 @@ async fn toggle_plugin_bypass(
             "--window".to_string(),
             track_name.clone(),
         ];
-        let parsed = execute_logic_ax_bridge(&bridge_path, &bypass_args)?;
+        let parsed = dispatch_bridge(&bridge_path, &bypass_args)?;
 
         if parsed.get("success").and_then(|v| v.as_bool()) != Some(true) {
             let err_msg = parsed
@@ -1573,7 +1585,7 @@ pub fn learn_active_plugin_sync(window_title: Option<String>) -> Result<serde_js
             args.push(title);
         }
 
-        let parsed = execute_logic_ax_bridge(&bridge_path, &args)?;
+        let parsed = dispatch_bridge(&bridge_path, &args)?;
         if parsed.get("success").and_then(|v| v.as_bool()) != Some(true) {
             let err_msg = parsed
                 .get("error")
@@ -1812,7 +1824,7 @@ async fn list_channel_strips() -> Result<serde_json::Value, String> {
             ));
         }
         let args = vec!["list-channel-strips".to_string()];
-        let mut val = execute_logic_ax_bridge(&bridge_path, &args)?;
+        let mut val = dispatch_bridge(&bridge_path, &args)?;
 
         let mut active_meter_track: Option<String> = None;
         if let Some(strips) = val
@@ -2020,7 +2032,7 @@ async fn daw_play(state: State<'_, AppState>) -> Result<(), String> {
     {
         let bridge_path = resolve_bridge_binary();
         let play_args = vec!["transport-play".to_string()];
-        match execute_logic_ax_bridge(&bridge_path, &play_args) {
+        match dispatch_bridge(&bridge_path, &play_args) {
             Ok(_) => Ok(()),
             Err(e) => {
                 eprintln!("Transport-Play fehlgeschlagen ({}), falling back to MCU note pulse", e);
@@ -2041,7 +2053,7 @@ async fn daw_stop(state: State<'_, AppState>) -> Result<(), String> {
     {
         let bridge_path = resolve_bridge_binary();
         let stop_args = vec!["transport-stop".to_string()];
-        match execute_logic_ax_bridge(&bridge_path, &stop_args) {
+        match dispatch_bridge(&bridge_path, &stop_args) {
             Ok(_) => Ok(()),
             Err(e) => {
                 eprintln!("Transport-Stop fehlgeschlagen ({}), falling back to MCU note pulse", e);
@@ -2076,7 +2088,7 @@ async fn daw_set_cycle_region(
                 "--end".to_string(),
                 end.to_string(),
             ];
-            let res = execute_logic_ax_bridge(&bridge_path, &cycle_args)?;
+            let res = dispatch_bridge(&bridge_path, &cycle_args)?;
             if res.get("success").and_then(|v| v.as_bool()) == Some(false) {
                 let err = res.get("error").and_then(|v| v.as_str()).unwrap_or("set-cycle-region fehlgeschlagen");
                 return Err(err.to_string());
@@ -2103,7 +2115,7 @@ async fn daw_locate_bar(
             if keep_cycle.unwrap_or(false) {
                 locate_args.push("--keep-cycle".to_string());
             }
-            let res = execute_logic_ax_bridge(&bridge_path, &locate_args);
+            let res = dispatch_bridge(&bridge_path, &locate_args);
             match res {
                 Ok(json) if json.get("success").and_then(|v| v.as_bool()) == Some(false) => {
                     let err = json.get("error").and_then(|v| v.as_str()).unwrap_or("transport-locate failed");
@@ -2197,7 +2209,7 @@ async fn audition_region(
                     "--end".to_string(),
                     end.to_string(),
                 ];
-                let cycle_res = execute_logic_ax_bridge(&bridge_path, &cycle_args)?;
+                let cycle_res = dispatch_bridge(&bridge_path, &cycle_args)?;
                 if cycle_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
                     let err_msg = format!("set-cycle-region fehlgeschlagen: {:?}", cycle_res.get("error"));
                     log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
@@ -2206,7 +2218,7 @@ async fn audition_region(
             } else {
                 log_mb_desktop("🔄 [audition_region] ensure-cycle-off");
                 let cycle_args = vec!["ensure-cycle-off".to_string()];
-                let cycle_res = execute_logic_ax_bridge(&bridge_path, &cycle_args)?;
+                let cycle_res = dispatch_bridge(&bridge_path, &cycle_args)?;
                 if cycle_res.get("success").and_then(|v| v.as_bool()) == Some(false) {
                     let err_msg = format!("ensure-cycle-off fehlgeschlagen: {:?}", cycle_res.get("error"));
                     log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
@@ -2217,7 +2229,7 @@ async fn audition_region(
             // 2. Exaktes Bar-Locate via native Swift Bridge
             log_mb_desktop(&format!("🎯 [audition_region] transport-locate bar {}", start_bar));
             let locate_args = vec!["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()];
-            let locate_res = execute_logic_ax_bridge(&bridge_path, &locate_args)
+            let locate_res = dispatch_bridge(&bridge_path, &locate_args)
                 .map_err(|e| {
                     let err_msg = format!("transport-locate fehlgeschlagen: {}", e);
                     log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
@@ -2236,7 +2248,7 @@ async fn audition_region(
         // 4. Starte Playback via Swift Bridge ('transport-play')
         log_mb_desktop("▶️ [audition_region] transport-play");
         let play_args = vec!["transport-play".to_string()];
-        let play_res = execute_logic_ax_bridge(&bridge_path, &play_args)
+        let play_res = dispatch_bridge(&bridge_path, &play_args)
             .map_err(|e| {
                 let err_msg = format!("transport-play fehlgeschlagen: {}", e);
                 log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
@@ -2255,7 +2267,7 @@ async fn audition_region(
         // 6. Stoppe Playback via Swift Bridge ('transport-stop')
         log_mb_desktop("⏹️ [audition_region] transport-stop");
         let stop_args = vec!["transport-stop".to_string()];
-        let stop_res = execute_logic_ax_bridge(&bridge_path, &stop_args)
+        let stop_res = dispatch_bridge(&bridge_path, &stop_args)
             .map_err(|e| {
                 let err_msg = format!("transport-stop fehlgeschlagen: {}", e);
                 log_mb_desktop(&format!("❌ [audition_region] {}", err_msg));
@@ -2311,7 +2323,7 @@ fn resolve_track_channel_index(track_name: &str, state: &AppState) -> u8 {
     {
         let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
-            if let Ok(strips_val) = execute_logic_ax_bridge(&bridge_path, &["list-channel-strips".to_string()]) {
+            if let Ok(strips_val) = dispatch_bridge(&bridge_path, &["list-channel-strips".to_string()]) {
                 if let Some(strips) = strips_val
                     .get("channelStrips")
                     .or_else(|| strips_val.get("channel_strips"))
@@ -2542,7 +2554,7 @@ async fn record_fader_ride(
         let _ = state.ipc_server.mcu_bridge.ensure_cycle_off();
         let bridge_path = resolve_bridge_binary();
         let args = vec!["transport-locate".to_string(), "--bar".to_string(), start_bar.to_string()];
-        if let Err(e) = execute_logic_ax_bridge(&bridge_path, &args) {
+        if let Err(e) = dispatch_bridge(&bridge_path, &args) {
             println!("⚠️ [record_fader_ride] Bridge locate failed ({}), falling back to MCU locate", e);
             let _ = state.ipc_server.mcu_bridge.send_transport_locate(start_bar);
         }
@@ -2631,7 +2643,7 @@ async fn set_folder_expanded(track_name: String, expanded: bool) -> Result<serde
     {
         let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
-            return execute_logic_ax_bridge(
+            return dispatch_bridge(
                 &bridge_path,
                 &[
                     "set-folder-expanded".to_string(),
@@ -2657,7 +2669,7 @@ async fn select_track(track_name: String) -> Result<serde_json::Value, String> {
     {
         let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
-            return execute_logic_ax_bridge(
+            return dispatch_bridge(
                 &bridge_path,
                 &[
                     "select-track".to_string(),
@@ -2686,7 +2698,7 @@ async fn load_plugin_into_slot(
     {
         let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
-            return execute_logic_ax_bridge(
+            return dispatch_bridge(
                 &bridge_path,
                 &[
                     "load-plugin".to_string(),
@@ -2719,7 +2731,7 @@ async fn set_send_bus(
     {
         let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
-            return execute_logic_ax_bridge(
+            return dispatch_bridge(
                 &bridge_path,
                 &[
                     "set-send-bus".to_string(),
@@ -2752,7 +2764,7 @@ async fn set_send_level(
     {
         let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
-            return execute_logic_ax_bridge(
+            return dispatch_bridge(
                 &bridge_path,
                 &[
                     "set-send-level".to_string(),
@@ -2785,7 +2797,7 @@ async fn set_sidechain(
     {
         let bridge_path = resolve_bridge_binary();
         if bridge_path.exists() {
-            return execute_logic_ax_bridge(
+            return dispatch_bridge(
                 &bridge_path,
                 &[
                     "set-sidechain".to_string(),

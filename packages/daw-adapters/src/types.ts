@@ -27,6 +27,7 @@ export interface DAWDriver {
   setTrackVolume(trackId: string, volumeDb: number): Promise<void>;
   setTrackPan(trackId: string, pan: number): Promise<void>;
   setTrackMute(trackId: string, muted: boolean): Promise<void>;
+  setTrackSolo?(trackId: string, solo: boolean): Promise<void>;
 
   // Insert Plugin & Parameter Control
   inspectPluginSlot(trackId: string, slotIndex: number): Promise<PluginMetadata | null>;
@@ -40,8 +41,14 @@ export interface DAWDriver {
   ): Promise<void>;
   togglePluginBypass(trackId: string, slotIndex: number): Promise<boolean>;
 
+  // Routing (Sends & Sidechain)
+  routeSend?(trackId: string, sendIndex: number, busName: string, gainDb: number): Promise<void>;
+  routeSidechain?(targetTrackId: string, slotIndex: number, sourceTrackName: string): Promise<void>;
+
   // Transport & Auditioning
   playRegion(startBar: number, endBar: number): Promise<void>;
+  locateBar?(bar: number): Promise<void>;
+  play?(): Promise<void>;
   stop(): Promise<void>;
 
   // Event Subscription
