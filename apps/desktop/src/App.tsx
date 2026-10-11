@@ -18,7 +18,10 @@ import {
   isAmbiguousTrackName,
   classifySignalAcoustically,
   type AcousticTelemetrySnapshot,
-  actionJournal
+  actionJournal,
+  dialogueMemory,
+  validateAndMigrateSession,
+  type OmbSessionFile
 } from '@mixing-buddy/ai-engine';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -36,7 +39,8 @@ import {
 } from './components/PluginVaultModal.js';
 import { SkillManagerModal } from './components/SkillManagerModal.js';
 import { SkillWizardModal } from './components/SkillWizardModal.js';
-import { Sliders, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu, Search } from 'lucide-react';
+import { SessionManagerModal } from './components/SessionManagerModal.js';
+import { Sliders, Inbox, Sparkles, Database, Target, BarChart2, Star, ChevronDown, ChevronUp, Cpu, Search, FolderArchive } from 'lucide-react';
 
 const SatelliteMiniMeter: React.FC<{ lufs?: number }> = ({ lufs }) => {
   const level = lufs ?? -100;
@@ -175,6 +179,157 @@ export const App: React.FC = () => {
   const [isReferenceModalOpen, setIsReferenceModalOpen] = useState<boolean>(false);
   const [activeReferenceProfile, setActiveReferenceProfile] = useState<ReferenceTrackProfile | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Sprint 4: Session Manager & Memory Vault Persistence State
+  const [sessionUuid, setSessionUuid] = useState<string>(() => `proj_${Date.now()}`);
+  const [sessionName, setSessionName] = useState<string>('Unbenannte Session');
+  const [isSessionModalOpen, setIsSessionModalOpen] = useState<boolean>(false);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const triggerAutoSave = (nameOverride?: string) => {
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+    autoSaveTimerRef.current = setTimeout(async () => {
+      try {
+        const sessionPayload: OmbSessionFile = {
+          schemaVersion: '1.0.0',
+          sessionUuid,
+          sessionName: (nameOverride ?? sessionName).trim() || 'Unbenannte Session',
+          daw: activeDaw === 'nuendo' ? 'nuendo' : 'logic_pro',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          actionJournal: actionJournal.serialize().entries,
+          dialogueHistory: dialogueMemory.serialize(),
+          activeSidechains: actionJournal.serialize().sidechains,
+          learnedTrackScopes,
+          targetProfile: genreProfile,
+          customNotes
+        };
+        await invoke('save_vault_background', {
+          sessionUuid,
+          sessionJson: JSON.stringify(sessionPayload, null, 2)
+        });
+        setLastSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      } catch (err) {
+        console.warn('[AutoSave] Fehler bei Hintergrund-Sicherung:', err);
+      }
+    }, 1500);
+  };
+
+  const handleSaveSessionAs = async (suggestedName?: string): Promise<string> => {
+    const effectiveName = (suggestedName || sessionName || 'Meine Session').trim();
+    const sessionPayload: OmbSessionFile = {
+      schemaVersion: '1.0.0',
+      sessionUuid,
+      sessionName: effectiveName,
+      daw: activeDaw === 'nuendo' ? 'nuendo' : 'logic_pro',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      actionJournal: actionJournal.serialize().entries,
+      dialogueHistory: dialogueMemory.serialize(),
+      activeSidechains: actionJournal.serialize().sidechains,
+      learnedTrackScopes,
+      targetProfile: genreProfile,
+      customNotes
+    };
+    const savedPath = await invoke<string>('save_session_file', {
+      sessionName: effectiveName,
+      sessionJson: JSON.stringify(sessionPayload, null, 2)
+    });
+    setSessionName(effectiveName);
+    setLastSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    return savedPath;
+  };
+
+  const handleLoadSessionFile = async (rawContent?: string): Promise<void> => {
+    let contentToParse = rawContent;
+    if (!contentToParse) {
+      const res = await invoke<{ content: string; file_path: string }>('load_session_file');
+      contentToParse = res.content;
+    }
+    const parsed = JSON.parse(contentToParse);
+    const validated = validateAndMigrateSession(parsed);
+
+    setSessionUuid(validated.sessionUuid);
+    setSessionName(validated.sessionName);
+    actionJournal.deserialize({
+      entries: validated.actionJournal,
+      sidechains: validated.activeSidechains
+    });
+    dialogueMemory.deserialize(validated.dialogueHistory);
+    if (validated.learnedTrackScopes && Object.keys(validated.learnedTrackScopes).length > 0) {
+      setLearnedTrackScopes(validated.learnedTrackScopes);
+    }
+    if (validated.targetProfile) {
+      setGenreProfile(validated.targetProfile as GenreProfileId);
+    }
+    if (validated.customNotes !== undefined) {
+      setCustomNotes(validated.customNotes);
+    }
+    setLastSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+  };
+
+  const handleNewSession = async (): Promise<void> => {
+    const newUuid = `proj_${Date.now()}`;
+    setSessionUuid(newUuid);
+    setSessionName('Unbenannte Session');
+    actionJournal.clear();
+    dialogueMemory.clear();
+    setLastSavedAt(null);
+    const emptySession: OmbSessionFile = {
+      schemaVersion: '1.0.0',
+      sessionUuid: newUuid,
+      sessionName: 'Unbenannte Session',
+      daw: activeDaw === 'nuendo' ? 'nuendo' : 'logic_pro',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      actionJournal: [],
+      dialogueHistory: { recentTurns: [], condensedHistorySummary: '' },
+      activeSidechains: [],
+      learnedTrackScopes: {},
+      targetProfile: genreProfile,
+      customNotes
+    };
+    await invoke('save_vault_background', {
+      sessionUuid: newUuid,
+      sessionJson: JSON.stringify(emptySession, null, 2)
+    });
+  };
+
+  useEffect(() => {
+    // Session Vault: Letzte aktive Session beim Start wiederherstellen
+    invoke<string | null>('get_last_session_vault')
+      .then((vaultContent) => {
+        if (vaultContent) {
+          try {
+            const parsed = JSON.parse(vaultContent);
+            const validated = validateAndMigrateSession(parsed);
+            setSessionUuid(validated.sessionUuid);
+            setSessionName(validated.sessionName);
+            actionJournal.deserialize({
+              entries: validated.actionJournal,
+              sidechains: validated.activeSidechains
+            });
+            dialogueMemory.deserialize(validated.dialogueHistory);
+            if (validated.learnedTrackScopes && Object.keys(validated.learnedTrackScopes).length > 0) {
+              setLearnedTrackScopes(validated.learnedTrackScopes);
+            }
+            if (validated.targetProfile) {
+              setGenreProfile(validated.targetProfile as GenreProfileId);
+            }
+            if (validated.customNotes !== undefined) {
+              setCustomNotes(validated.customNotes);
+            }
+            setLastSavedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+          } catch (e) {
+            console.warn('[SessionVault] Konnte letzte Session nicht laden:', e);
+          }
+        }
+      })
+      .catch((e) => console.warn('[SessionVault] Fehler bei get_last_session_vault:', e));
+  }, []);
 
   // Phase 2A, 2C & Learning: Active Meter Track, Auto-Scope & Acoustic Classification State
   const [activeMeterTrack, setActiveMeterTrack] = useState<string | null>(null);
@@ -1146,6 +1301,7 @@ export const App: React.FC = () => {
             status: 'active'
           });
         }
+        triggerAutoSave();
 
         if (applyErrors.length === 0) {
           setChatLog(`✅ Anpassung angewendet: "${proposal.title}" (${appliedCount} Parameter) erfolgreich an ${dawLabel} gesendet.`);
@@ -1185,6 +1341,7 @@ export const App: React.FC = () => {
 
       setChatLog(`✅ Rollback erfolgreich: ${delta.parameterName} auf ${delta.currentValue} ${delta.unit ?? 'dB'} zurückgesetzt.`);
       actionJournal.recordDeltaStatus(proposalId, delta.trackName, delta.parameterName, 'restored');
+      triggerAutoSave();
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Rollback: ${String(err)}`);
     }
@@ -1227,6 +1384,7 @@ export const App: React.FC = () => {
 
       setChatLog(`✅ Wiederhergestellt: ${delta.parameterName} erneut auf ${delta.proposedValue} ${delta.unit ?? 'dB'} gesetzt.`);
       actionJournal.recordDeltaStatus(proposalId, delta.trackName, delta.parameterName, 'applied');
+      triggerAutoSave();
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Wiederherstellen: ${String(err)}`);
     }
@@ -1287,6 +1445,7 @@ export const App: React.FC = () => {
       if (actionToUndo.proposalId) {
         actionJournal.recordStatusChange(actionToUndo.proposalId, 'restored');
       }
+      triggerAutoSave();
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Rückgängig-Machen: ${String(err)}`);
     }
@@ -1371,6 +1530,7 @@ export const App: React.FC = () => {
       );
       setChatLog(`✅ Rückgängig erfolgreich: "${title}" auf Ausgangswerte zurückgesetzt.`);
       actionJournal.recordStatusChange(proposalId, 'restored');
+      triggerAutoSave();
     } catch (err: unknown) {
       setChatLog(`❌ Fehler beim Rückgängig-Machen: ${String(err)}`);
     }
@@ -1987,6 +2147,17 @@ export const App: React.FC = () => {
               <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400/30" />
               <span>Skills ({skillsCount})</span>
             </button>
+
+            {/* Sprint 4: Session Manager Toolbar Button */}
+            <button
+              type="button"
+              onClick={() => setIsSessionModalOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-medium text-cyan-300 hover:text-white bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/40 px-2.5 py-1 rounded transition-all shadow-sm cursor-pointer shrink-0"
+              title={`Session Memory & Vault: ${sessionName}`}
+            >
+              <FolderArchive className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="truncate max-w-[120px]">{sessionName}</span>
+            </button>
           </div>
 
           {/* Pinned Abhörpunkt-Garantie & Satelliten-Manager */}
@@ -2467,6 +2638,23 @@ export const App: React.FC = () => {
                       {skillsCount}
                     </span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSessionModalOpen(true);
+                      setIsMobileMenuOpen(false);
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-500/30 text-cyan-300 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 font-medium">
+                      <FolderArchive className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>💾 Session Memory & Vault</span>
+                    </div>
+                    <span className="text-[11px] font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-600/30 truncate max-w-[90px]">
+                      {sessionName}
+                    </span>
+                  </button>
                 </div>
 
                 {/* Fußzeile: Status & Version */}
@@ -2541,6 +2729,25 @@ export const App: React.FC = () => {
         }}
         apiKey={apiKey}
         modelName={modelName}
+      />
+
+      <SessionManagerModal
+        isOpen={isSessionModalOpen}
+        onClose={() => setIsSessionModalOpen(false)}
+        sessionUuid={sessionUuid}
+        sessionName={sessionName}
+        lastSavedAt={lastSavedAt || undefined}
+        onSaveSessionAs={async () => {
+          await handleSaveSessionAs();
+        }}
+        onLoadSessionFile={handleLoadSessionFile}
+        onNewSession={handleNewSession}
+        onUpdateSessionName={(name: string) => {
+          setSessionName(name);
+          triggerAutoSave(name);
+        }}
+        actionsCount={actionJournal.getAllEntries().length}
+        recentTurnsCount={dialogueMemory.getRecentTurns().length}
       />
 
       {/* Main Studio Workspace */}

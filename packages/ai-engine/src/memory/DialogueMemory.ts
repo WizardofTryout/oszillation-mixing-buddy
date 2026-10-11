@@ -35,6 +35,13 @@ export class DialogueMemoryManager {
   }
 
   /**
+   * Alias für reset() zur Konsistenz mit ActionJournalManager
+   */
+  public clear(): void {
+    this.reset();
+  }
+
+  /**
    * Extracts a single concise sentence from AI text (max 130 chars).
    */
   public static extractSingleSentence(text: string): string {

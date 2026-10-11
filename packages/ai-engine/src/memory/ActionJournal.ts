@@ -262,6 +262,23 @@ export class ActionJournalManager {
   }
 
   /**
+   * Serialisiert das gesamte Journal inklusive aktiver Sidechains
+   */
+  public serialize(): { entries: JournalEntry[]; sidechains: SidechainRoutingEntry[] } {
+    return {
+      entries: this.getAllEntries(),
+      sidechains: this.getActiveSidechains()
+    };
+  }
+
+  /**
+   * Deserialisiert ein gespeichertes Journal
+   */
+  public deserialize(data: { entries: JournalEntry[]; sidechains?: SidechainRoutingEntry[] }): void {
+    this.restoreFromSnapshot(data.entries || [], data.sidechains || []);
+  }
+
+  /**
    * Erzeugt eine ultra-kompakte Zusammenfassung (≤ 150 Tokens) für den KI-System-Prompt
    */
   public toCompactPromptSummary(): string {

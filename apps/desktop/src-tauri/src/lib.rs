@@ -6,6 +6,7 @@ pub mod reference_vault;
 pub mod safety_guard;
 pub mod skill_vault;
 pub mod speech_service;
+pub mod session_vault;
 
 use daw_detector::{DAWDetector, DetectedDAW};
 use ipc_server::IPCServer;
@@ -2896,7 +2897,12 @@ pub fn run() {
             get_meter_satellites,
             speech_service::start_speech_recognition,
             speech_service::stop_speech_recognition,
-            speech_service::is_speech_recognition_active
+            speech_service::is_speech_recognition_active,
+            session_vault::save_session_file,
+            session_vault::load_session_file,
+            session_vault::save_vault_background,
+            session_vault::get_last_session_vault,
+            session_vault::list_session_vaults
         ])
         .run(tauri::generate_context!())
         .expect("Error while running Oszillation Mixing Buddy companion application");

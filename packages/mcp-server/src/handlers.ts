@@ -19,6 +19,7 @@ import {
   computeSpectralDifference,
   generateReferenceMatchProposal,
   actionJournal,
+  validateAndMigrateSession,
   type SpectralDifferenceAnalysis
 } from '@mixing-buddy/ai-engine';
 import type {
@@ -531,6 +532,64 @@ export class MixingToolHandlers {
   }
 
   /**
+   * Sprint 4: Lädt das frischeste Session-Journal von Disk (Single-Writer / Read-Only Consumer).
+   * Liest ~/.mixing-buddy/last_session_uuid.txt -> ~/.mixing-buddy/projects/<uuid>/vault.json.
+   * Falls last_session_uuid.txt nicht existiert, wird der neueste Ordner unter ~/.mixing-buddy/projects/ gesucht.
+   */
+  public loadLiveJournalFromDisk(): void {
+    try {
+      const home = os.homedir();
+      const baseDir = path.join(home, '.mixing-buddy');
+      let targetFile: string | null = null;
+
+      const lastUuidFile = path.join(baseDir, 'last_session_uuid.txt');
+      if (fs.existsSync(lastUuidFile)) {
+        const uuid = fs.readFileSync(lastUuidFile, 'utf-8').trim();
+        if (uuid) {
+          const candidate = path.join(baseDir, 'projects', uuid, 'vault.json');
+          if (fs.existsSync(candidate)) {
+            targetFile = candidate;
+          }
+        }
+      }
+
+      // Fallback: Neueste vault.json nach mtime
+      if (!targetFile) {
+        const projectsDir = path.join(baseDir, 'projects');
+        if (fs.existsSync(projectsDir)) {
+          const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
+          let latestMtime = 0;
+          for (const ent of entries) {
+            if (ent.isDirectory()) {
+              const vf = path.join(projectsDir, ent.name, 'vault.json');
+              if (fs.existsSync(vf)) {
+                const stat = fs.statSync(vf);
+                if (stat.mtimeMs > latestMtime) {
+                  latestMtime = stat.mtimeMs;
+                  targetFile = vf;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (targetFile && fs.existsSync(targetFile)) {
+        const rawJson = fs.readFileSync(targetFile, 'utf-8');
+        const parsed = JSON.parse(rawJson);
+        const validated = validateAndMigrateSession(parsed);
+        actionJournal.deserialize({
+          entries: validated.actionJournal,
+          sidechains: validated.activeSidechains
+        });
+      }
+    } catch (err) {
+      // Nicht werfen, damit In-Memory-Einträge greifen können falls Disk temporär unzugänglich ist
+      console.warn('[MixingToolHandlers] Konnte Live-Journal nicht von Disk laden:', err);
+    }
+  }
+
+  /**
    * Sprint 3: Erzeugt aus dem ActionJournal eine Restore-ActionCard (Human-in-the-Loop).
    * - ohne cardId: zurück auf den ursprünglichen DAW-Ausgangswert (baseValue)
    * - mit cardId: zurück auf den Zustand unmittelbar vor dieser Karte (oldValue)
@@ -541,6 +600,9 @@ export class MixingToolHandlers {
     proposal: MixActionProposal;
     restoredCount: number;
   }> {
+    // Sprint 4: Vor dem Abgleich frischeste Einträge von Disk synchronisieren
+    this.loadLiveJournalFromDisk();
+
     const trackKey = args.track.trim().toLowerCase();
     const paramKey = args.parameter?.trim().toLowerCase();
 
